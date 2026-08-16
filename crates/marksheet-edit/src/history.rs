@@ -9,16 +9,19 @@
 //! Comments, whitespace, and disjoint cells therefore do not prevent a
 //! rebase; a changed edited cell or renamed declaration does.
 
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 use marksheet_model::{
     Coordinate, Diagnostic, NameId, NameTarget, SheetId, SheetItem, TableId, Value, Workbook,
 };
-use marksheet_syntax::{ParseOptions, parse_with_options};
+use marksheet_syntax::{ParseOptions, ParsedDocument, parse_with_options};
 
 use crate::{
     inverse::{InverseEditError, InverseEditErrorKind, InverseEditResult, InverseTransaction},
-    transaction::{EditError, EditOperation, EditResult, EditTransaction, SourceFingerprint},
+    transaction::{
+        EditError, EditOperation, EditResult, EditTransaction, ParsedBase, SourceFingerprint,
+        execute_parsed,
+    },
 };
 
 /// A conservative semantic snapshot taken before an edit is executed.
@@ -96,7 +99,9 @@ pub struct EditIntent {
     preconditions: Vec<OperationPrecondition>,
     // The fingerprint is convenient for display and telemetry, but it cannot
     // prove byte identity. Direct execution compares this snapshot exactly.
-    base_source: Vec<u8>,
+    // The snapshot is shared with the session it was captured from, so holding
+    // an intent open does not copy the document.
+    base_source: Arc<Vec<u8>>,
 }
 
 impl EditIntent {
@@ -123,9 +128,13 @@ impl EditIntent {
 }
 
 /// An in-memory document editor with exact undo/redo and opt-in rebasing.
+///
+/// Every document version is held once and shared by the patch sets bound to
+/// it: the current bytes, the undo entry that restores them, and the redo entry
+/// that reproduces them all reference the same snapshot.
 #[derive(Clone, Debug)]
 pub struct EditSession {
-    source: Vec<u8>,
+    source: Arc<Vec<u8>>,
     parse_options: ParseOptions,
     undo: Vec<HistoryEntry>,
     redo: Vec<HistoryEntry>,
@@ -150,7 +159,7 @@ impl EditSession {
         parse_options: &ParseOptions,
     ) -> Self {
         Self {
-            source: source.into(),
+            source: Arc::new(source.into()),
             parse_options: parse_options.clone(),
             undo: Vec::new(),
             redo: Vec::new(),
@@ -196,8 +205,8 @@ impl EditSession {
     /// unsaved history entry behind the caller's back.
     pub fn replace_source(&mut self, source: impl Into<Vec<u8>>) -> bool {
         let source = source.into();
-        let changed = source != self.source;
-        self.source = source;
+        let changed = source != *self.source;
+        self.source = Arc::new(source);
         changed
     }
 
@@ -217,17 +226,7 @@ impl EditSession {
     /// Returns [`HistoryErrorKind::InvalidSource`] when current bytes do not
     /// form a complete Marksheet workbook.
     pub fn intent(&self, transaction: EditTransaction) -> Result<EditIntent, HistoryError> {
-        let workbook = parse_workbook(&self.source, &self.parse_options)?;
-        Ok(EditIntent {
-            source: SourceFingerprint::of(&self.source),
-            base_source: self.source.clone(),
-            preconditions: transaction
-                .operations
-                .iter()
-                .map(|operation| capture_precondition(&workbook, operation))
-                .collect(),
-            transaction,
-        })
+        self.capture_intent(transaction).map(|(intent, _)| intent)
     }
 
     /// Executes a transaction against this session's exact current bytes.
@@ -237,8 +236,37 @@ impl EditSession {
     /// Returns a transaction validation error, or a conflict if the captured
     /// intent cannot be applied to the current exact bytes.
     pub fn execute(&mut self, transaction: EditTransaction) -> Result<EditResult, HistoryError> {
-        let intent = self.intent(transaction)?;
-        self.execute_intent(intent)
+        // The intent is captured from these exact bytes and this exact parse,
+        // so `validate_intent` could only re-derive what `capture_intent` just
+        // produced. Reuse the parse instead of repeating it.
+        let (intent, base) = self.capture_intent(transaction)?;
+        let result = execute_parsed(base, &intent.transaction, &self.parse_options)
+            .map_err(HistoryError::from_edit)?;
+        Ok(self.record(intent, result))
+    }
+
+    /// Captures an intent together with the base parse it was derived from.
+    fn capture_intent(
+        &self,
+        transaction: EditTransaction,
+    ) -> Result<(EditIntent, ParsedBase), HistoryError> {
+        let (document, workbook) = parse_document(&self.source, &self.parse_options)?;
+        let intent = EditIntent {
+            source: SourceFingerprint::of(&self.source),
+            base_source: Arc::clone(&self.source),
+            preconditions: transaction
+                .operations
+                .iter()
+                .map(|operation| capture_precondition(&workbook, operation))
+                .collect(),
+            transaction,
+        };
+        let base = ParsedBase {
+            source: Arc::clone(&self.source),
+            document,
+            workbook,
+        };
+        Ok((intent, base))
     }
 
     /// Executes an intent only when the current bytes still match its base.
@@ -251,13 +279,20 @@ impl EditSession {
     /// Returns [`HistoryErrorKind::Conflict`] unless the intent's retained
     /// byte snapshot exactly equals the current source.
     pub fn execute_intent(&mut self, intent: EditIntent) -> Result<EditResult, HistoryError> {
-        validate_intent(&intent, &self.parse_options)?;
+        let (document, workbook) = validate_intent(&intent, &self.parse_options)?;
         if intent.base_source != self.source {
             return Err(HistoryError::conflict(
                 "the document changed after this edit intent was created; rebase it explicitly",
             ));
         }
-        self.commit(intent)
+        let base = ParsedBase {
+            source: Arc::clone(&intent.base_source),
+            document,
+            workbook,
+        };
+        let result = execute_parsed(base, &intent.transaction, &self.parse_options)
+            .map_err(HistoryError::from_edit)?;
+        Ok(self.record(intent, result))
     }
 
     /// Replans an intent against externally supplied bytes when its semantic
@@ -277,7 +312,7 @@ impl EditSession {
         external_source: &[u8],
         intent: EditIntent,
     ) -> Result<EditResult, HistoryError> {
-        if external_source == self.source && intent.base_source == self.source {
+        if external_source == self.source.as_slice() && intent.base_source == self.source {
             return self.execute_intent(intent);
         }
         validate_intent(&intent, &self.parse_options)?;
@@ -286,14 +321,16 @@ impl EditSession {
                 "a source-fingerprint precondition cannot be semantically rebased",
             ));
         }
-        let external_workbook = parse_workbook(external_source, &self.parse_options)?;
+        let (external_document, external_workbook) =
+            parse_document(external_source, &self.parse_options)?;
         verify_preconditions(&external_workbook, &intent.preconditions)?;
 
         // The transaction may now be planned on the external formatting and
         // spans. Its semantic operation list stays unchanged.
+        let external_source = Arc::new(external_source.to_vec());
         let rebased = EditIntent {
-            source: SourceFingerprint::of(external_source),
-            base_source: external_source.to_vec(),
+            source: SourceFingerprint::of(&external_source),
+            base_source: Arc::clone(&external_source),
             preconditions: intent
                 .transaction
                 .operations
@@ -302,12 +339,15 @@ impl EditSession {
                 .collect(),
             transaction: intent.transaction,
         };
+        let base = ParsedBase {
+            source: external_source,
+            document: external_document,
+            workbook: external_workbook,
+        };
         // Plan and validate before changing the session. A bad formula or an
         // otherwise invalid result must leave both its current bytes and
         // history untouched, just like any other failed transaction.
-        let result = rebased
-            .transaction
-            .execute_with_parse_options(external_source, &self.parse_options)
+        let result = execute_parsed(base, &rebased.transaction, &self.parse_options)
             .map_err(HistoryError::from_edit)?;
         self.clear_history();
         Ok(self.record(rebased, result))
@@ -360,7 +400,7 @@ impl EditSession {
                 ));
             }
         };
-        self.source.clone_from(&restored.source);
+        self.source = Arc::clone(restored.inverse.shared_base());
         // Keep the inverse generated from the validated application. This
         // binds redo to the exact restored source rather than relying on an
         // equivalent patch captured before a later history transition.
@@ -405,7 +445,7 @@ impl EditSession {
                 ));
             }
         };
-        self.source.clone_from(&reapplied.source);
+        self.source = Arc::clone(reapplied.inverse.shared_base());
         entry.inverse = reapplied.inverse.clone();
         self.undo.push(entry);
         Ok(reapplied)
@@ -420,19 +460,11 @@ impl EditSession {
         self.redo_edit().map(|result| result.source)
     }
 
-    fn commit(&mut self, intent: EditIntent) -> Result<EditResult, HistoryError> {
-        let result = intent
-            .transaction
-            .execute_with_parse_options(&self.source, &self.parse_options)
-            .map_err(HistoryError::from_edit)?;
-        // `EditResult::source` was constructed by applying the same exact
-        // PatchSet that we retain for redo. Preserve it rather than rendering
-        // a second time, so no additional failure path can split state.
-        Ok(self.record(intent, result))
-    }
-
     fn record(&mut self, intent: EditIntent, result: EditResult) -> EditResult {
-        self.source.clone_from(&result.source);
+        // The inverse patch set is bound to the post-edit bytes, so adopting
+        // its snapshot leaves one copy of this document version shared by the
+        // session, this entry, and the next edit's forward patches.
+        self.source = Arc::clone(result.inverse.shared_base());
         self.undo.push(HistoryEntry {
             transaction: intent.transaction,
             preconditions: intent.preconditions,
@@ -442,6 +474,9 @@ impl EditSession {
         // A successful new edit, including a semantic rebase, invalidates the
         // redo branch by the standard editor history rule.
         self.redo.clear();
+        // `EditResult::source` was constructed by applying the same exact
+        // PatchSet that we retain for redo. Preserve it rather than rendering
+        // a second time, so no additional failure path can split state.
         result
     }
 }
@@ -527,6 +562,16 @@ impl fmt::Display for HistoryError {
 impl std::error::Error for HistoryError {}
 
 fn parse_workbook(source: &[u8], options: &ParseOptions) -> Result<Workbook, HistoryError> {
+    parse_document(source, options).map(|(_, workbook)| workbook)
+}
+
+/// Parses a source snapshot and returns both the document and its workbook, so
+/// a caller that needs the semantic snapshot can also hand the parse to the
+/// transaction planner instead of paying for a second one.
+fn parse_document(
+    source: &[u8],
+    options: &ParseOptions,
+) -> Result<(ParsedDocument, Workbook), HistoryError> {
     let document = parse_with_options(source, options);
     if document.has_errors() {
         return Err(HistoryError {
@@ -538,27 +583,34 @@ fn parse_workbook(source: &[u8], options: &ParseOptions) -> Result<Workbook, His
             }),
         });
     }
-    document.workbook.ok_or_else(|| HistoryError {
-        kind: HistoryErrorKind::InvalidSource,
-        message: "history source did not produce a complete workbook".to_owned(),
-        details: Box::new(HistoryErrorDetails {
-            diagnostics: document.diagnostics,
-            edit: None,
-        }),
-    })
+    let Some(workbook) = document.workbook.clone() else {
+        return Err(HistoryError {
+            kind: HistoryErrorKind::InvalidSource,
+            message: "history source did not produce a complete workbook".to_owned(),
+            details: Box::new(HistoryErrorDetails {
+                diagnostics: document.diagnostics,
+                edit: None,
+            }),
+        });
+    };
+    Ok((document, workbook))
 }
 
 /// Ensures an intent has not been internally corrupted between capture and
 /// execution. Public callers cannot mutate these private fields, but this
 /// check keeps the safety property local even if a future crate-internal API
-/// reconstructs an intent from storage.
-fn validate_intent(intent: &EditIntent, options: &ParseOptions) -> Result<(), HistoryError> {
+/// reconstructs an intent from storage. The validated parse is returned so the
+/// caller can plan on it rather than parse the same bytes again.
+fn validate_intent(
+    intent: &EditIntent,
+    options: &ParseOptions,
+) -> Result<(ParsedDocument, Workbook), HistoryError> {
     if intent.source != SourceFingerprint::of(&intent.base_source) {
         return Err(HistoryError::conflict(
             "the edit intent fingerprint does not match its retained source snapshot",
         ));
     }
-    let workbook = parse_workbook(&intent.base_source, options)?;
+    let (document, workbook) = parse_document(&intent.base_source, options)?;
     let expected = intent
         .transaction
         .operations
@@ -570,7 +622,7 @@ fn validate_intent(intent: &EditIntent, options: &ParseOptions) -> Result<(), Hi
             "the edit intent operations no longer match their captured semantic preconditions",
         ));
     }
-    Ok(())
+    Ok((document, workbook))
 }
 
 fn capture_precondition(workbook: &Workbook, operation: &EditOperation) -> OperationPrecondition {
@@ -889,6 +941,45 @@ mod tests {
                 .kind,
             HistoryErrorKind::Conflict
         );
+    }
+
+    #[test]
+    fn consecutive_history_entries_share_one_document_snapshot() {
+        let mut session = EditSession::new(sample());
+        session.execute(set_a2(10.0)).unwrap();
+        session.execute(set_a2(20.0)).unwrap();
+
+        // The bytes an entry restores are the bytes the next entry edits, so a
+        // history of N edits holds N + 1 snapshots rather than 2N.
+        let [first, second] = &session.undo[..] else {
+            panic!("two committed edits are recorded")
+        };
+        assert!(Arc::ptr_eq(
+            first.inverse.shared_base(),
+            second.forward.shared_base()
+        ));
+        assert!(Arc::ptr_eq(second.inverse.shared_base(), &session.source));
+        assert!(!Arc::ptr_eq(
+            first.forward.shared_base(),
+            first.inverse.shared_base()
+        ));
+    }
+
+    #[test]
+    fn undo_and_redo_keep_sharing_the_restored_snapshot() {
+        let mut session = EditSession::new(sample());
+        session.execute(set_a2(10.0)).unwrap();
+        session.undo().unwrap();
+        assert!(Arc::ptr_eq(
+            session.redo[0].forward.shared_base(),
+            &session.source
+        ));
+
+        session.redo().unwrap();
+        assert!(Arc::ptr_eq(
+            session.undo[0].inverse.shared_base(),
+            &session.source
+        ));
     }
 
     #[test]

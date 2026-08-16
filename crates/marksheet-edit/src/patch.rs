@@ -6,7 +6,7 @@
 //! bytes (for example, a future non-UTF-8 import path). Callers that edit UTF-8
 //! text remain responsible for choosing scalar-boundary spans.
 
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 use marksheet_model::ByteSpan;
 
@@ -41,9 +41,14 @@ impl SourcePatch {
 /// replacement is also allowed. Multiple insertions at exactly the same offset
 /// are rejected rather than relying on incidental input order; callers should
 /// coalesce them into one patch first.
+///
+/// The bound snapshot is reference-counted. Byte identity remains the
+/// precondition for applying a set, but successive document versions are shared
+/// rather than copied, so an undo history costs one snapshot per version rather
+/// than one per retained patch set.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PatchSet {
-    base: Vec<u8>,
+    base: Arc<Vec<u8>>,
     patches: Vec<SourcePatch>,
 }
 
@@ -59,21 +64,34 @@ impl PatchSet {
     /// Returns a [`PatchError`] for malformed spans, offsets outside the base,
     /// non-ascending input, overlapping spans, or ambiguous insertions.
     pub fn for_source(base: &[u8], patches: Vec<SourcePatch>) -> Result<Self, PatchError> {
-        let base_len = source_len(base);
-        validate_patches(base_len, &patches)?;
-        Ok(Self {
-            base: base.to_vec(),
-            patches,
-        })
+        Self::for_shared_source(Arc::new(base.to_vec()), patches)
+    }
+
+    /// Binds patches to a snapshot the caller already holds.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::for_source`].
+    pub(crate) fn for_shared_source(
+        base: Arc<Vec<u8>>,
+        patches: Vec<SourcePatch>,
+    ) -> Result<Self, PatchError> {
+        validate_patches(source_len(&base), &patches)?;
+        Ok(Self { base, patches })
     }
 
     /// Makes an empty patch set bound to `base`.
     #[must_use]
     pub fn empty(base: &[u8]) -> Self {
         Self {
-            base: base.to_vec(),
+            base: Arc::new(base.to_vec()),
             patches: Vec::new(),
         }
+    }
+
+    /// The shared snapshot these patches are bound to.
+    pub(crate) fn shared_base(&self) -> &Arc<Vec<u8>> {
+        &self.base
     }
 
     /// Source length for which this set was validated.
@@ -103,7 +121,7 @@ impl PatchSet {
     /// changes before any bytes are written.
     pub fn apply(&self, source: &[u8]) -> Result<Vec<u8>, PatchError> {
         let (result, _) = self.render(source, false)?;
-        Ok(result)
+        Ok(Arc::unwrap_or_clone(result))
     }
 
     /// Applies patches and returns a patch set that restores the original bytes.
@@ -123,7 +141,7 @@ impl PatchSet {
         // explicit rather than using `expect`, even though a caller cannot
         // control it, so this module never panics while handling source spans.
         let inverse = inverse.ok_or(PatchError::InternalInvariant)?;
-        Ok((result, inverse))
+        Ok((Arc::unwrap_or_clone(result), inverse))
     }
 
     /// Builds the undo patch set without retaining the edited bytes.
@@ -140,9 +158,9 @@ impl PatchSet {
         &self,
         source: &[u8],
         capture_inverse: bool,
-    ) -> Result<(Vec<u8>, Option<PatchSet>), PatchError> {
+    ) -> Result<(Arc<Vec<u8>>, Option<PatchSet>), PatchError> {
         let actual_len = source_len(source);
-        if source != self.base {
+        if source != self.base.as_slice() {
             return Err(PatchError::BaseMismatch {
                 expected: self.base_len(),
                 actual: actual_len,
@@ -194,8 +212,13 @@ impl PatchSet {
 
         result.extend_from_slice(&source[source_cursor..]);
 
+        // The inverse shares the rendered snapshot it is bound to, so building
+        // undo data never copies the resulting document.
+        let result = Arc::new(result);
         let inverse = inverse_patches
-            .map(|patches| PatchSet::for_source(&result, coalesce_inverse_patches(patches)))
+            .map(|patches| {
+                PatchSet::for_shared_source(Arc::clone(&result), coalesce_inverse_patches(patches))
+            })
             .transpose()?;
         Ok((result, inverse))
     }
