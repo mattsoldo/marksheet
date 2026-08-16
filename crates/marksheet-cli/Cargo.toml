@@ -1,0 +1,21 @@
+[package]
+name = "marksheet-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "marksheet"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+marksheet-syntax = { path = "../marksheet-syntax" }
+marksheet-model = { path = "../marksheet-model" }
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
