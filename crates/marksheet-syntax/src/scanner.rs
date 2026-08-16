@@ -59,6 +59,7 @@ impl Scanner<'_> {
         let mut first = true;
         while self.offset < self.source.len() {
             let line = physical_line(self.source, self.offset);
+            self.diagnose_line_ending(line);
             let content = &self.source[line.content.range()];
 
             if first && content.starts_with(b"#!marksheet") {
@@ -99,12 +100,17 @@ impl Scanner<'_> {
             }
             first = false;
         }
+    }
 
-        if self.source.is_empty() {
+    /// Only LF and CRLF are valid line endings, so a lone carriage return is an
+    /// error rather than a third spelling that canonical output would silently
+    /// rewrite. The CSV layer reports the same problem for records.
+    fn diagnose_line_ending(&mut self, line: Line) {
+        if &self.source[line.newline.range()] == b"\r" {
             self.diagnostics.push(error(
-                "MS1001",
-                "document is missing the Marksheet version header",
-                Span::new(0, 0),
+                "MS1004",
+                "bare carriage return is not a valid line ending",
+                line.newline,
             ));
         }
     }
@@ -123,6 +129,9 @@ impl Scanner<'_> {
                 "CSV block is missing its @end terminator",
                 directive.line.content,
             ));
+        }
+        if let Some(terminator) = terminator {
+            self.diagnose_line_ending(terminator);
         }
         let end = terminator.map_or(self.source.len(), |line| line.span.end);
         self.nodes.push(Node::CsvBlock(CsvBlock {
@@ -146,6 +155,9 @@ impl Scanner<'_> {
                 "extension body is missing its @end terminator",
                 directive.line.content,
             ));
+        }
+        if let Some(terminator) = terminator {
+            self.diagnose_line_ending(terminator);
         }
         let end = terminator.map_or(self.source.len(), |line| line.span.end);
         self.nodes.push(Node::Extension(ExtensionBlock {
@@ -271,9 +283,21 @@ fn parse_csv(source: &[u8], body: Span) -> (Vec<CsvRecord>, Vec<Diagnostic>) {
                         closed_quote = true;
                         break;
                     }
-                } else if source[cursor] == b'\r' && source.get(cursor + 1) == Some(&b'\n') {
+                } else if source[cursor] == b'\r' {
+                    // An embedded record always decodes to LF, so no raw
+                    // carriage return can reach a value or canonical output.
+                    let carriage_return = cursor;
+                    cursor += 1;
+                    if cursor < body.end && source[cursor] == b'\n' {
+                        cursor += 1;
+                    } else {
+                        diagnostics.push(error(
+                            "MS1102",
+                            "bare carriage return is not a valid line ending",
+                            Span::new(carriage_return, cursor),
+                        ));
+                    }
                     decoded.push(b'\n');
-                    cursor += 2;
                 } else {
                     decoded.push(source[cursor]);
                     cursor += 1;

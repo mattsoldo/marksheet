@@ -150,7 +150,7 @@ mod tests {
         let document = parse(source);
         assert!(!document.has_errors());
         let once = canonicalize(&document).unwrap();
-        assert!(!once.windows(2).any(|window| window == b"\r\n"));
+        assert!(!once.contains(&b'\r'));
         let twice = canonicalize(&parse(&once)).unwrap();
         assert_eq!(once, twice);
     }
@@ -161,6 +161,48 @@ mod tests {
         let document = parse(source);
         assert_eq!(document.source_bytes(), source);
         assert!(document.has_errors());
+    }
+
+    #[test]
+    fn lone_carriage_return_line_endings_are_rejected_without_losing_bytes() {
+        let source = b"#!marksheet 0.1\r@sheet s \"Sheet\"\r";
+        let document = parse(source);
+        let codes: Vec<_> = document
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect();
+        assert_eq!(codes, ["MS1004", "MS1004"]);
+        assert_eq!(document.source_bytes(), source);
+        assert!(
+            canonicalize(&document).is_err(),
+            "CR-only line endings must not be rewritten implicitly"
+        );
+    }
+
+    #[test]
+    fn a_bare_carriage_return_inside_a_quoted_csv_field_is_rejected() {
+        let source =
+            b"#!marksheet 0.1\n@sheet s \"Sheet\"\n@block A1 csv\n\"first\rsecond\"\n@end\n";
+        let document = parse(source);
+        let codes: Vec<_> = document
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect();
+        assert_eq!(codes, ["MS1102"]);
+        assert_eq!(document.source_bytes(), source);
+        assert!(canonicalize(&document).is_err());
+    }
+
+    #[test]
+    fn a_missing_version_header_is_reported_exactly_once() {
+        let codes: Vec<_> = parse(b"")
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str().to_owned())
+            .collect();
+        assert_eq!(codes, ["MS1001", "MS1101"]);
     }
 
     #[test]

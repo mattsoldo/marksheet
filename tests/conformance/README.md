@@ -9,6 +9,7 @@ fixture explicitly exercises an optional extension warning.
 Diagnostic contract for this corpus:
 
 - `MS1001`: version header/version error
+- `MS1004`: bare carriage return used as an outer line ending
 - `MS1101`: malformed, unknown, misplaced directive or property
 - `MS1102`: malformed or unterminated CSV
 - `MS1201`: invalid or reserved identifier
@@ -26,3 +27,5 @@ Diagnostic contract for this corpus:
 `valid/all_core.ms` is the broad core-language fixture. The focused fixtures
 cover CSV edge cases (including CRLF input) and sparse coordinates. The invalid
 files are deliberately small so a diagnostic regression is easy to localize.
+`invalid/bare_carriage_return.ms` and `invalid/quoted_bare_carriage_return.ms`
+intentionally contain lone `CR` bytes, so `.gitattributes` marks them binary.

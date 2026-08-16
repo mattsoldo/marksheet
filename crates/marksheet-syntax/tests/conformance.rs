@@ -112,8 +112,8 @@ fn assert_canonicalizes_cleanly(path: &Path, original: &[u8]) {
         panic!("{} should canonicalize: {diagnostics:?}", path.display())
     });
     assert!(
-        !canonical.windows(2).any(|bytes| bytes == b"\r\n"),
-        "{} canonical output must use LF line endings",
+        !canonical.contains(&b'\r'),
+        "{} canonical output must use LF line endings and contain no carriage return",
         path.display()
     );
 
