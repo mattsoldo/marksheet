@@ -1,0 +1,6 @@
+{
+  "transaction": {"kind": "set_cell", "sheet": "data", "coordinate": "B2", "value": 9},
+  "before": "virtual_cell_refused.before.ms",
+  "patches": [],
+  "expected": {"outcome": "rejected", "reason": "virtual_cell"}
+}

@@ -1,0 +1,7 @@
+{
+  "transaction": {"kind": "append_table_row", "table": "things", "fields": ["Gadget", 2]},
+  "before": "table_append.before.ms",
+  "after": "table_append.after.ms",
+  "patches": [{"start": 74, "end": 74, "replacement": "Gadget,2\n"}],
+  "assertions": ["insert_before_owning_end", "table_width_matches_headers"]
+}

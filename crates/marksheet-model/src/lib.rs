@@ -1303,6 +1303,11 @@ impl Default for WorkbookSettings {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Workbook {
     pub settings: WorkbookSettings,
+    /// Source origin of an explicitly authored `@book` directive.
+    ///
+    /// This remains `None` when the workbook uses the language defaults or
+    /// when a caller constructs the semantic model without source text.
+    pub book_origin: Option<Origin>,
     pub styles: Vec<Style>,
     pub names: Vec<Name>,
     pub extensions: Vec<ExtensionDeclaration>,
@@ -1411,6 +1416,12 @@ pub struct Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_workbook_has_no_explicit_book_origin() {
+        assert_eq!(Workbook::default().book_origin, None);
+    }
+
     #[test]
     fn spans_are_half_open() {
         let span = ByteSpan::try_new(2, 5).unwrap();

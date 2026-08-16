@@ -1,0 +1,10 @@
+{
+  "transaction": {"kind": "move_block", "sheet": "data", "source": "A1:B2", "destinationAnchor": "C3"},
+  "before": "move_block.before.ms",
+  "after": "move_block.after.ms",
+  "patches": [
+    {"start": 42, "end": 44, "replacement": "C3"},
+    {"start": 54, "end": 56, "replacement": "G3"}
+  ],
+  "assertions": ["anchor_only_for_csv_body", "relative_formula_reference_adjusted"]
+}

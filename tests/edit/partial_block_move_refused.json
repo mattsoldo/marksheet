@@ -1,0 +1,6 @@
+{
+  "transaction": {"kind": "move_block", "sheet": "data", "source": "A1:A2", "destinationAnchor": "D1"},
+  "before": "partial_block_move_refused.before.ms",
+  "patches": [],
+  "expected": {"outcome": "rejected", "reason": "partial_block_footprint"}
+}

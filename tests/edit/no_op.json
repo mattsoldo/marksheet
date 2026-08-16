@@ -1,0 +1,7 @@
+{
+  "transaction": {"kind": "set_cell", "sheet": "data", "coordinate": "A1", "value": "unchanged"},
+  "before": "no_op.before.ms",
+  "after": "no_op.before.ms",
+  "patches": [],
+  "expected": {"outcome": "committed", "changed": false}
+}

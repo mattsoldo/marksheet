@@ -55,6 +55,19 @@ enum Command {
         /// Marksheet workbook to calculate.
         path: PathBuf,
     },
+    /// Compare two workbooks by their semantic projection, not source spelling.
+    ///
+    /// A successful empty comparison exits 0. Differences and invalid inputs
+    /// exit 1, so the command is suitable for use in CI and shell guards.
+    Diff {
+        /// Difference output format.
+        #[arg(long, value_enum, default_value_t = DiffOutputFormat::Human)]
+        format: DiffOutputFormat,
+        /// Baseline Marksheet workbook.
+        old: PathBuf,
+        /// Candidate Marksheet workbook.
+        new: PathBuf,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -72,6 +85,13 @@ enum CalcOutputFormat {
     Text,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+enum DiffOutputFormat {
+    #[default]
+    Human,
+    Json,
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
@@ -83,6 +103,7 @@ fn main() -> ExitCode {
             format,
             path,
         } => commands::calculate(&path, sheet, range, format),
+        Command::Diff { format, old, new } => commands::diff(&old, &new, format),
     };
 
     match result {

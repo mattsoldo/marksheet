@@ -957,6 +957,157 @@ Structural spreadsheet actions require source-aware behavior:
   and
 - a named range is updated at its declaration rather than expanded in formulas.
 
+### 19.1 Transactional edit contract
+
+An edit-capable implementation applies an explicit transaction to a parsed,
+valid source document. A transaction MUST either commit all of its semantic
+operations and source patches or commit none of them. It MUST NOT return a
+partly applied workbook after a failed validation, failed precondition, or
+resource-limit diagnostic.
+
+A committed edit result MUST contain:
+
+- the semantic operations that were applied;
+- a patch plan of byte ranges in the original source;
+- the resulting semantic workbook and diagnostics; and
+- an inverse transaction suitable for undo.
+
+Each patch is a half-open UTF-8 byte range `[start, end)` plus replacement
+bytes. Patch ranges MUST be sorted by increasing `start`, MUST NOT overlap,
+and are interpreted against the same original source snapshot. Insertions have
+`start = end`. Applying the complete plan in descending range order produces
+the result without invalidating a later offset. A no-op transaction MUST return
+an empty patch plan.
+
+An editor MUST preserve all bytes outside its patch plan. In particular, an
+edit that does not target an opaque extension MUST preserve its payload,
+including original line endings, byte-for-byte. A lossless edit MUST NOT use
+canonical serialization as an implementation shortcut.
+
+#### 19.1.1 Authored-cell replacement and table append
+
+`SetCell(sheet, coordinate, value)` is defined only for an existing authored
+CSV field. It replaces that one field token, including only the quoting needed
+for the replacement value under section 9.1. The operation MUST preserve the
+rest of the CSV record, surrounding source spelling, and every unrelated
+block. An authored blank field is an existing field and may be replaced.
+
+`SetCell` MUST refuse an absent coordinate, a coordinate represented only by an
+`@fill` virtual cell, and a coordinate whose containing CSV field cannot be
+uniquely identified. It MUST NOT materialize a new block, split or grow an
+unnamed block, or replace a formula merely because its calculated display value
+was selected. Setting a formula replaces the authored formula field text; it
+does not canonicalize adjacent formulas or resolve the formula to a value.
+
+`AppendTableRow(table, fields)` appends exactly one CSV record to an existing
+table. `fields` MUST have the table's header width, and each field is encoded
+using section 9.1. The record MUST be inserted immediately before that table's
+own physical `@end`, using the table body's line-ending convention when one is
+available. The operation MUST NOT append to an unnamed block, another table,
+or after a sheet boundary.
+
+#### 19.1.2 Stable identifiers, labels, and references
+
+`RenameSheetLabel(sheet, label)` changes only the quoted label in that sheet's
+`@sheet` declaration. Labels are presentation text; this operation MUST NOT
+rewrite formulas, names, comments, strings, or extension payloads.
+
+`RenameSheetId(old, new)` and `RenameNameId(old, new)` are atomic identifier
+transactions. `new` MUST be valid and unused in its namespace. In addition to
+the declaration, the editor MUST rewrite every resolved core reference token
+whose semantic target is the renamed sheet or name, including formula fields,
+`@fill` formulas, and `@name` definitions where applicable. It MUST NOT rewrite
+text literals, comments, labels, opaque extension payloads, or an unrelated
+identifier that merely has the same byte spelling. A transaction that cannot
+locate every required core reference MUST fail without patches rather than
+leave stale references.
+
+Changing a named-range target is a declaration edit. It MUST update the named
+range definition and MUST NOT expand the name into every formula use.
+
+#### 19.1.3 Block movement and reference policy
+
+`MoveBlock(sheet, source_footprint, destination_anchor)` is defined only when
+`source_footprint` exactly matches one declared `@block` or `@table` footprint.
+Moving a subset of a block or table, a range crossing two footprints, an absent
+range, or a destination that overlaps another footprint MUST be refused. The
+source patch changes the owning block or table anchor; it MUST NOT manufacture
+blank cells or rewrite its CSV body.
+
+Moving a complete footprint preserves dependency identity as follows:
+
+1. Every A1 reference endpoint that denotes a cell in the moved footprint is
+   rewritten to the corresponding destination coordinate, regardless of `$`
+   markers. This applies to references outside and inside the moved footprint.
+2. For an A1 endpoint outside the moved footprint but written in a formula that
+   itself moves with the footprint, the row and column displacement is applied
+   only to relative endpoint components. `$` fixes the corresponding component.
+3. A range endpoint is handled independently under rules 1 and 2. The editor
+   MUST preserve range ordering; if a rewrite would invert an endpoint order or
+   produce an invalid coordinate, the move MUST fail atomically.
+
+The same policy applies to direct A1 targets in named-range definitions. Table
+and sheet identifiers remain stable when a block moves and therefore do not
+need textual rewriting. Draft 0.1 intentionally does not define insertion or
+deletion of arbitrary rows, columns, or partial cells; implementations MUST
+report those requests as unsupported rather than infer broader spreadsheet
+semantics from `MoveBlock`.
+
+#### 19.1.4 Styles
+
+`ApplyStyle(sheet, target, style)` refers to an existing workbook-scoped style
+identifier and creates one focused `@apply target style` directive in the
+target sheet. It MUST NOT mutate or widen an existing application, because that
+could restyle cells outside the requested target. The new directive is placed
+after the last authored `@apply` in that sheet, or after the last sheet item if
+the sheet has none, preserving nearby line-ending and indentation conventions.
+
+An editor MAY offer `DefineStyle` as a separate transaction. It MUST either
+reuse an existing style with exactly the requested declared properties or add a
+new valid, unused style declaration before the first sheet. It MUST NOT modify
+an existing named style to satisfy a one-range formatting request. Styles are
+compared by their declared core property map; order and whitespace are not a
+reason to duplicate a style.
+
+#### 19.1.5 Undo, redo, external changes, and rebasing
+
+The inverse returned for a committed transaction MUST restore the immediately
+previous semantic source state when its post-transaction preconditions still
+hold. Redo reapplies the original transaction only when its pre-transaction
+preconditions hold. Undo and redo are transactions and therefore use the same
+atomic validation and patch-plan rules as a new edit.
+
+Before applying a patch plan, an editor MUST compare a source fingerprint and
+the expected bytes of every affected span with the current file. If either no
+longer matches, it MUST reparse the current source before doing anything else.
+It MAY rebase the semantic transaction only when every targeted stable object
+still resolves uniquely, all operation-specific preconditions hold, and a new
+validated patch plan can be calculated from the current source. Otherwise it
+MUST return a conflict diagnostic and no patches. It MUST NOT overwrite an
+externally changed file with a stale full-document snapshot.
+
+### 19.2 Semantic diff and equivalence
+
+`semantic_diff(left, right)` compares parsed semantic projections and reports
+added, removed, and changed core objects by stable sheet, table, name, style,
+and coordinate identities. It MUST report a parse or validation failure for an
+input that cannot produce a complete semantic projection.
+
+Two valid documents are core-semantically equivalent when they have the same
+workbook settings; ordered sheets with the same identifiers and labels; the
+same authored cells, table definitions, fills, names, styles, geometry, and
+resolved style effects; and formulas with equivalent `portable-a1@1` ASTs.
+Comments, blank lines, directive whitespace, CSV quoting choices, source line
+endings, and equivalent formula spelling do not make documents semantically
+different. Sheet order, table row order, formula versus scalar kind, authored
+blank versus absence, and style precedence do make them different.
+
+Opaque extensions are not interpreted by the core. A semantic diff MUST still
+report a changed extension declaration, scope, placement, or payload bytes as
+an opaque-extension change; it MUST NOT claim the documents are fully
+equivalent when those bytes differ. The diff output SHOULD include a concise
+human explanation and stable structured object identifiers suitable for tools.
+
 ## 20. Conformance
 
 ### 20.1 Core parser
@@ -996,6 +1147,8 @@ Pixel-identical output is not required.
 
 A conforming lossless editor MUST satisfy the preservation requirements in
 [Lossless editing and source maps](#19-lossless-editing-and-source-maps).
+An editor that implements transactions MUST additionally satisfy section 19.1;
+an implementation that exposes semantic diff MUST apply section 19.2.
 
 ### 20.5 Converter
 

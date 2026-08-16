@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "cases": [
+    {"id": "scalar_csv_quote", "kind": "commit", "fixture": "scalar_csv_quote.json"},
+    {"id": "formula_field", "kind": "commit", "fixture": "formula_field.json"},
+    {"id": "table_append", "kind": "commit", "fixture": "table_append.json"},
+    {"id": "rename_sheet_id", "kind": "commit", "fixture": "rename_sheet_id.json"},
+    {"id": "rename_name_id", "kind": "commit", "fixture": "rename_name_id.json"},
+    {"id": "rename_label", "kind": "commit", "fixture": "rename_label.json"},
+    {"id": "move_block", "kind": "commit", "fixture": "move_block.json"},
+    {"id": "apply_existing_style", "kind": "commit", "fixture": "apply_existing_style.json"},
+    {"id": "virtual_cell_refused", "kind": "reject", "fixture": "virtual_cell_refused.json"},
+    {"id": "partial_block_move_refused", "kind": "reject", "fixture": "partial_block_move_refused.json"},
+    {"id": "no_op", "kind": "no_op", "fixture": "no_op.json"},
+    {"id": "rebase_conflict", "kind": "rebase_conflict", "fixture": "rebase_conflict.json"},
+    {"id": "semantic_equivalence", "kind": "semantic_equivalence", "fixture": "semantic_equivalence.json"}
+  ]
+}

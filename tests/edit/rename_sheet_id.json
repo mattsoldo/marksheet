@@ -1,0 +1,11 @@
+{
+  "transaction": {"kind": "rename_sheet_id", "old": "data", "new": "values"},
+  "before": "rename_sheet_id.before.ms",
+  "after": "rename_sheet_id.after.ms",
+  "patches": [
+    {"start": 31, "end": 35, "replacement": "values"},
+    {"start": 46, "end": 50, "replacement": "values"},
+    {"start": 86, "end": 90, "replacement": "values"}
+  ],
+  "assertions": ["updates_name_definition", "updates_formula_reference", "atomic"]
+}

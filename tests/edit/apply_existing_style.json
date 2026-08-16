@@ -1,0 +1,7 @@
+{
+  "transaction": {"kind": "apply_style", "sheet": "data", "target": "B2", "style": "warning"},
+  "before": "apply_existing_style.before.ms",
+  "after": "apply_existing_style.after.ms",
+  "patches": [{"start": 118, "end": 118, "replacement": "@apply B2 warning\n"}],
+  "assertions": ["reuses_existing_style", "focused_apply_directive"]
+}

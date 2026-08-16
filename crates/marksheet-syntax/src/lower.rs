@@ -143,6 +143,10 @@ impl Lowerer<'_> {
             self.duplicate(directive.line.content, first, "duplicate @book directive");
             return;
         }
+        // Keep the directive line (including its original line ending) so an
+        // editor can replace an explicit declaration without inventing one
+        // for workbooks that only use default settings.
+        self.workbook.book_origin = Some(origin(directive.line.span));
         let Some(properties) = self.properties(directive.arguments) else {
             return;
         };

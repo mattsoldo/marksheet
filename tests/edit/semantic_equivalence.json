@@ -1,0 +1,8 @@
+{
+  "left": "semantic_equivalence.left.ms",
+  "right": "semantic_equivalence.right.ms",
+  "expected": {
+    "equivalent": true,
+    "ignored": ["comment", "blank_line", "function_case"]
+  }
+}

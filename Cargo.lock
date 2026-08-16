@@ -142,10 +142,23 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "marksheet-calc",
+ "marksheet-edit",
  "marksheet-model",
  "marksheet-syntax",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "marksheet-edit"
+version = "0.1.0"
+dependencies = [
+ "marksheet-calc",
+ "marksheet-model",
+ "marksheet-syntax",
+ "serde",
+ "serde_json",
+ "time",
 ]
 
 [[package]]

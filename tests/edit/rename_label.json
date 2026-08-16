@@ -1,0 +1,7 @@
+{
+  "transaction": {"kind": "rename_sheet_label", "sheet": "data", "label": "New label"},
+  "before": "rename_label.before.ms",
+  "after": "rename_label.after.ms",
+  "patches": [{"start": 28, "end": 39, "replacement": "\"New label\""}],
+  "assertions": ["formula_references_unchanged"]
+}

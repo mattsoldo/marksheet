@@ -11,9 +11,11 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use marksheet_model::{Diagnostic, Range, Severity, SheetId};
+use marksheet_model::{
+    ByteSpan, Diagnostic, DiagnosticCode, LabeledSpan, Range, Severity, SheetId,
+};
 
-use crate::{CalcOutputFormat, OutputFormat};
+use crate::{CalcOutputFormat, DiffOutputFormat, OutputFormat};
 
 /// Runs `marksheet check`.
 pub(crate) fn check(path: &Path, format: OutputFormat) -> Result<ExitCode, CliError> {
@@ -91,6 +93,150 @@ pub(crate) fn calculate(
     }
 
     Ok(exit_for_diagnostics(&result.diagnostics))
+}
+
+/// Runs `marksheet diff`.
+///
+/// Comparison is intentionally gated on both complete, formula-valid workbook
+/// projections. This avoids a tempting but incorrect fallback to source text
+/// when one side is malformed or asks for unsupported calculation semantics.
+pub(crate) fn diff(
+    old_path: &Path,
+    new_path: &Path,
+    format: DiffOutputFormat,
+) -> Result<ExitCode, CliError> {
+    let old_source = read_source(old_path)?;
+    let new_source = read_source(new_path)?;
+    let old = marksheet_syntax::parse(&old_source);
+    let new = marksheet_syntax::parse(&new_source);
+
+    let mut diagnostics = Vec::new();
+    collect_document_diagnostics(old_path, &old, &mut diagnostics);
+    collect_document_diagnostics(new_path, &new, &mut diagnostics);
+    if !diagnostics.is_empty() {
+        crate::render::render_diff_diagnostics(&diagnostics, format).map_err(CliError::Render)?;
+        return Ok(ExitCode::from(1));
+    }
+
+    // `collect_document_diagnostics` established that both documents have a
+    // complete workbook projection before semantic comparison begins.
+    let old_workbook = old
+        .workbook
+        .as_ref()
+        .expect("complete diff input has a workbook projection");
+    let new_workbook = new
+        .workbook
+        .as_ref()
+        .expect("complete diff input has a workbook projection");
+    let semantic_diff = marksheet_edit::diff::SemanticDiff::between(old_workbook, new_workbook);
+    let unsupported: Vec<_> = semantic_diff
+        .changes
+        .iter()
+        .filter_map(|change| match change {
+            marksheet_edit::diff::SemanticChange::UnsupportedComparison(issue) => Some(issue),
+            _ => None,
+        })
+        .collect();
+    if !unsupported.is_empty() {
+        let diagnostics = unsupported
+            .into_iter()
+            .map(|issue| crate::render::DiffDiagnostic {
+                path: old_path,
+                source: old.source_bytes(),
+                diagnostic: unsupported_comparison_diagnostic(issue),
+            })
+            .collect::<Vec<_>>();
+        crate::render::render_diff_diagnostics(&diagnostics, format).map_err(CliError::Render)?;
+        return Ok(ExitCode::from(1));
+    }
+
+    let output =
+        crate::render::format_semantic_diff(&semantic_diff, format).map_err(CliError::Serialize)?;
+    crate::render::print_stdout(&output).map_err(CliError::Render)?;
+    if semantic_diff.is_empty() {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        // Deliberately match conventional `diff`: a real difference is a
+        // useful nonzero condition, while I/O and serialization failures are
+        // reserved for the top-level exit status 2.
+        Ok(ExitCode::from(1))
+    }
+}
+
+fn collect_document_diagnostics<'a>(
+    path: &'a Path,
+    document: &'a marksheet_syntax::ParsedDocument,
+    output: &mut Vec<crate::render::DiffDiagnostic<'a>>,
+) {
+    let has_syntax_errors = document.has_errors();
+    output.extend(
+        document
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == Severity::Error)
+            .map(|diagnostic| crate::render::DiffDiagnostic {
+                path,
+                source: document.source_bytes(),
+                diagnostic: diagnostic.clone(),
+            }),
+    );
+    if !has_syntax_errors && let Some(workbook) = document.workbook.as_ref() {
+        output.extend(
+            validate_formulas(workbook)
+                .into_iter()
+                .filter(|diagnostic| diagnostic.severity == Severity::Error)
+                .map(|diagnostic| crate::render::DiffDiagnostic {
+                    path,
+                    source: document.source_bytes(),
+                    diagnostic,
+                }),
+        );
+    } else if !has_syntax_errors {
+        output.push(crate::render::DiffDiagnostic {
+            path,
+            source: document.source_bytes(),
+            diagnostic: incomplete_projection_diagnostic(),
+        });
+    }
+}
+
+fn incomplete_projection_diagnostic() -> Diagnostic {
+    Diagnostic {
+        code: DiagnosticCode::new("MS3001").expect("registered diff diagnostic code"),
+        severity: Severity::Error,
+        message: "input did not produce a complete semantic workbook projection".to_owned(),
+        primary: LabeledSpan {
+            span: ByteSpan::default(),
+            label: None,
+        },
+        related: Vec::new(),
+        context: None,
+        suggestion: None,
+    }
+}
+
+fn unsupported_comparison_diagnostic(
+    issue: &marksheet_edit::diff::UnsupportedComparison,
+) -> Diagnostic {
+    Diagnostic {
+        // This diagnostic is emitted only after both parser and formula
+        // validation passes succeed. It therefore describes an invariant the
+        // semantic diff deliberately refuses to guess about, rather than a
+        // source spelling error.
+        code: DiagnosticCode::new("MS3001").expect("registered diff diagnostic code"),
+        severity: Severity::Error,
+        message: format!(
+            "semantic comparison unsupported at {:?}: {}",
+            issue.scope, issue.explanation
+        ),
+        primary: LabeledSpan {
+            span: ByteSpan::default(),
+            label: None,
+        },
+        related: Vec::new(),
+        context: None,
+        suggestion: None,
+    }
 }
 
 fn range_cell_count(range: Range) -> Result<u64, CliError> {

@@ -1,0 +1,10 @@
+{
+  "transaction": {"kind": "rename_name_id", "old": "rate", "new": "tax_rate"},
+  "before": "rename_name_id.before.ms",
+  "after": "rename_name_id.after.ms",
+  "patches": [
+    {"start": 22, "end": 26, "replacement": "tax_rate"},
+    {"start": 87, "end": 91, "replacement": "tax_rate"}
+  ],
+  "assertions": ["updates_declaration", "updates_formula_reference", "atomic"]
+}

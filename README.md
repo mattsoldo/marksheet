@@ -80,11 +80,11 @@ Marksheet is at **Draft 0.1**. The format is being designed in public and is not
 yet stable. Files written during the `0.x` period may require migration as the
 core is refined. Stability rules become strict at `1.0`.
 
-The reference implementation has completed the Milestone 2 calculation proof:
-lossless parsing, validation, canonical formatting, the `portable-a1@1`
-formula profile, virtual fills, deterministic dependency calculation, cycles,
-and incremental literal updates. Milestone 3 source-aware transactional editing
-is the next implementation slice.
+The reference implementation has completed the Milestone 3 editing proof. It
+now includes lossless parsing, canonical formatting, deterministic
+`portable-a1@1` calculation, source-aware semantic transactions, exact inverse
+patches, undo/redo, conservative external-change rebasing, and semantic diff.
+Milestone 4 browser and GUI integration is the next implementation slice.
 
 ## Build and CLI usage
 
@@ -97,6 +97,7 @@ cargo run -p marksheet-cli -- check examples/budget.ms
 cargo run -p marksheet-cli -- fmt --check examples/budget.ms
 cargo run -p marksheet-cli -- calc examples/budget.ms \
   --sheet summary --range A1:B4 --format json
+cargo run -p marksheet-cli -- diff old.ms new.ms
 ```
 
 To build the standalone `marksheet` executable:
@@ -116,6 +117,23 @@ explicit rectangle. JSON is the default stable typed output; `--format csv`
 and `--format text` are also available. Core calculation is deterministic:
 volatile functions, I/O, clocks, randomness, and network access are not part of
 `portable-a1@1`.
+
+`marksheet diff <old.ms> <new.ms>` compares workbook meaning rather than source
+spelling. Human output is concise; `--format json` emits the versioned
+`marksheet-diff@1` envelope. Equivalent workbooks exit `0`, semantic
+differences exit `1`, and operational failures exit `2`.
+
+The `marksheet-edit` crate exposes typed transactions for authored-cell edits,
+table-row appends, sheet and name renames, complete block movement, and focused
+style application. Successful transactions return ordered source-bound byte
+patches and exact inverse patches. A structural block move is deliberately a
+single-operation transaction so newly authored formulas cannot bypass its
+reference-adjustment pass. `EditSession` adds undo, redo, and safe
+semantic rebasing after unrelated external changes; conflicts never expose a
+partial patch plan. Cell, table-append, and identifier edits can be rebased
+when their semantic preconditions still hold. Structural moves and style
+applications currently return an explicit conflict after external drift rather
+than guessing at a rebase.
 
 Successful JSON calculation output uses the versioned
 `marksheet-calc@1` envelope. It contains the formula profile, explicit

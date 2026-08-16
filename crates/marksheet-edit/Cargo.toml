@@ -1,22 +1,19 @@
 [package]
-name = "marksheet-cli"
+name = "marksheet-edit"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[[bin]]
-name = "marksheet"
-path = "src/main.rs"
-
 [dependencies]
-clap.workspace = true
-marksheet-syntax = { path = "../marksheet-syntax" }
-marksheet-model = { path = "../marksheet-model" }
 marksheet-calc = { path = "../marksheet-calc" }
-marksheet-edit = { path = "../marksheet-edit" }
+marksheet-model = { path = "../marksheet-model" }
+marksheet-syntax = { path = "../marksheet-syntax" }
 serde.workspace = true
+time.workspace = true
+
+[dev-dependencies]
 serde_json.workspace = true
 
 [lints]

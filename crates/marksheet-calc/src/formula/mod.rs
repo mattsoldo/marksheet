@@ -10,6 +10,7 @@ mod ast;
 mod format;
 mod lexer;
 mod parser;
+mod rewrite;
 
 pub use adjust::{AdjustmentError, CopyOffset, FormulaTemplate, adjust_references};
 pub use ast::{
@@ -19,6 +20,10 @@ pub use ast::{
 pub use format::{FormulaFormatError, format_expression, format_formula};
 pub use lexer::{FormulaError, FormulaErrorKind, Token, TokenKind, lex};
 pub use parser::{ParseLimits, parse};
+pub use rewrite::{
+    A1Copy, A1Move, FormulaPatch, FormulaRewrite, FormulaRewriteError, FormulaRewriteResult,
+    RenameKind, rewrite_formula, rewrite_formula_text,
+};
 
 /// Stable diagnostic code for malformed `portable-a1@1` formulas.
 pub const FORMULA_SYNTAX_DIAGNOSTIC: &str = "MS2202";

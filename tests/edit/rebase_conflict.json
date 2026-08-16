@@ -1,0 +1,7 @@
+{
+  "transaction": {"kind": "set_cell", "sheet": "data", "coordinate": "A1", "value": 2},
+  "before": "rebase_conflict.before.ms",
+  "current": "rebase_conflict.current.ms",
+  "patches": [{"start": 49, "end": 50, "replacement": "2", "expected": "1"}],
+  "expected": {"outcome": "conflict", "reason": "affected_span_changed"}
+}

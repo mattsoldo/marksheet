@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Marksheet editing fixture manifest",
+  "type": "object",
+  "required": ["version", "cases"],
+  "properties": {
+    "version": {"const": 1},
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "fixture"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+          "kind": {
+            "enum": [
+              "commit",
+              "reject",
+              "no_op",
+              "rebase_conflict",
+              "semantic_equivalence"
+            ]
+          },
+          "fixture": {"type": "string", "pattern": "^[a-z][a-z0-9_]*\\.json$"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

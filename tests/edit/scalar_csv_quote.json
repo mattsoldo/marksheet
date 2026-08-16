@@ -1,0 +1,8 @@
+{
+  "transaction": {"kind": "set_cell", "sheet": "data", "coordinate": "B2", "value": "two, too"},
+  "before": "scalar_csv_quote.before.ms",
+  "after": "scalar_csv_quote.after.ms",
+  "patches": [{"start": 68, "end": 69, "replacement": "\"two, too\""}],
+  "inversePatches": [{"start": 68, "end": 78, "replacement": "1"}],
+  "assertions": ["only_csv_field_changes", "opaque_extension_bytes_unchanged"]
+}

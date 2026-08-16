@@ -1,0 +1,7 @@
+{
+  "transaction": {"kind": "set_cell", "sheet": "data", "coordinate": "B2", "formula": "=A2*3"},
+  "before": "formula_field.before.ms",
+  "after": "formula_field.after.ms",
+  "patches": [{"start": 64, "end": 72, "replacement": "=A2*3"}],
+  "assertions": ["only_formula_field_changes", "no_adjacent_formula_canonicalization"]
+}
