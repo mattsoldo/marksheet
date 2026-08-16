@@ -255,7 +255,14 @@ pub enum SemanticSheetItem {
     Extension(SemanticSheetExtension),
 }
 
-/// An opaque sheet extension and its position among all source sheet items.
+/// An opaque sheet extension and its position among sheet items.
+///
+/// `@block` boundaries are not semantic (see module docs): a valid document
+/// can express the same cells split across a different number of blocks. A
+/// maximal run of consecutive blocks therefore contributes a single position
+/// here, regardless of how many blocks it is split into, so `item_ordinal`
+/// stays stable under block-boundary-only edits while still changing when
+/// the extension genuinely moves relative to other sheet content.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticSheetExtension {
     pub item_ordinal: usize,
@@ -594,11 +601,26 @@ impl SheetProjection {
         let mut items = Vec::new();
         let mut table_targets = BTreeMap::new();
         let mut applies = Vec::new();
+        // Extension placement, below: `@block` boundaries are not semantic,
+        // so a maximal run of consecutive blocks counts as one position
+        // rather than one position per block.
+        let mut extension_position = 0usize;
+        let mut in_block_run = false;
         for (index, item) in sheet.items.iter().enumerate() {
             let scope = ComparisonScope::SheetItem {
                 sheet: sheet.id.clone(),
                 index,
             };
+            let item_ordinal = extension_position;
+            if matches!(item, SheetItem::Block(_)) {
+                if !in_block_run {
+                    extension_position += 1;
+                    in_block_run = true;
+                }
+            } else {
+                extension_position += 1;
+                in_block_run = false;
+            }
             match item {
                 SheetItem::Block(block) => {
                     insert_cells(
@@ -638,7 +660,7 @@ impl SheetProjection {
                 )),
                 SheetItem::Extension(extension) => {
                     items.push(SemanticSheetItem::Extension(SemanticSheetExtension {
-                        item_ordinal: index,
+                        item_ordinal,
                         extension: semantic_extension(extension),
                     }));
                 }
@@ -1723,6 +1745,65 @@ mod tests {
         let right = workbook(vec![
             SheetItem::Extension(extension),
             SheetItem::Block(block("A1", vec![vec![Value::Number(1.0)]])),
+        ]);
+        assert!(
+            semantic_diff(&left, &right)
+                .changes
+                .iter()
+                .any(|change| matches!(change, SemanticChange::SheetItemsChanged { .. }))
+        );
+    }
+
+    #[test]
+    fn splitting_a_block_does_not_move_a_following_extension() {
+        // Same authored cells (A1=1, B1=2), but the right document expresses
+        // them as two blocks instead of one. `@block` boundaries are not
+        // semantic, so the trailing extension's placement must not change.
+        let extension = Extension {
+            capability: ExtensionId::parse("charts@1").expect("capability"),
+            name: "chart".to_owned(),
+            payload: "{}".to_owned(),
+            origin: None,
+            payload_origin: None,
+        };
+        let left = workbook(vec![
+            SheetItem::Block(block(
+                "A1",
+                vec![vec![Value::Number(1.0), Value::Number(2.0)]],
+            )),
+            SheetItem::Extension(extension.clone()),
+        ]);
+        let right = workbook(vec![
+            SheetItem::Block(block("A1", vec![vec![Value::Number(1.0)]])),
+            SheetItem::Block(block("B1", vec![vec![Value::Number(2.0)]])),
+            SheetItem::Extension(extension),
+        ]);
+        assert!(semantic_diff(&left, &right).is_empty());
+    }
+
+    #[test]
+    fn swapped_sheet_extensions_are_still_detected_as_reordered() {
+        let chart = Extension {
+            capability: ExtensionId::parse("charts@1").expect("capability"),
+            name: "chart".to_owned(),
+            payload: "{}".to_owned(),
+            origin: None,
+            payload_origin: None,
+        };
+        let metadata = Extension {
+            capability: ExtensionId::parse("archive@1").expect("capability"),
+            name: "metadata".to_owned(),
+            payload: "{}".to_owned(),
+            origin: None,
+            payload_origin: None,
+        };
+        let left = workbook(vec![
+            SheetItem::Extension(chart.clone()),
+            SheetItem::Extension(metadata.clone()),
+        ]);
+        let right = workbook(vec![
+            SheetItem::Extension(metadata),
+            SheetItem::Extension(chart),
         ]);
         assert!(
             semantic_diff(&left, &right)

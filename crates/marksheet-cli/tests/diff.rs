@@ -37,6 +37,36 @@ fn diff_ignores_source_formatting_and_equivalent_formula_spelling() {
 }
 
 #[test]
+fn diff_ignores_block_split_before_a_sheet_extension() {
+    // Same authored cells (A1=1, B1=2) followed by the same sheet-scoped
+    // extension; only the number of `@block` directives differs. `@block`
+    // boundaries are not semantic, so this must diff as equivalent.
+    let old = TempFile::write(
+        "diff-block-split-old.ms",
+        b"#!marksheet 0.1\n@sheet s \"Sheet\"\n@block A1 csv\n1,2\n@end\n@extension archive@1 \"meta\"\n  owner=finance\n@end\n",
+    );
+    let new = TempFile::write(
+        "diff-block-split-new.ms",
+        b"#!marksheet 0.1\n@sheet s \"Sheet\"\n@block A1 csv\n1\n@end\n@block B1 csv\n2\n@end\n@extension archive@1 \"meta\"\n  owner=finance\n@end\n",
+    );
+
+    let human = diff(&old, &new).output().expect("CLI executes");
+    assert!(human.status.success(), "stderr: {}", text(&human.stderr));
+    assert!(human.stdout.is_empty());
+    assert!(human.stderr.is_empty());
+
+    let json = diff(&old, &new)
+        .args(["--format", "json"])
+        .output()
+        .expect("CLI executes");
+    assert!(json.status.success(), "stderr: {}", text(&json.stderr));
+    let envelope: serde_json::Value = serde_json::from_slice(&json.stdout).expect("valid JSON");
+    assert_eq!(envelope["equivalent"], true);
+    assert_eq!(envelope["change_count"], 0);
+    assert_eq!(envelope["changes"], serde_json::json!([]));
+}
+
+#[test]
 fn diff_reports_cell_formula_and_label_changes_in_stable_order() {
     let old = TempFile::write(
         "diff-old.ms",
