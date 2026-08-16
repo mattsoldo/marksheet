@@ -1,15 +1,14 @@
 use std::fmt;
 
 use marksheet_model::{CellError, Value};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use time::{Date, OffsetDateTime};
 
 /// A calculated scalar value.
 ///
 /// Formula source is deliberately absent: callers must parse and evaluate a
 /// formula before it can enter calculation state.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+#[derive(Clone, Debug, PartialEq)]
 pub enum CalcValue {
     Blank,
     Text(String),
@@ -18,6 +17,40 @@ pub enum CalcValue {
     Date(Date),
     DateTime(OffsetDateTime),
     Error(CellError),
+}
+
+/// `CalcValue` deliberately delegates its wire representation to [`Value`].
+///
+/// Calculation results have the same scalar variants except for `Formula`,
+/// which must be evaluated before it can be represented as a calculation
+/// value. Keeping one wire implementation means source and calculated dates
+/// always use the same ISO/RFC 3339 rules.
+impl Serialize for CalcValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let value = match self {
+            Self::Blank => Value::Blank,
+            Self::Text(value) => Value::Text(value.clone()),
+            Self::Number(value) => Value::Number(*value),
+            Self::Boolean(value) => Value::Boolean(*value),
+            Self::Date(value) => Value::Date(*value),
+            Self::DateTime(value) => Value::DateTime(*value),
+            Self::Error(value) => Value::Error(*value),
+        };
+        value.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for CalcValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Value::deserialize(deserializer)
+            .and_then(|value| Self::try_from(value).map_err(D::Error::custom))
+    }
 }
 
 impl CalcValue {
@@ -193,6 +226,7 @@ impl From<RectangularRange> for ResolvedValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use time::{Month, format_description::well_known::Rfc3339};
 
     #[test]
     fn range_rejects_invalid_shapes() {
@@ -221,5 +255,135 @@ mod tests {
             CalcValue::try_from(Value::Formula(formula)),
             Err(FormulaValueError)
         );
+        assert!(
+            serde_json::from_value::<CalcValue>(serde_json::json!({
+                "kind": "formula",
+                "value": "=1"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dates_and_datetimes_use_string_wire_values_and_round_trip() {
+        let date = Date::from_calendar_date(2024, Month::February, 29).unwrap();
+        let datetime = OffsetDateTime::parse("2026-08-16T14:30:00.125-04:00", &Rfc3339).unwrap();
+
+        for (source, calculated, expected) in [
+            (
+                Value::Date(date),
+                CalcValue::Date(date),
+                serde_json::json!({ "kind": "date", "value": "2024-02-29" }),
+            ),
+            (
+                Value::DateTime(datetime),
+                CalcValue::DateTime(datetime),
+                serde_json::json!({
+                    "kind": "date_time",
+                    "value": "2026-08-16T14:30:00.125-04:00"
+                }),
+            ),
+        ] {
+            assert_eq!(serde_json::to_value(&source).unwrap(), expected);
+            assert_eq!(serde_json::to_value(&calculated).unwrap(), expected);
+            assert_eq!(
+                serde_json::from_value::<Value>(expected.clone()).unwrap(),
+                source
+            );
+            assert_eq!(
+                serde_json::from_value::<CalcValue>(expected).unwrap(),
+                calculated
+            );
+        }
+
+        let source = Value::DateTime(datetime);
+        let calculated = CalcValue::DateTime(datetime);
+        let source_round_trip =
+            serde_json::from_value::<Value>(serde_json::to_value(source).unwrap()).unwrap();
+        let calculated_round_trip =
+            serde_json::from_value::<CalcValue>(serde_json::to_value(calculated).unwrap()).unwrap();
+        assert!(
+            matches!(source_round_trip, Value::DateTime(value) if value.offset() == datetime.offset())
+        );
+        assert!(
+            matches!(calculated_round_trip, CalcValue::DateTime(value) if value.offset() == datetime.offset())
+        );
+    }
+
+    #[test]
+    fn date_wire_rejects_malformed_or_non_string_values() {
+        let invalid_date_values = [
+            serde_json::json!({ "kind": "date", "value": "2024-2-29" }),
+            serde_json::json!({ "kind": "date", "value": "2023-02-29" }),
+            serde_json::json!({ "kind": "date", "value": [2024, 2, 29] }),
+        ];
+        let invalid_datetime_values = [
+            serde_json::json!({ "kind": "date_time", "value": "2026-08-16T14:30:00" }),
+            serde_json::json!({ "kind": "date_time", "value": "2026-08-16t14:30:00Z" }),
+            serde_json::json!({ "kind": "date_time", "value": "2026-08-16T14:30:00+25:00" }),
+            serde_json::json!({ "kind": "date_time", "value": [2026, 8, 16] }),
+        ];
+
+        for value in invalid_date_values
+            .into_iter()
+            .chain(invalid_datetime_values)
+        {
+            assert!(serde_json::from_value::<Value>(value.clone()).is_err());
+            assert!(serde_json::from_value::<CalcValue>(value).is_err());
+        }
+    }
+
+    #[test]
+    fn non_temporal_variants_keep_their_existing_wire_shape() {
+        let formula = marksheet_model::FormulaSource::new("=A1").unwrap();
+        let source_values = [
+            (Value::Blank, serde_json::json!({ "kind": "blank" })),
+            (
+                Value::Text("text".to_owned()),
+                serde_json::json!({ "kind": "text", "value": "text" }),
+            ),
+            (
+                Value::Number(42.5),
+                serde_json::json!({ "kind": "number", "value": 42.5 }),
+            ),
+            (
+                Value::Boolean(true),
+                serde_json::json!({ "kind": "boolean", "value": true }),
+            ),
+            (
+                Value::Formula(formula),
+                serde_json::json!({ "kind": "formula", "value": "=A1" }),
+            ),
+            (
+                Value::Error(CellError::Reference),
+                serde_json::json!({ "kind": "error", "value": "#REF!" }),
+            ),
+        ];
+        for (value, expected) in source_values {
+            assert_eq!(serde_json::to_value(value).unwrap(), expected);
+        }
+
+        let calculated_values = [
+            (CalcValue::Blank, serde_json::json!({ "kind": "blank" })),
+            (
+                CalcValue::Text("text".to_owned()),
+                serde_json::json!({ "kind": "text", "value": "text" }),
+            ),
+            (
+                CalcValue::Number(42.5),
+                serde_json::json!({ "kind": "number", "value": 42.5 }),
+            ),
+            (
+                CalcValue::Boolean(true),
+                serde_json::json!({ "kind": "boolean", "value": true }),
+            ),
+            (
+                CalcValue::Error(CellError::Reference),
+                serde_json::json!({ "kind": "error", "value": "#REF!" }),
+            ),
+        ];
+        for (value, expected) in calculated_values {
+            assert_eq!(serde_json::to_value(value).unwrap(), expected);
+        }
     }
 }

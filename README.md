@@ -80,11 +80,33 @@ Marksheet is at **Draft 0.1**. The format is being designed in public and is not
 yet stable. Files written during the `0.x` period may require migration as the
 core is refined. Stability rules become strict at `1.0`.
 
-The reference implementation has completed the Milestone 3 editing proof. It
-now includes lossless parsing, canonical formatting, deterministic
+The reference implementation has completed the Milestone 4 browser and GUI
+proof. It includes lossless parsing, canonical formatting, deterministic
 `portable-a1@1` calculation, source-aware semantic transactions, exact inverse
-patches, undo/redo, conservative external-change rebasing, and semantic diff.
-Milestone 4 browser and GUI integration is the next implementation slice.
+patches, undo/redo, conservative external-change rebasing, semantic diff, and
+the following browser-facing layers:
+
+- `marksheet-view`, a sparse, pure-Rust, renderer-neutral projection layer. It
+  returns bounded viewports and keeps authored values, virtual fills,
+  calculation, resolved presentation, geometry, and source links distinct; it
+  never expands a sheet to the distance between populated coordinates.
+- `bindings/wasm`, an independent Cargo workspace that exposes the revisioned,
+  batched `marksheet-worker@1` worker protocol without per-cell getters or a
+  dense used range.
+- `viewer`, a standalone TypeScript/DOM workbench that packages the real Wasm
+  worker and displays an exact synchronized source view alongside a bounded
+  grid.
+
+Formula diagnostics do not erase the source: a workbook that can be projected
+remains viewable with source-linked diagnostics, but semantic edits are refused
+until error-level formula diagnostics are resolved. For a local file opened
+through the File System Access API, the viewer compares the current exact bytes
+with its opening snapshot before it obtains a writable. Any drift is reopened
+as the external source and produces no write; an unchanged document also does
+not create a writable. Browsers without a file handle use an explicit download
+instead of overwriting the selected file.
+
+Milestone 5 is the next implementation slice.
 
 ## Build and CLI usage
 
@@ -148,6 +170,31 @@ cycle), and `2` means an I/O, usage, or serialization failure.
 The optional Formualizer adapter under `crates/marksheet-calc-formualizer` is a
 time-boxed compatibility spike and reference comparison, not the profile's
 semantic authority or the default calculator.
+
+## Browser viewer (Milestone 4)
+
+The viewer is a standalone package; it builds the independent Wasm binding and
+stages the generated worker assets itself. Install the Rust target and
+`wasm-bindgen` CLI once, then run its checks from the repository root:
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.127 --locked
+
+cd viewer
+npm install
+npm test
+npm run smoke:wasm
+npm run build
+```
+
+`npm test` runs the viewer and local-file guard tests in a DOM test environment.
+`npm run smoke:wasm` loads the generated Rust Wasm ABI and verifies the Budget
+workbook's ordered sheets, calculation, focused edit patch, and recalculation.
+`npm run build` requires and verifies the packaged worker, protocol glue,
+JavaScript glue, and Wasm artifact. The standalone manual browser workflow,
+including the File System Access behavior that a headless DOM test cannot
+prove, is documented in [viewer/README.md](viewer/README.md).
 
 ## Design boundaries
 

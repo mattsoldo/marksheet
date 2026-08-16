@@ -584,9 +584,16 @@ fn capture_precondition(workbook: &Workbook, operation: &EditOperation) -> Opera
                 }),
             new_available: name_identifier_available(workbook, new),
         },
-        EditOperation::ApplyStyle { .. } | EditOperation::MoveBlock { .. } => {
-            OperationPrecondition::UnsupportedExternalRebase
-        }
+        // These operations remain fully supported for exact execution and
+        // source-bound undo/redo. Replaying them across an external source
+        // change needs wider semantic footprints than this conservative
+        // history layer currently captures.
+        EditOperation::SetNameTarget { .. }
+        | EditOperation::DefineStyle { .. }
+        | EditOperation::ApplyStyle { .. }
+        | EditOperation::SetColumnWidth { .. }
+        | EditOperation::SetRowHeight { .. }
+        | EditOperation::MoveBlock { .. } => OperationPrecondition::UnsupportedExternalRebase,
     }
 }
 
@@ -818,6 +825,31 @@ mod tests {
         assert_eq!(
             redone.inverse.execute(&redone.source).unwrap().source,
             source
+        );
+    }
+
+    #[test]
+    fn geometry_edits_are_exactly_undoable_but_conservatively_refuse_rebase() {
+        let source = sample();
+        let transaction = EditTransaction::single(EditOperation::SetColumnWidth {
+            sheet: sheet("data"),
+            columns: marksheet_model::ColumnRange::new(1, 2).unwrap(),
+            width: 18.0,
+        });
+        let mut session = EditSession::new(source.clone());
+        let intent = session.intent(transaction.clone()).unwrap();
+        let edited = session.execute(transaction).unwrap().source;
+        assert!(String::from_utf8_lossy(&edited).contains("@column A:B width=18"));
+        assert_eq!(session.undo().unwrap(), source);
+        assert_eq!(session.redo().unwrap(), edited);
+
+        let external = replace_bytes(&source, b"# stable comment", b"# external comment");
+        assert_eq!(
+            session
+                .rebase_and_execute(&external, intent)
+                .unwrap_err()
+                .kind,
+            HistoryErrorKind::Conflict
         );
     }
 
