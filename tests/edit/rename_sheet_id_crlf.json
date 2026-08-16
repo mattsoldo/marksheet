@@ -1,0 +1,11 @@
+{
+  "transaction": {"kind": "rename_sheet_id", "old": "data", "new": "values"},
+  "before": "rename_sheet_id_crlf.before.ms",
+  "after": "rename_sheet_id_crlf.after.ms",
+  "patches": [
+    {"start": 32, "end": 36, "replacement": "values"},
+    {"start": 48, "end": 52, "replacement": "values"},
+    {"start": 91, "end": 95, "replacement": "values"}
+  ],
+  "assertions": ["updates_name_definition", "updates_formula_reference", "atomic", "crlf_line_endings_preserved"]
+}
