@@ -196,6 +196,29 @@ mod tests {
     }
 
     #[test]
+    fn a_bare_carriage_return_inside_an_extension_payload_is_rejected() {
+        let source = b"#!marksheet 0.1\n@use vendor@1\n\n@sheet s \"Sheet\"\n@extension vendor@1 \"x\"\nline1\rline2\n@end\n";
+        let document = parse(source);
+        assert!(
+            document
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code.as_str() == "MS1004"),
+            "{:?}",
+            document
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(document.source_bytes(), source);
+        assert!(
+            canonicalize(&document).is_err(),
+            "an opaque payload's carriage return must not be normalized implicitly"
+        );
+    }
+
+    #[test]
     fn a_missing_version_header_is_reported_exactly_once() {
         let codes: Vec<_> = parse(b"")
             .diagnostics

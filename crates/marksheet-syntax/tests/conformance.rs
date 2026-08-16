@@ -188,6 +188,46 @@ fn all_valid_fixtures_are_lossless_and_canonicalizable() {
     }
 }
 
+/// Canonical output normalizes line endings, so any input position where a lone
+/// carriage return could slip through undiagnosed is a position where `fmt`
+/// would silently rewrite a byte. Injecting one at every offset of every valid
+/// fixture keeps that guarantee from regressing in a code path no fixture
+/// happens to cover, such as an opaque extension payload.
+#[test]
+fn a_lone_carriage_return_injected_anywhere_is_always_diagnosed() {
+    let mut fixtures = fixture_paths("tests/conformance/valid");
+    fixtures.extend(fixture_paths("tests/roundtrip"));
+    for path in fixtures {
+        let input = source(&path);
+        for offset in 0..=input.len() {
+            // Inserting before an LF spells a legal CRLF rather than a lone CR.
+            if input.get(offset) == Some(&b'\n') {
+                continue;
+            }
+            let mut mutated = input[..offset].to_vec();
+            mutated.push(b'\r');
+            mutated.extend_from_slice(&input[offset..]);
+            let document = parse(&mutated);
+            assert!(
+                document.has_errors(),
+                "{} with a lone carriage return injected at byte {offset} parsed without errors, so canonical output would rewrite it silently",
+                path.display()
+            );
+            assert_eq!(
+                lossless_bytes(&document),
+                mutated,
+                "{} must stay byte-identical after a diagnosed carriage return at byte {offset}",
+                path.display()
+            );
+            assert!(
+                canonicalize(&document).is_err(),
+                "{} must refuse canonicalization with a lone carriage return at byte {offset}",
+                path.display()
+            );
+        }
+    }
+}
+
 #[test]
 fn canonical_roundtrip_pair_matches_fixture() {
     let input_path = repository_root().join("tests/roundtrip/canonical_mixed_input.ms");

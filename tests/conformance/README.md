@@ -27,5 +27,8 @@ Diagnostic contract for this corpus:
 `valid/all_core.ms` is the broad core-language fixture. The focused fixtures
 cover CSV edge cases (including CRLF input) and sparse coordinates. The invalid
 files are deliberately small so a diagnostic regression is easy to localize.
-`invalid/bare_carriage_return.ms` and `invalid/quoted_bare_carriage_return.ms`
-intentionally contain lone `CR` bytes, so `.gitattributes` marks them binary.
+`invalid/bare_carriage_return.ms`, `invalid/quoted_bare_carriage_return.ms`, and
+`invalid/extension_payload_carriage_return.ms` intentionally contain lone `CR`
+bytes, so `.gitattributes` marks them binary. The last of those covers an opaque
+extension payload, where canonical output normalizes line endings and would
+otherwise rewrite the byte without diagnosing it.
