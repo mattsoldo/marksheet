@@ -216,9 +216,20 @@ pub struct EditResult {
     /// requested identifier was added.
     pub style_definitions: Vec<StyleDefinitionResolution>,
     pub patches: PatchSet,
-    /// Validated, source-bound undo transaction.
+    /// Validated, source-bound undo transaction. This is the single
+    /// representation of the edit's undo data; use
+    /// [`InverseTransaction::patch_set`] for the raw byte patches.
     pub inverse_transaction: InverseTransaction,
-    /// Exact inverse patches retained for fixture and API compatibility.
+    /// Exact inverse patches retained for API compatibility.
+    ///
+    /// This is a copy of `inverse_transaction.patch_set()`, cloned from that
+    /// single validated source when the result is built, so the two can never
+    /// describe different undo data. Applying it directly skips the workbook
+    /// and formula validation that [`InverseTransaction::execute`] performs.
+    #[deprecated(
+        since = "0.1.0",
+        note = "use inverse_transaction.patch_set() for the raw patches, or inverse_transaction.execute() for a validated undo"
+    )]
     pub inverse: PatchSet,
     /// Exact resulting source bytes, owned by the caller.
     ///
@@ -465,15 +476,20 @@ fn plan_and_apply(
         .apply_with_inverse(&source)
         .map_err(|error| patch_error(&error))?;
     let validated = ValidDocument::parse(&edited, EditErrorKind::InvalidResult, options)?;
-    let inverse_transaction = InverseTransaction::from_patch_set(inverse.clone());
+    let inverse_transaction = InverseTransaction::from_patch_set(inverse);
+    // The deprecated `inverse` field is derived from the validated transaction
+    // rather than captured separately, so the two cannot describe different
+    // undo data.
+    let inverse_compat = inverse_transaction.patch_set().clone();
     let after = SourceFingerprint::of(&edited);
 
+    #[allow(deprecated)]
     Ok(EditResult {
         operations: transaction.operations.clone(),
         style_definitions: defined_styles,
         patches: patch_set,
         inverse_transaction,
-        inverse,
+        inverse: inverse_compat,
         source: edited,
         workbook: validated.workbook,
         diagnostics: validated.diagnostics,
@@ -2324,6 +2340,10 @@ fn plan_rename_sheet_id(
     if old == new {
         return Ok(());
     }
+    // Unlike names, sheet identifiers are never bare in formula syntax --
+    // a reference always carries a `!` sigil (SPEC.md section 13.2) -- so a
+    // sheet id that resembles a cell address or a boolean literal is not
+    // ambiguous and does not need the `validate_name_identifier` rejection.
     if base.workbook.sheets.iter().any(|sheet| &sheet.id == new) {
         return Err(operation_error(
             index,
@@ -2377,13 +2397,7 @@ fn plan_rename_name_id(
     if old == new {
         return Ok(());
     }
-    if matches!(new.as_str(), "true" | "false") {
-        return Err(operation_error(
-            index,
-            EditErrorKind::InvalidIdentifier,
-            "boolean literals are reserved and cannot be workbook names",
-        ));
-    }
+    validate_name_identifier(new, index)?;
     let identifier_in_use = base.workbook.names.iter().any(|name| &name.id == new)
         || base
             .workbook
@@ -2426,6 +2440,48 @@ fn plan_rename_name_id(
         index,
         patches,
     )
+}
+
+/// Rejects new name identifiers the document grammar forbids (SPEC.md
+/// section 4.1): the boolean literals `true`/`false`, and any spelling that
+/// would parse as an A1 or R1C1 cell address. Bare names share formula
+/// expression syntax with cell references and boolean literals, so a
+/// colliding spelling would be ambiguous. Mirrors the checks `lower_name`
+/// applies when a document is parsed, so a rename cannot plan and patch its
+/// way past the same rule and fail only on final whole-result validation.
+fn validate_name_identifier(new: &NameId, index: usize) -> Result<(), EditError> {
+    let value = new.as_str();
+    if matches!(value, "true" | "false") {
+        return Err(operation_error(
+            index,
+            EditErrorKind::InvalidIdentifier,
+            "boolean literals are reserved and cannot be workbook names",
+        ));
+    }
+    if Coordinate::parse(value).is_ok() || looks_like_r1c1(value) {
+        return Err(operation_error(
+            index,
+            EditErrorKind::InvalidIdentifier,
+            "a name cannot resemble a cell address",
+        ));
+    }
+    Ok(())
+}
+
+/// Whether `value` has the `R<digits>C<digits>` shape of an R1C1 cell
+/// address, compared case-insensitively as SPEC.md section 4.1 requires.
+fn looks_like_r1c1(value: &str) -> bool {
+    let upper = value.to_ascii_uppercase();
+    let Some(rest) = upper.strip_prefix('R') else {
+        return false;
+    };
+    let Some((row, column)) = rest.split_once('C') else {
+        return false;
+    };
+    !row.is_empty()
+        && !column.is_empty()
+        && row.bytes().all(|byte| byte.is_ascii_digit())
+        && column.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn plan_reference_rewrites(
@@ -2955,7 +3011,14 @@ mod tests {
     }
 
     fn assert_undo(result: &EditResult, original: &[u8]) {
-        assert_eq!(result.inverse.apply(&result.source).unwrap(), original);
+        assert_eq!(
+            result
+                .inverse_transaction
+                .patch_set()
+                .apply(&result.source)
+                .unwrap(),
+            original
+        );
         assert_eq!(
             result
                 .inverse_transaction
@@ -2964,6 +3027,26 @@ mod tests {
                 .source,
             original
         );
+    }
+
+    /// The deprecated `EditResult::inverse` field still compiles and carries
+    /// exactly the data behind `inverse_transaction.patch_set()`, so callers
+    /// written against the pre-deprecation API keep working.
+    #[test]
+    #[allow(deprecated)]
+    fn deprecated_inverse_field_mirrors_the_validated_inverse_transaction() {
+        let original = include_bytes!("../../../tests/edit/scalar_csv_quote.before.ms");
+        let result = execute_one(
+            original,
+            EditOperation::SetCell {
+                sheet: sheet("data"),
+                coordinate: coordinate("B2"),
+                value: Value::Text("two, too".to_owned()),
+            },
+        );
+        assert!(result.changed());
+        assert_eq!(&result.inverse, result.inverse_transaction.patch_set());
+        assert_eq!(result.inverse.apply(&result.source).unwrap(), original);
     }
 
     #[test]
@@ -3583,6 +3666,76 @@ mod tests {
         assert_eq!(result.source, after);
         assert_eq!(result.patches.patches().len(), 2);
         assert_undo(&result, before);
+    }
+
+    #[test]
+    fn name_rename_rejects_identifiers_that_resemble_a_cell_address() {
+        let before = include_bytes!("../../../tests/edit/rename_name_id.before.ms");
+        for invalid in ["r2", "r1c1"] {
+            let error = EditTransaction::single(EditOperation::RenameNameId {
+                old: name("rate"),
+                new: NameId::parse(invalid).unwrap(),
+            })
+            .execute(before)
+            .unwrap_err();
+            assert_eq!(
+                error.kind,
+                EditErrorKind::InvalidIdentifier,
+                "{invalid} should be rejected"
+            );
+            assert_eq!(error.operation_index, Some(0));
+        }
+    }
+
+    #[test]
+    fn name_rename_rejection_is_atomic_across_operations() {
+        // A leading operation that would itself produce a patch must not
+        // leave any trace once a later operation in the same transaction is
+        // rejected for an invalid identifier: the whole transaction fails
+        // and no patches are ever exposed to the caller.
+        let before = include_bytes!("../../../tests/edit/rename_name_id.before.ms");
+        let leading_operation = EditOperation::RenameSheetLabel {
+            sheet: sheet("data"),
+            label: "Renamed".to_owned(),
+        };
+
+        // Confirm the leading operation is not itself a no-op: run alone, it
+        // does produce a patch.
+        let leading_alone = execute_one(before, leading_operation.clone());
+        assert!(leading_alone.changed());
+
+        let error = EditTransaction {
+            operations: vec![
+                leading_operation,
+                EditOperation::RenameNameId {
+                    old: name("rate"),
+                    new: NameId::parse("r2").unwrap(),
+                },
+            ],
+            expectations: EditExpectations::default(),
+        }
+        .execute(before)
+        .unwrap_err();
+        assert_eq!(error.kind, EditErrorKind::InvalidIdentifier);
+        assert_eq!(error.operation_index, Some(1));
+    }
+
+    #[test]
+    fn sheet_rename_permits_identifiers_that_would_be_invalid_for_names() {
+        // Sheet references always carry a `!` sigil (SPEC.md section 13.2),
+        // so unlike names, a sheet id resembling a cell address or a boolean
+        // literal is unambiguous and must not be rejected.
+        let before = include_bytes!("../../../tests/edit/rename_sheet_id.before.ms");
+        for candidate in ["r2", "true", "false"] {
+            let result = execute_one(
+                before,
+                EditOperation::RenameSheetId {
+                    old: sheet("data"),
+                    new: SheetId::parse(candidate).unwrap(),
+                },
+            );
+            assert!(result.changed(), "{candidate} should be accepted");
+        }
     }
 
     #[test]

@@ -464,7 +464,7 @@ impl EditSession {
         // The inverse patch set is bound to the post-edit bytes, so adopting
         // its snapshot leaves one copy of this document version shared by the
         // session, this entry, and the next edit's forward patches.
-        self.source = Arc::clone(result.inverse.shared_base());
+        self.source = Arc::clone(result.inverse_transaction.patch_set().shared_base());
         self.undo.push(HistoryEntry {
             transaction: intent.transaction,
             preconditions: intent.preconditions,
@@ -656,7 +656,7 @@ fn capture_precondition(workbook: &Workbook, operation: &EditOperation) -> Opera
                 .map(|candidate| SheetPrecondition {
                     label: candidate.label.clone(),
                 }),
-            new_available: !workbook.sheets.iter().any(|candidate| candidate.id == *new),
+            new_available: sheet_identifier_available(workbook, new),
         },
         EditOperation::RenameNameId { old, new } => OperationPrecondition::RenameNameId {
             old: old.clone(),
@@ -722,8 +722,7 @@ fn verify_preconditions(
                         .map(|candidate| SheetPrecondition {
                             label: candidate.label.clone(),
                         })
-                    && *new_available
-                        != workbook.sheets.iter().any(|candidate| candidate.id == *new)
+                    && *new_available == sheet_identifier_available(workbook, new)
             }
             OperationPrecondition::RenameNameId {
                 old,
@@ -804,6 +803,10 @@ fn table_precondition(workbook: &Workbook, table: &TableId) -> Option<TablePreco
             }),
             _ => None,
         })
+}
+
+fn sheet_identifier_available(workbook: &Workbook, new: &SheetId) -> bool {
+    !workbook.sheets.iter().any(|candidate| candidate.id == *new)
 }
 
 fn name_identifier_available(workbook: &Workbook, new: &NameId) -> bool {
