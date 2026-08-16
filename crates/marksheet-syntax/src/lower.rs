@@ -217,7 +217,15 @@ impl Lowerer<'_> {
         let Some(tokens) = self.exact_tokens(csv.directive.arguments, expected) else {
             return;
         };
-        if tokens.last().is_none_or(|token| token.text != "csv") {
+        // The grammar spells the encoding as a bare `csv` literal, so a JSON
+        // string that decodes to `csv` must not be accepted here.
+        let encoding = &tokens[expected - 1];
+        if encoding.quoted {
+            let span = encoding.span;
+            self.invalid(span, "block encoding must not be a JSON string");
+            return;
+        }
+        if encoding.text != "csv" {
             self.invalid(
                 csv.directive.arguments,
                 "only the csv block encoding is supported",
@@ -892,6 +900,14 @@ impl Lowerer<'_> {
                 .push(error("MS1202", "invalid column range", tokens[0].span));
             return;
         };
+        if tokens[1].quoted {
+            self.diagnostics.push(error(
+                "MS2201",
+                "column width must not be a JSON string",
+                tokens[1].span,
+            ));
+            return;
+        }
         let Some(width) = tokens[1]
             .text
             .strip_prefix("width=")
@@ -932,6 +948,14 @@ impl Lowerer<'_> {
                 .push(error("MS1202", "invalid row range", tokens[0].span));
             return;
         };
+        if tokens[1].quoted {
+            self.diagnostics.push(error(
+                "MS2201",
+                "row height must not be a JSON string",
+                tokens[1].span,
+            ));
+            return;
+        }
         let Some(height) = tokens[1]
             .text
             .strip_prefix("height=")
