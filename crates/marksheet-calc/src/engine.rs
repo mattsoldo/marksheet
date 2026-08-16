@@ -239,12 +239,70 @@ pub struct PreparedCalculation {
     prepared: PreparedWorkbook,
     program: FormulaProgram,
     graph: DependencyGraph,
+    plan: EvaluationPlan,
     values: BTreeMap<CellKey, CalcValue>,
     overrides: BTreeMap<CellKey, CalcValue>,
     dirty: BTreeSet<CellKey>,
     diagnostics: Vec<Diagnostic>,
     limits: CalcLimits,
     revision: u64,
+}
+
+/// A whole-graph evaluation order retained for one graph revision.
+///
+/// Ordering the graph costs a strongly-connected-component pass plus a
+/// topological pass over every node, so the result is cached until
+/// [`DependencyGraph::revision`] changes. `step_for_cell` then lets one
+/// calculation visit only the steps its dirty set reaches instead of scanning
+/// the whole workbook order.
+#[derive(Debug, Default)]
+struct EvaluationPlan {
+    order: Vec<EvaluationStep>,
+    step_for_cell: BTreeMap<CellKey, usize>,
+    revision: Option<u64>,
+    /// Orderings computed so far, which proves cache reuse in tests.
+    #[cfg(test)]
+    computations: usize,
+}
+
+impl EvaluationPlan {
+    /// Rebuilds the plan only when `graph` changed since it was last built.
+    fn refresh(&mut self, graph: &DependencyGraph) {
+        if self.revision == Some(graph.revision()) {
+            return;
+        }
+        self.order = graph.evaluation_order();
+        self.step_for_cell.clear();
+        for (index, step) in self.order.iter().enumerate() {
+            match step {
+                EvaluationStep::Cell(cell) => {
+                    self.step_for_cell.insert(cell.clone(), index);
+                }
+                EvaluationStep::Cycle(component) => {
+                    for cell in component {
+                        self.step_for_cell.insert(cell.clone(), index);
+                    }
+                }
+            }
+        }
+        self.revision = Some(graph.revision());
+        #[cfg(test)]
+        {
+            self.computations += 1;
+        }
+    }
+
+    /// Returns exactly the steps `dirty` reaches, in evaluation order.
+    fn dirty_steps(&self, dirty: &BTreeSet<CellKey>) -> Vec<&EvaluationStep> {
+        let touched: BTreeSet<usize> = dirty
+            .iter()
+            .filter_map(|cell| self.step_for_cell.get(cell).copied())
+            .collect();
+        touched
+            .into_iter()
+            .map(|index| &self.order[index])
+            .collect()
+    }
 }
 
 impl PreparedCalculation {
@@ -331,6 +389,7 @@ impl CalcEngine for ReferenceCalcEngine {
             prepared,
             program,
             graph,
+            plan: EvaluationPlan::default(),
             values,
             overrides: BTreeMap::new(),
             dirty,
@@ -380,35 +439,40 @@ impl CalcEngine for ReferenceCalcEngine {
             return Ok(DirtySet::default());
         }
 
-        // Validate on a graph clone so even registration of a previously
-        // absent input is committed atomically with the override values.
-        let mut candidate_graph = calculation.graph.clone();
-        for cell in effective.keys() {
-            candidate_graph.ensure_cell(cell.clone());
-        }
-        if candidate_graph.node_count() > calculation.limits.work.max_graph_nodes {
+        // Registration of a previously absent input is described rather than
+        // performed so that it commits atomically with the override values.
+        // An absent cell has no dependents, so registering it cannot change
+        // any dirty closure, and both limits are therefore decidable against
+        // the current graph.
+        let registered = effective
+            .keys()
+            .filter(|cell| !calculation.graph.contains_cell(cell))
+            .count();
+        let graph_nodes = calculation.graph.node_count().saturating_add(registered);
+        if graph_nodes > calculation.limits.work.max_graph_nodes {
             return Err(ChangeError::GraphNodeLimitExceeded {
-                actual: candidate_graph.node_count(),
+                actual: graph_nodes,
                 limit: calculation.limits.work.max_graph_nodes,
             });
         }
         let changed_roots: BTreeSet<_> = effective.keys().cloned().collect();
-        let changed_dirty = candidate_graph.dirty_closure(changed_roots);
-        let mut pending_dirty = calculation.dirty.clone();
-        pending_dirty.extend(changed_dirty.iter().cloned());
-        if pending_dirty.len() > calculation.limits.work.max_dirty_cells {
+        let changed_dirty = calculation.graph.dirty_closure(changed_roots);
+        let pending_dirty = calculation.dirty.union(&changed_dirty).count();
+        if pending_dirty > calculation.limits.work.max_dirty_cells {
             return Err(ChangeError::DirtyCellLimitExceeded {
-                actual: pending_dirty.len(),
+                actual: pending_dirty,
                 limit: calculation.limits.work.max_dirty_cells,
             });
         }
 
-        calculation.graph = candidate_graph;
+        for cell in effective.keys() {
+            calculation.graph.ensure_cell(cell.clone());
+        }
         for (cell, value) in effective {
             calculation.overrides.insert(cell.clone(), value.clone());
             calculation.values.insert(cell, value);
         }
-        calculation.dirty = pending_dirty;
+        calculation.dirty.extend(changed_dirty.iter().cloned());
         calculation.revision = calculation.revision.wrapping_add(1);
         Ok(DirtySet {
             cells: changed_dirty,
@@ -429,6 +493,7 @@ impl CalcEngine for ReferenceCalcEngine {
         let scope = request_dependency_scope(&calculation.graph, request);
         retain_relevant_calculation_diagnostics(&mut diagnostics, &scope);
         let dirty = calculation.dirty.intersection(&scope).cloned().collect();
+        calculation.plan.refresh(&calculation.graph);
         let attempt = match evaluate_pending(calculation, &dirty) {
             Ok(attempt) => attempt,
             Err(abort) => {
@@ -443,7 +508,7 @@ impl CalcEngine for ReferenceCalcEngine {
             }
         };
 
-        calculation.values = attempt.values;
+        calculation.values.extend(attempt.updates);
         calculation.dirty.retain(|cell| !dirty.contains(cell));
         let cells = selected_cells(calculation, request);
         CalculationResult {
@@ -495,7 +560,8 @@ fn retain_relevant_calculation_diagnostics(
 }
 
 struct EvaluationAttempt {
-    values: BTreeMap<CellKey, CalcValue>,
+    /// Only the cells this attempt computed, committed as one delta.
+    updates: BTreeMap<CellKey, CalcValue>,
     evaluated_cells: BTreeSet<CellKey>,
     evaluation: EvaluationStats,
 }
@@ -537,7 +603,13 @@ fn evaluate_pending(
     calculation: &PreparedCalculation,
     dirty: &BTreeSet<CellKey>,
 ) -> Result<EvaluationAttempt, Box<EvaluationAbort>> {
-    let planned = planned_evaluated_cells(&calculation.graph, &calculation.program, dirty);
+    debug_assert_eq!(
+        calculation.plan.revision,
+        Some(calculation.graph.revision()),
+        "the caller refreshes the evaluation plan before evaluating"
+    );
+    let steps = calculation.plan.dirty_steps(dirty);
+    let planned = planned_evaluated_cells(&steps, &calculation.program, dirty);
     if planned.len() > calculation.limits.work.max_evaluated_cells {
         return Err(Box::new(EvaluationAbort {
             diagnostic: limit_diagnostic(format!(
@@ -550,25 +622,26 @@ fn evaluate_pending(
         }));
     }
 
-    let mut values = calculation.values.clone();
+    let mut updates = BTreeMap::new();
     let mut evaluated_cells = BTreeSet::new();
     let mut evaluation = EvaluationStats::default();
-    for step in calculation.graph.evaluation_order() {
+    for step in steps {
         match step {
             EvaluationStep::Cycle(component) if !component.is_disjoint(dirty) => {
                 for cell in component {
-                    values.insert(cell.clone(), CalcValue::Error(CellError::Circular));
-                    evaluated_cells.insert(cell);
+                    updates.insert(cell.clone(), CalcValue::Error(CellError::Circular));
+                    evaluated_cells.insert(cell.clone());
                 }
             }
-            EvaluationStep::Cell(cell) if dirty.contains(&cell) => {
-                let Some(formula) = calculation.program.formula(&cell) else {
+            EvaluationStep::Cell(cell) if dirty.contains(cell) => {
+                let Some(formula) = calculation.program.formula(cell) else {
                     continue;
                 };
                 let context = ReferenceContext {
                     formula,
                     prepared: &calculation.prepared,
-                    values: &values,
+                    values: &calculation.values,
+                    updates: &updates,
                     overrides: &calculation.overrides,
                 };
                 let outcome = evaluate(&formula.formula, &context, &calculation.limits.evaluation)
@@ -582,14 +655,14 @@ fn evaluate_pending(
                         })
                     })?;
                 add_evaluation_stats(&mut evaluation, outcome.stats);
-                values.insert(cell.clone(), outcome.value);
-                evaluated_cells.insert(cell);
+                updates.insert(cell.clone(), outcome.value);
+                evaluated_cells.insert(cell.clone());
             }
             EvaluationStep::Cell(_) | EvaluationStep::Cycle(_) => {}
         }
     }
     Ok(EvaluationAttempt {
-        values,
+        updates,
         evaluated_cells,
         evaluation,
     })
@@ -651,20 +724,20 @@ fn authored_scalar_values(prepared: &PreparedWorkbook) -> BTreeMap<CellKey, Calc
 }
 
 fn planned_evaluated_cells(
-    graph: &DependencyGraph,
+    steps: &[&EvaluationStep],
     program: &FormulaProgram,
     dirty: &BTreeSet<CellKey>,
 ) -> BTreeSet<CellKey> {
     let mut planned = BTreeSet::new();
-    for step in graph.evaluation_order() {
+    for step in steps {
         match step {
             EvaluationStep::Cycle(component) if !component.is_disjoint(dirty) => {
-                planned.extend(component);
+                planned.extend(component.iter().cloned());
             }
             EvaluationStep::Cell(cell)
-                if dirty.contains(&cell) && program.formulas.contains_key(&cell) =>
+                if dirty.contains(cell) && program.formulas.contains_key(cell) =>
             {
-                planned.insert(cell);
+                planned.insert(cell.clone());
             }
             EvaluationStep::Cell(_) | EvaluationStep::Cycle(_) => {}
         }
@@ -676,6 +749,8 @@ struct ReferenceContext<'a> {
     formula: &'a CompiledFormula,
     prepared: &'a PreparedWorkbook,
     values: &'a BTreeMap<CellKey, CalcValue>,
+    /// Uncommitted results of this attempt, which shadow [`Self::values`].
+    updates: &'a BTreeMap<CellKey, CalcValue>,
     overrides: &'a BTreeMap<CellKey, CalcValue>,
 }
 
@@ -726,7 +801,12 @@ impl EvaluationContext for ReferenceContext<'_> {
 
 impl ReferenceContext<'_> {
     fn scalar(&self, cell: &CellKey) -> CalcValue {
-        if let Some(value) = self.overrides.get(cell).or_else(|| self.values.get(cell)) {
+        if let Some(value) = self
+            .overrides
+            .get(cell)
+            .or_else(|| self.updates.get(cell))
+            .or_else(|| self.values.get(cell))
+        {
             return value.clone();
         }
         self.prepared
@@ -1617,6 +1697,60 @@ mod tests {
         assert!(dirty.is_empty());
         assert_eq!(calculation.revision(), 0);
         assert!(calculation.pending_dirty().is_empty());
+    }
+
+    #[test]
+    fn evaluation_order_is_computed_once_per_graph_revision() {
+        let workbook = workbook(vec![sheet(
+            "main",
+            vec![block(
+                "A1",
+                vec![vec![Value::Number(1.0), formula("=A1+1"), formula("=B1+1")]],
+            )],
+        )]);
+        let mut calculation = prepared(&workbook);
+
+        calculate(&mut calculation, "main", "A1:C1");
+        assert_eq!(
+            calculation.plan.computations, 1,
+            "one calculation orders the graph at most once"
+        );
+        calculate(&mut calculation, "main", "A1:C1");
+        assert_eq!(
+            calculation.plan.computations, 1,
+            "an unchanged graph revision reuses the cached order"
+        );
+
+        ReferenceCalcEngine
+            .apply_changes(
+                &mut calculation,
+                ChangeSet::new().with(key("main", "A1"), CalcValue::Number(2.0)),
+            )
+            .unwrap();
+        assert_eq!(
+            values(&calculate(&mut calculation, "main", "A1:C1")),
+            vec![
+                CalcValue::Number(2.0),
+                CalcValue::Number(3.0),
+                CalcValue::Number(4.0),
+            ]
+        );
+        assert_eq!(
+            calculation.plan.computations, 1,
+            "overriding a known literal leaves the graph, and its order, intact"
+        );
+
+        ReferenceCalcEngine
+            .apply_changes(
+                &mut calculation,
+                ChangeSet::new().with(key("main", "Z9"), CalcValue::Number(5.0)),
+            )
+            .unwrap();
+        calculate(&mut calculation, "main", "A1:C1");
+        assert_eq!(
+            calculation.plan.computations, 2,
+            "registering a previously absent cell invalidates the cached order"
+        );
     }
 
     #[test]
