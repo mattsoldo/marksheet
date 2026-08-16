@@ -388,6 +388,14 @@ impl Lowerer<'_> {
         let Some((id_token, property_span)) = self.first_token_and_rest(directive.arguments) else {
             return;
         };
+        if id_token.quoted {
+            self.diagnostics.push(error(
+                "MS1201",
+                "style identifier must not be a JSON string",
+                id_token.span,
+            ));
+            return;
+        }
         let Ok(id) = StyleId::parse(&id_token.text) else {
             self.diagnostics
                 .push(error("MS1201", "invalid style identifier", id_token.span));
