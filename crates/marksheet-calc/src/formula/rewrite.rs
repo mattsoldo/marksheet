@@ -14,8 +14,8 @@ use marksheet_model::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    A1Reference, AdjustmentError, CopyOffset, Expr, ExprKind, FormulaError, ParseLimits, Reference,
-    StructuredReference, Token, TokenKind, lex, parse,
+    A1Reference, AdjustmentError, CopyOffset, Expr, ExprKind, FormulaError, FormulaErrorKind,
+    ParseLimits, Reference, StructuredReference, Token, TokenKind, lex, parse,
 };
 
 /// A source-aware transformation that can be applied to a formula.
@@ -535,6 +535,31 @@ fn structured_table(reference: &StructuredReference) -> Option<&TableId> {
     }
 }
 
+/// Reports a lexer/parser disagreement about how many cell tokens a reference
+/// span contains.
+///
+/// This is an internal invariant breach, not user-visible input: it should be
+/// unreachable for source that parsed successfully. It is reported through the
+/// existing [`FormulaRewriteError::InvalidSource`] shape — whose contract is
+/// precisely "the original formula has no trustworthy reference token stream
+/// to rewrite" — rather than through a new variant, so the exhaustive public
+/// enum stays source-compatible for downstream matchers. The [`FormulaError`]
+/// carries the offending span and both counts for diagnosis.
+fn cell_token_mismatch(
+    reference_span: ByteSpan,
+    expected: usize,
+    actual: usize,
+) -> FormulaRewriteError {
+    FormulaRewriteError::InvalidSource(FormulaError::new(
+        FormulaErrorKind::InvalidReference,
+        reference_span,
+        format!(
+            "reference has {expected} parsed A1 endpoint(s) but {actual} lexed cell token(s); \
+             refusing to rewrite only some of them"
+        ),
+    ))
+}
+
 fn rewrite_a1s(
     source: &str,
     reference_span: ByteSpan,
@@ -550,7 +575,16 @@ fn rewrite_a1s(
             _ => None,
         })
         .collect::<Vec<_>>();
-    debug_assert_eq!(cells.len(), addresses.len());
+    if cells.len() != addresses.len() {
+        // The parser and lexer must agree on how many cell tokens a
+        // reference span contains. A release build must not fall through to
+        // `zip`, which would silently rewrite only a prefix of the endpoints.
+        return Err(cell_token_mismatch(
+            reference_span,
+            addresses.len(),
+            cells.len(),
+        ));
+    }
     let adjusted = addresses
         .iter()
         .map(|address| transform_a1(address, reference_sheet, transform))
@@ -1094,5 +1128,61 @@ mod tests {
             error,
             FormulaRewriteError::InvalidMoveGeometry { .. }
         ));
+    }
+
+    /// A genuinely parsed formula can never produce a lexer/parser cell-token
+    /// disagreement, so this internal invariant guard is exercised directly
+    /// rather than through `rewrite_formula_text`.
+    #[test]
+    fn rewrite_a1s_rejects_a_lexer_parser_token_count_mismatch() {
+        let source = "=A1";
+        let tokens = lex(source).expect("lex");
+        let reference_span = ByteSpan { start: 1, end: 3 };
+        let addresses = [
+            A1Reference {
+                coordinate: Coordinate::parse("A1").expect("A1"),
+                column_absolute: false,
+                row_absolute: false,
+            },
+            A1Reference {
+                coordinate: Coordinate::parse("B2").expect("B2"),
+                column_absolute: false,
+                row_absolute: false,
+            },
+        ];
+        let transform = A1Transform::Copy(CopyOffset::between(
+            Coordinate::parse("A1").expect("A1"),
+            Coordinate::parse("A1").expect("A1"),
+        ));
+        let mut patches = PatchSet::default();
+
+        let error = rewrite_a1s(
+            source,
+            reference_span,
+            &addresses,
+            None,
+            &transform,
+            &tokens,
+            &mut patches,
+        )
+        .expect_err("two addresses claimed against a span with only one lexed cell token");
+
+        // A hard error, reported through the existing public shape: the
+        // reference token stream is not trustworthy, so nothing is rewritten.
+        let FormulaRewriteError::InvalidSource(inner) = &error else {
+            panic!("expected an InvalidSource rejection, got {error:?}");
+        };
+        assert_eq!(inner.kind, FormulaErrorKind::InvalidReference);
+        assert_eq!(inner.span, reference_span);
+        assert!(
+            inner.message.contains("2 parsed A1 endpoint(s)")
+                && inner.message.contains("1 lexed cell token(s)"),
+            "the message must name both counts, got {:?}",
+            inner.message
+        );
+        assert!(
+            patches.0.is_empty(),
+            "a rejected rewrite must not leave a partial patch behind"
+        );
     }
 }
