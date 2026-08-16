@@ -11,7 +11,7 @@ Diagnostic contract for this corpus:
 - `MS1001`: version header/version error
 - `MS1101`: malformed, unknown, misplaced directive or property
 - `MS1102`: malformed or unterminated CSV
-- `MS1201`: invalid identifier
+- `MS1201`: invalid or reserved identifier
 - `MS1202`: invalid coordinate or range
 - `MS1204`: non-rectangular CSV block
 - `MS1301`: duplicate or conflicting declaration

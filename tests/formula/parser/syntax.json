@@ -1,0 +1,51 @@
+{
+  "schema": "marksheet.formula-conformance@1",
+  "profile": "portable-a1@1",
+  "cases": [
+    {
+      "id": "parser.number.exponent",
+      "formula": "=1.25e-2",
+      "expect": { "ast": "(number 0.0125)" }
+    },
+    {
+      "id": "parser.text.doubled-quote",
+      "formula": "=\"a\"\"b\"",
+      "expect": { "ast": "(text \"a\\\"b\")" }
+    },
+    {
+      "id": "parser.boolean.case-insensitive",
+      "formula": "=tRuE",
+      "expect": { "ast": "(boolean true)" }
+    },
+    {
+      "id": "parser.boolean.false-is-literal",
+      "formula": "=false",
+      "expect": { "ast": "(boolean false)" }
+    },
+    {
+      "id": "parser.error.literal",
+      "formula": "=#N/A",
+      "expect": { "ast": "(error \"#N/A\")" }
+    },
+    {
+      "id": "parser.call.normalizes-name",
+      "formula": "=sum(1, 2)",
+      "expect": { "ast": "(call SUM (number 1) (number 2))" }
+    },
+    {
+      "id": "parser.ascii-whitespace",
+      "formula": "=\tSUM ( 1,\n2 )\r",
+      "expect": { "ast": "(call SUM (number 1) (number 2))" }
+    },
+    {
+      "id": "parser.name.bare",
+      "formula": "=tax_rate",
+      "expect": { "ast": "(name tax_rate)" }
+    },
+    {
+      "id": "parser.call.zero-arguments-is-syntax",
+      "formula": "=F()",
+      "expect": { "ast": "(call F)" }
+    }
+  ]
+}

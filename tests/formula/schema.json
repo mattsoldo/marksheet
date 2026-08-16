@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://marksheet.dev/schema/formula-conformance-1.json",
+  "title": "Marksheet formula conformance corpus",
+  "oneOf": [
+    { "$ref": "#/$defs/formulaDocument" },
+    { "$ref": "#/$defs/scenarioDocument" }
+  ],
+  "$defs": {
+    "typedValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": { "kind": { "const": "blank" } },
+          "required": ["kind"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "enum": ["text", "date", "datetime", "error"] },
+            "value": { "type": "string" }
+          },
+          "required": ["kind", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "number" },
+            "value": { "type": "number" }
+          },
+          "required": ["kind", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "boolean" },
+            "value": { "type": "boolean" }
+          },
+          "required": ["kind", "value"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "formulaDocument": {
+      "type": "object",
+      "properties": {
+        "schema": { "const": "marksheet.formula-conformance@1" },
+        "profile": { "const": "portable-a1@1" },
+        "cases": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/formulaCase" }
+        }
+      },
+      "required": ["schema", "profile", "cases"],
+      "additionalProperties": false
+    },
+    "formulaCase": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]*$" },
+        "description": { "type": "string" },
+        "formula": { "type": "string", "pattern": "^=" },
+        "sheet": { "type": "string" },
+        "cell": { "type": "string" },
+        "cells": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/typedValue" }
+        },
+        "expect": {
+          "type": "object",
+          "properties": {
+            "ast": { "type": "string" },
+            "diagnostic": { "const": "MS2202" },
+            "value": { "$ref": "#/$defs/typedValue" },
+            "canonical": { "type": "string", "pattern": "^=" }
+          },
+          "minProperties": 1,
+          "maxProperties": 1,
+          "additionalProperties": false
+        }
+      },
+      "required": ["id", "formula", "expect"],
+      "additionalProperties": false
+    },
+    "scenarioDocument": {
+      "type": "object",
+      "properties": {
+        "schema": { "const": "marksheet.calculation-scenario@1" },
+        "profile": { "const": "portable-a1@1" },
+        "source": { "type": "string", "pattern": "\\.ms$" },
+        "expect": {
+          "type": "object",
+          "properties": {
+            "cells": {
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": { "$ref": "#/$defs/typedValue" }
+            },
+            "diagnostics": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "code": { "type": "string", "pattern": "^MS[0-9]{4}$" },
+                  "cells": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "minItems": 1
+                  }
+                },
+                "required": ["code", "cells"],
+                "additionalProperties": false
+              }
+            },
+            "source_invariants": {
+              "type": "object",
+              "properties": { "virtual_formulas_only": { "type": "boolean" } },
+              "required": ["virtual_formulas_only"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["cells", "diagnostics"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["schema", "profile", "source", "expect"],
+      "additionalProperties": false
+    }
+  }
+}

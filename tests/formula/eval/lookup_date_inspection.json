@@ -1,0 +1,28 @@
+{
+  "schema": "marksheet.formula-conformance@1",
+  "profile": "portable-a1@1",
+  "cases": [
+    { "id": "eval.function.index.column-vector", "cells": { "A1": { "kind": "text", "value": "a" }, "A2": { "kind": "text", "value": "b" } }, "formula": "=INDEX(A1:A2,2)", "expect": { "value": { "kind": "text", "value": "b" } } },
+    { "id": "eval.function.index.one-cell-range", "cells": { "A1": { "kind": "number", "value": 7 } }, "formula": "=INDEX(A1:A1,1)", "expect": { "value": { "kind": "number", "value": 7 } } },
+    { "id": "eval.function.index.row-vector", "cells": { "A1": { "kind": "number", "value": 1 }, "B1": { "kind": "number", "value": 2 } }, "formula": "=INDEX(A1:B1,2)", "expect": { "value": { "kind": "number", "value": 2 } } },
+    { "id": "eval.function.index.matrix", "cells": { "A1": { "kind": "number", "value": 1 }, "B1": { "kind": "number", "value": 2 }, "A2": { "kind": "number", "value": 3 }, "B2": { "kind": "number", "value": 4 } }, "formula": "=INDEX(A1:B2,2,2)", "expect": { "value": { "kind": "number", "value": 4 } } },
+    { "id": "eval.function.index.scalar-is-not-array", "cells": { "A1": { "kind": "number", "value": 1 } }, "formula": "=INDEX(A1,2)", "expect": { "value": { "kind": "error", "value": "#VALUE!" } } },
+    { "id": "eval.function.index.bad-shape", "cells": { "A1": { "kind": "number", "value": 1 }, "B2": { "kind": "number", "value": 2 } }, "formula": "=INDEX(A1:B2,2)", "expect": { "value": { "kind": "error", "value": "#VALUE!" } } },
+    { "id": "eval.function.match.first-exact", "cells": { "A1": { "kind": "text", "value": "x" }, "A2": { "kind": "text", "value": "y" }, "A3": { "kind": "text", "value": "x" } }, "formula": "=MATCH(\"x\",A1:A3,0)", "expect": { "value": { "kind": "number", "value": 1 } } },
+    { "id": "eval.function.match.scalar-is-not-array", "cells": { "A1": { "kind": "number", "value": 1 } }, "formula": "=MATCH(2,A1,0)", "expect": { "value": { "kind": "error", "value": "#VALUE!" } } },
+    { "id": "eval.function.match.one-cell-range-not-found", "cells": { "A1": { "kind": "number", "value": 1 } }, "formula": "=MATCH(2,A1:A1,0)", "expect": { "value": { "kind": "error", "value": "#N/A" } } },
+    { "id": "eval.function.match.unsupported-mode", "cells": { "A1": { "kind": "number", "value": 1 } }, "formula": "=MATCH(1,A1:A1,1)", "expect": { "value": { "kind": "error", "value": "#VALUE!" } } },
+    { "id": "eval.function.date.valid", "formula": "=DATE(2024,2,29)", "expect": { "value": { "kind": "date", "value": "2024-02-29" } } },
+    { "id": "eval.function.date.invalid", "formula": "=DATE(2023,2,29)", "expect": { "value": { "kind": "error", "value": "#NUM!" } } },
+    { "id": "eval.function.year.date", "cells": { "A1": { "kind": "date", "value": "2026-08-16" } }, "formula": "=YEAR(A1)", "expect": { "value": { "kind": "number", "value": 2026 } } },
+    { "id": "eval.function.month.datetime-offset", "cells": { "A1": { "kind": "datetime", "value": "2026-01-01T00:30:00+02:00" } }, "formula": "=MONTH(A1)", "expect": { "value": { "kind": "number", "value": 1 } } },
+    { "id": "eval.function.day.datetime-offset", "cells": { "A1": { "kind": "datetime", "value": "2026-01-01T00:30:00+02:00" } }, "formula": "=DAY(A1)", "expect": { "value": { "kind": "number", "value": 1 } } },
+    { "id": "eval.function.isblank.blank", "cells": { "A1": { "kind": "blank" } }, "formula": "=ISBLANK(A1)", "expect": { "value": { "kind": "boolean", "value": true } } },
+    { "id": "eval.function.isblank.empty-text", "cells": { "A1": { "kind": "text", "value": "" } }, "formula": "=ISBLANK(A1)", "expect": { "value": { "kind": "boolean", "value": false } } },
+    { "id": "eval.function.isnumber", "formula": "=ISNUMBER(1)", "expect": { "value": { "kind": "boolean", "value": true } } },
+    { "id": "eval.function.istext", "formula": "=ISTEXT(\"1\")", "expect": { "value": { "kind": "boolean", "value": true } } },
+    { "id": "eval.function.iserror.inspects", "formula": "=ISERROR(#N/A)", "expect": { "value": { "kind": "boolean", "value": true } } },
+    { "id": "eval.function.isnumber.error-is-false", "formula": "=ISNUMBER(#N/A)", "expect": { "value": { "kind": "boolean", "value": false } } },
+    { "id": "eval.function.inspection.range-error", "cells": { "A1": { "kind": "number", "value": 1 }, "A2": { "kind": "number", "value": 2 } }, "formula": "=ISNUMBER(A1:A2)", "expect": { "value": { "kind": "error", "value": "#VALUE!" } } }
+  ]
+}

@@ -80,21 +80,23 @@ Marksheet is at **Draft 0.1**. The format is being designed in public and is not
 yet stable. Files written during the `0.x` period may require migration as the
 core is refined. Stability rules become strict at `1.0`.
 
-The reference implementation is currently being built through Milestone 1:
-parsing, validation, lossless source retention, and explicit canonical
-formatting. Formula parsing, reference validation, and calculation are
-Milestone 2 work; Milestone 1 retains formula source without changing its
-spelling.
+The reference implementation has completed the Milestone 2 calculation proof:
+lossless parsing, validation, canonical formatting, the `portable-a1@1`
+formula profile, virtual fills, deterministic dependency calculation, cycles,
+and incremental literal updates. Milestone 3 source-aware transactional editing
+is the next implementation slice.
 
 ## Build and CLI usage
 
-Install a current stable Rust toolchain, then run the Milestone 1 verification
+Install a current stable Rust toolchain, then run the verification
 commands from the repository root:
 
 ```sh
 cargo test --workspace
 cargo run -p marksheet-cli -- check examples/budget.ms
 cargo run -p marksheet-cli -- fmt --check examples/budget.ms
+cargo run -p marksheet-cli -- calc examples/budget.ms \
+  --sheet summary --range A1:B4 --format json
 ```
 
 To build the standalone `marksheet` executable:
@@ -104,12 +106,30 @@ cargo build --release -p marksheet-cli
 ./target/release/marksheet check examples/budget.ms
 ```
 
-`marksheet check <workbook.ms>` validates the available Milestone 1 syntax and
-workbook structure. `marksheet fmt --check <workbook.ms>` verifies that a file
-already matches canonical formatting. `marksheet fmt <workbook.ms>` is the
-explicit canonical-formatting command, and `marksheet check --format json`
-emits machine-readable diagnostics. Formula calculation and `marksheet calc`
-begin in Milestone 2.
+`marksheet check <workbook.ms>` validates syntax, workbook structure, formulas,
+and references. `marksheet fmt --check <workbook.ms>` verifies canonical
+formatting; `marksheet fmt <workbook.ms>` explicitly rewrites a valid workbook.
+`marksheet check --format json` emits machine-readable diagnostics.
+
+`marksheet calc <workbook.ms> --sheet <id> --range <A1:B2>` calculates one
+explicit rectangle. JSON is the default stable typed output; `--format csv`
+and `--format text` are also available. Core calculation is deterministic:
+volatile functions, I/O, clocks, randomness, and network access are not part of
+`portable-a1@1`.
+
+Successful JSON calculation output uses the versioned
+`marksheet-calc@1` envelope. It contains the formula profile, explicit
+selection, row-major cells with tagged values, diagnostics, revision, and
+bounded work statistics. New optional fields may be added within an envelope
+version; a breaking shape or meaning change requires a new version string.
+Fatal parse, validation, selection, or resource errors produce no partial
+calculation document on stdout. Exit status `0` means calculation completed,
+`1` means the workbook or calculation is incomplete (including a selected
+cycle), and `2` means an I/O, usage, or serialization failure.
+
+The optional Formualizer adapter under `crates/marksheet-calc-formualizer` is a
+time-boxed compatibility spike and reference comparison, not the profile's
+semantic authority or the default calculator.
 
 ## Design boundaries
 

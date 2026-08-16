@@ -302,7 +302,7 @@ impl std::error::Error for IdentifierError {}
 
 typed_identifier!(SheetId, "A stable sheet identifier.");
 typed_identifier!(TableId, "A workbook-scoped table identifier.");
-typed_identifier!(NameId, "A workbook-scoped named-range identifier.");
+typed_identifier!(NameId, "A workbook-scoped named-reference identifier.");
 typed_identifier!(StyleId, "A workbook-scoped style identifier.");
 
 /// A concrete one-based spreadsheet coordinate.
@@ -798,6 +798,88 @@ fn parse_number(value: &str) -> Option<f64> {
         })
         .flatten()
 }
+
+/// Returns the canonical decimal spelling for a finite binary64 number.
+///
+/// The formatter compares Rust's shortest round-trippable display spelling
+/// with an equivalent normalized scientific spelling. The shorter byte string
+/// wins; ties prefer the display spelling, which avoids an exponent when both
+/// spellings are equally compact. Negative zero is emitted as `-0`.
+///
+/// # Errors
+///
+/// Returns [`CanonicalNumberError::NonFinite`] for NaN or either infinity,
+/// which are not Marksheet source number literals.
+pub fn canonical_number(value: f64) -> Result<String, CanonicalNumberError> {
+    if !value.is_finite() {
+        return Err(CanonicalNumberError::NonFinite);
+    }
+    if value == 0.0 {
+        return Ok(if value.is_sign_negative() {
+            "-0".to_owned()
+        } else {
+            "0".to_owned()
+        });
+    }
+
+    let display = value.to_string();
+    let scientific = normalized_scientific(&display);
+    Ok(if scientific.len() < display.len() {
+        scientific
+    } else {
+        display
+    })
+}
+
+/// The error returned by [`canonical_number`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CanonicalNumberError {
+    NonFinite,
+}
+impl fmt::Display for CanonicalNumberError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Marksheet numbers must be finite")
+    }
+}
+impl std::error::Error for CanonicalNumberError {}
+
+/// Converts a shortest decimal spelling into a normalized, equal-value
+/// scientific spelling. `f64::to_string` only emits ASCII decimal syntax.
+fn normalized_scientific(display: &str) -> String {
+    let (negative, unsigned) = match display.strip_prefix('-') {
+        Some(unsigned) => (true, unsigned),
+        None => (false, display),
+    };
+    let (source_mantissa, explicit_exponent) = match unsigned.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) => (mantissa, exponent.parse::<i32>().unwrap_or(0)),
+        None => (unsigned, 0),
+    };
+    let decimal_position = source_mantissa.find('.').unwrap_or(source_mantissa.len());
+    let digits: String = source_mantissa
+        .chars()
+        .filter(|character| *character != '.')
+        .collect();
+    let leading_zeroes = digits.bytes().take_while(|digit| *digit == b'0').count();
+    let significant = digits[leading_zeroes..].trim_end_matches('0');
+
+    // `canonical_number` handles zero before reaching this helper.
+    debug_assert!(!significant.is_empty());
+    let exponent = explicit_exponent + i32::try_from(decimal_position).unwrap_or(i32::MAX)
+        - 1
+        - i32::try_from(leading_zeroes).unwrap_or(i32::MAX);
+    let mut result = String::new();
+    if negative {
+        result.push('-');
+    }
+    result.push(char::from(significant.as_bytes()[0]));
+    if significant.len() > 1 {
+        result.push('.');
+        result.push_str(&significant[1..]);
+    }
+    result.push('e');
+    result.push_str(&exponent.to_string());
+    result
+}
 fn looks_like_date(value: &str) -> bool {
     let bytes = value.as_bytes();
     bytes.len() == 10 && has_date_prefix(bytes) && bytes[8..].iter().all(u8::is_ascii_digit)
@@ -958,8 +1040,17 @@ pub enum TableRegion {
 }
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub enum NameTarget {
+    /// A name that resolves to exactly one sheet-qualified cell.
+    ///
+    /// This is intentionally distinct from [`Self::Range`]: a source target
+    /// such as `sheet!A1:A1` is still range-shaped and therefore retains range
+    /// behavior in the calculation layer.
+    Cell(SheetCoordinate),
     Range(SheetRange),
-    TableColumn { table: TableId, header: String },
+    TableColumn {
+        table: TableId,
+        header: String,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Name {
@@ -1373,6 +1464,21 @@ mod tests {
         assert!(!first.overlaps(Range::parse("E7:F20").unwrap()));
     }
     #[test]
+    fn named_cells_remain_distinct_from_single_cell_ranges() {
+        let sheet = SheetId::parse("summary").unwrap();
+        let cell = Coordinate::parse("B2").unwrap();
+        let named_cell = NameTarget::Cell(SheetCoordinate {
+            sheet: sheet.clone(),
+            coordinate: cell,
+        });
+        let named_range = NameTarget::Range(SheetRange {
+            sheet,
+            range: Range::single(cell),
+        });
+
+        assert_ne!(named_cell, named_range);
+    }
+    #[test]
     fn footprints_are_checked_for_distant_cells() {
         let anchor = Coordinate::parse("A1").unwrap();
         let footprint = Footprint::new(anchor, u64::MAX, 1);
@@ -1456,5 +1562,23 @@ mod tests {
         assert_eq!(DiagnosticCode::new("MS1001").unwrap().as_str(), "MS1001");
         assert!(DiagnosticCode::new("MS1").is_err());
         assert!(DiagnosticCode::new("syntax-error").is_err());
+    }
+    #[test]
+    fn canonical_numbers_are_shortest_and_round_trip() {
+        for (value, expected) in [
+            (1e20, "1e20"),
+            (1e-7, "1e-7"),
+            (12.5, "12.5"),
+            (-0.0, "-0"),
+            (1.23e-10, "1.23e-10"),
+        ] {
+            let actual = canonical_number(value).unwrap();
+            assert_eq!(actual, expected);
+            assert_eq!(actual.parse::<f64>().unwrap().to_bits(), value.to_bits());
+        }
+        assert!(matches!(
+            canonical_number(f64::INFINITY),
+            Err(CanonicalNumberError::NonFinite)
+        ));
     }
 }

@@ -1,6 +1,7 @@
 //! Explicit canonical formatting for validated documents.
 
-use marksheet_model::{Coordinate, Range, Value};
+use marksheet_calc::formula::{ParseLimits, format_formula, parse};
+use marksheet_model::{Coordinate, Range, Value, canonical_number};
 
 use crate::ParsedDocument;
 use crate::cst::{CsvBlock, Directive, ExtensionBlock, Node};
@@ -118,7 +119,13 @@ fn format_arguments(name: &str, arguments: &str) -> String {
         ),
         "fill" => split_target(arguments).map_or_else(
             || arguments.to_owned(),
-            |(target, formula)| format!("{} {formula}", canonical_target(target)),
+            |(target, formula)| {
+                format!(
+                    "{} {}",
+                    canonical_target(target),
+                    canonical_formula(formula)
+                )
+            },
         ),
         "column" => format_geometry(arguments, canonical_column_range),
         "row" => format_geometry(arguments, canonical_row_range),
@@ -274,15 +281,29 @@ fn canonical_scalar(value: &Value) -> String {
                 format!("'{text}")
             }
         }
-        Value::Number(number) => number.to_string(),
+        Value::Number(number) => canonical_number(*number)
+            .expect("validated Marksheet source values contain only finite numbers"),
         Value::Boolean(boolean) => boolean.to_string(),
         Value::Date(date) => date.to_string(),
         Value::DateTime(datetime) => datetime
             .format(&time::format_description::well_known::Rfc3339)
             .expect("semantic datetimes are representable as RFC 3339"),
-        Value::Formula(formula) => formula.to_string(),
+        Value::Formula(formula) => canonical_formula(formula.as_str()),
         Value::Error(error) => error.to_string(),
     }
+}
+
+/// Formats a formula only after the Marksheet-owned parser has accepted it.
+///
+/// Canonical formatting must never turn malformed source into a different,
+/// plausible formula. Formula diagnostics normally make the enclosing document
+/// ineligible for formatting, but retaining the original spelling here keeps
+/// this boundary safe if a caller uses a partially validated document.
+fn canonical_formula(source: &str) -> String {
+    let Ok(formula) = parse(source, &ParseLimits::default()) else {
+        return source.to_owned();
+    };
+    format_formula(&formula).unwrap_or_else(|_| source.to_owned())
 }
 
 fn csv_quote(value: &str, force: bool) -> String {
@@ -299,4 +320,65 @@ fn csv_quote(value: &str, force: bool) -> String {
 
 fn text(source: &[u8], span: crate::cst::Span) -> &str {
     std::str::from_utf8(&source[span.range()]).expect("valid documents have UTF-8 CST spans")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::canonicalize;
+    use crate::parse;
+
+    fn canonical(source: &[u8]) -> Vec<u8> {
+        let document = parse(source);
+        canonicalize(&document).expect("valid document")
+    }
+
+    #[test]
+    fn canonicalizes_cell_formulas_and_requotes_csv_fields() {
+        let source = b"#!marksheet 0.1\n@sheet main \"Main\"\n@block A1 csv\n\"=sum ( a1 , $b$2 )\",\"= \"\"a,b\"\" & a1\",=sum ( costs[Unit Cost] )\n@end\n";
+
+        let formatted = canonical(source);
+
+        assert_eq!(
+            formatted,
+            b"#!marksheet 0.1\n\n@sheet main \"Main\"\n@block A1 csv\n\"=SUM(A1,$B$2)\",\"=\"\"a,b\"\"&A1\",=SUM(costs[Unit Cost])\n@end\n"
+        );
+    }
+
+    #[test]
+    fn canonicalizes_fill_formulas_without_changing_targets() {
+        let source = b"#!marksheet 0.1\n@sheet main \"Main\"\n@block A1 csv\nInput,Output\n1,\n@end\n@fill B2 = sum ( a2 , 1 )\n";
+
+        let formatted = canonical(source);
+
+        assert!(
+            String::from_utf8_lossy(&formatted).contains("@fill B2 =SUM(A2,1)\n"),
+            "{}",
+            String::from_utf8_lossy(&formatted)
+        );
+    }
+
+    #[test]
+    fn formula_canonicalization_is_idempotent() {
+        let source =
+            b"#!marksheet 0.1\n@sheet main \"Main\"\n@block A1 csv\n= sum ( a1 , 1 )\n@end\n";
+
+        let once = canonical(source);
+        let twice = canonical(&once);
+
+        assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn malformed_formula_never_rewrites_to_a_different_formula() {
+        let source = b"#!marksheet 0.1\n@sheet main \"Main\"\n@block A1 csv\n=SUM(\n@end\n";
+        let document = parse(source);
+
+        match canonicalize(&document) {
+            Ok(formatted) => assert!(
+                String::from_utf8_lossy(&formatted).contains("=SUM(\n"),
+                "{formatted:?}"
+            ),
+            Err(_) => assert_eq!(document.source_bytes(), source),
+        }
+    }
 }

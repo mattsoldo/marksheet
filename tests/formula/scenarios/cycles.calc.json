@@ -1,0 +1,18 @@
+{
+  "schema": "marksheet.calculation-scenario@1",
+  "profile": "portable-a1@1",
+  "source": "cycles.ms",
+  "expect": {
+    "cells": {
+      "main!A1": { "kind": "error", "value": "#CIRC!" },
+      "main!A2": { "kind": "error", "value": "#CIRC!" },
+      "main!A3": { "kind": "error", "value": "#CIRC!" },
+      "main!A4": { "kind": "error", "value": "#CIRC!" }
+    },
+    "diagnostics": [
+      { "code": "MS2303", "cells": ["main!A1"] },
+      { "code": "MS2303", "cells": ["main!A2", "main!A3"] }
+    ]
+  }
+}
+

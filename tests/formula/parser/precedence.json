@@ -1,0 +1,47 @@
+{
+  "schema": "marksheet.formula-conformance@1",
+  "profile": "portable-a1@1",
+  "cases": [
+    {
+      "id": "parser.precedence.multiply-before-add",
+      "formula": "=1+2*3",
+      "expect": { "ast": "(binary + (number 1) (binary * (number 2) (number 3)))" }
+    },
+    {
+      "id": "parser.precedence.power-right-associative",
+      "formula": "=2^3^2",
+      "expect": { "ast": "(binary ^ (number 2) (binary ^ (number 3) (number 2)))" }
+    },
+    {
+      "id": "parser.precedence.power-before-unary",
+      "formula": "=-2^2",
+      "expect": { "ast": "(unary - (binary ^ (number 2) (number 2)))" }
+    },
+    {
+      "id": "parser.precedence.signed-exponent",
+      "formula": "=2^-2",
+      "expect": { "ast": "(binary ^ (number 2) (unary - (number 2)))" }
+    },
+    {
+      "id": "parser.precedence.parenthesized-negative-base",
+      "formula": "=(-2)^2",
+      "expect": { "ast": "(binary ^ (unary - (number 2)) (number 2))" }
+    },
+    {
+      "id": "parser.precedence.arithmetic-before-concat",
+      "formula": "=\"total=\"&1+2",
+      "expect": { "ast": "(binary & (text \"total=\") (binary + (number 1) (number 2)))" }
+    },
+    {
+      "id": "parser.precedence.concat-before-comparison",
+      "formula": "=\"a\"&\"b\"=\"ab\"",
+      "expect": { "ast": "(binary = (binary & (text \"a\") (text \"b\")) (text \"ab\"))" }
+    },
+    {
+      "id": "parser.associativity.subtraction-left",
+      "formula": "=10-3-2",
+      "expect": { "ast": "(binary - (binary - (number 10) (number 3)) (number 2))" }
+    }
+  ]
+}
+

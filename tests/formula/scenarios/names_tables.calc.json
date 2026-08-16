@@ -1,0 +1,18 @@
+{
+  "schema": "marksheet.calculation-scenario@1",
+  "profile": "portable-a1@1",
+  "source": "names_tables.ms",
+  "expect": {
+    "cells": {
+      "data!D2": { "kind": "number", "value": 20 },
+      "data!D3": { "kind": "number", "value": 15 },
+      "summary!B2": { "kind": "number", "value": 35 },
+      "summary!B3": { "kind": "number", "value": 3.5 },
+      "summary!B4": { "kind": "number", "value": 4 },
+      "summary!B5": { "kind": "text", "value": "Paper" }
+    },
+    "diagnostics": [],
+    "source_invariants": { "virtual_formulas_only": true }
+  }
+}
+

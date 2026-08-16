@@ -11,18 +11,94 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use marksheet_model::Severity;
+use marksheet_model::{Diagnostic, Range, Severity, SheetId};
 
-use crate::OutputFormat;
+use crate::{CalcOutputFormat, OutputFormat};
 
 /// Runs `marksheet check`.
 pub(crate) fn check(path: &Path, format: OutputFormat) -> Result<ExitCode, CliError> {
     let source = read_source(path)?;
     let document = marksheet_syntax::parse(&source);
-    crate::render::render(path, document.source_bytes(), &document.diagnostics, format)
+    let mut diagnostics = document.diagnostics.clone();
+    if !document.has_errors()
+        && let Some(workbook) = document.workbook.as_ref()
+    {
+        diagnostics.extend(validate_formulas(workbook));
+    }
+
+    crate::render::render(path, document.source_bytes(), &diagnostics, format)
         .map_err(CliError::Render)?;
 
-    Ok(exit_for_diagnostics(&document.diagnostics))
+    Ok(exit_for_diagnostics(&diagnostics))
+}
+
+/// Validates the calculation-specific portion of an otherwise valid workbook.
+/// The source parser intentionally retains formulas as opaque fields, so this
+/// second pass is what makes `marksheet check` reject invalid formula syntax
+/// and unresolved formula references without calculating a selected range.
+fn validate_formulas(workbook: &marksheet_model::Workbook) -> Vec<Diagnostic> {
+    use marksheet_calc::CalcEngine;
+
+    marksheet_calc::ReferenceCalcEngine::new()
+        .prepare(workbook, marksheet_calc::CalcLimits::default())
+        .diagnostics
+}
+
+/// Runs `marksheet calc` for one explicit sheet selection.
+pub(crate) fn calculate(
+    path: &Path,
+    sheet: SheetId,
+    range: Range,
+    format: CalcOutputFormat,
+) -> Result<ExitCode, CliError> {
+    use marksheet_calc::engine::CalcEngine;
+
+    let source = read_source(path)?;
+    let document = marksheet_syntax::parse(&source);
+    if document.has_errors() {
+        crate::render::render_human(path, document.source_bytes(), &document.diagnostics)
+            .map_err(CliError::Render)?;
+        return Ok(ExitCode::from(1));
+    }
+    let workbook = document
+        .workbook
+        .as_ref()
+        .ok_or(CliError::MissingWorkbook)?;
+
+    let engine = marksheet_calc::engine::ReferenceCalcEngine::new();
+    let report = engine.prepare(workbook, marksheet_calc::engine::CalcLimits::default());
+    let Some(mut calculation) = report.calculation else {
+        crate::render::render_human(path, document.source_bytes(), &report.diagnostics)
+            .map_err(CliError::Render)?;
+        return Ok(ExitCode::from(1));
+    };
+
+    let request = marksheet_calc::engine::CalculationRequest::new(sheet, range);
+    let result = engine.calculate(&mut calculation, &request);
+    let expected_cells = range_cell_count(range)?;
+    if result.cells.len() as u64 != expected_cells {
+        crate::render::render_human(path, document.source_bytes(), &result.diagnostics)
+            .map_err(CliError::Render)?;
+        return Ok(ExitCode::from(1));
+    }
+
+    let output = crate::render::format_calculation(&request, &result, format)
+        .map_err(CliError::Serialize)?;
+    crate::render::print_stdout(&output).map_err(CliError::Render)?;
+    if !result.diagnostics.is_empty() {
+        crate::render::render_human(path, document.source_bytes(), &result.diagnostics)
+            .map_err(CliError::Render)?;
+    }
+
+    Ok(exit_for_diagnostics(&result.diagnostics))
+}
+
+fn range_cell_count(range: Range) -> Result<u64, CliError> {
+    range
+        .width()
+        .ok()
+        .and_then(|width| range.height().ok()?.checked_mul(width))
+        .ok_or(CliError::InvalidRange(range))
 }
 
 /// Runs `marksheet fmt`.
@@ -34,6 +110,17 @@ pub(crate) fn format(path: &Path, check: bool) -> Result<ExitCode, CliError> {
         crate::render::render_human(path, document.source_bytes(), &document.diagnostics)
             .map_err(CliError::Render)?;
         return Ok(ExitCode::from(1));
+    }
+    if let Some(workbook) = document.workbook.as_ref() {
+        let formula_diagnostics = validate_formulas(workbook);
+        if formula_diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error)
+        {
+            crate::render::render_human(path, document.source_bytes(), &formula_diagnostics)
+                .map_err(CliError::Render)?;
+            return Ok(ExitCode::from(1));
+        }
     }
 
     let formatted = match marksheet_syntax::canonicalize(&document) {
@@ -183,6 +270,9 @@ pub(crate) enum CliError {
     InvalidOutputPath(PathBuf),
     TemporaryPath(PathBuf),
     SymbolicLink(PathBuf),
+    MissingWorkbook,
+    InvalidRange(Range),
+    Serialize(serde_json::Error),
 }
 
 impl fmt::Display for CliError {
@@ -211,6 +301,14 @@ impl fmt::Display for CliError {
                 formatter,
                 "refusing to format symbolic link {}; format the target directly",
                 path.display()
+            ),
+            Self::MissingWorkbook => {
+                formatter.write_str("parsed document did not contain a workbook")
+            }
+            Self::InvalidRange(range) => write!(formatter, "invalid calculation range {range}"),
+            Self::Serialize(source) => write!(
+                formatter,
+                "could not serialize calculation output: {source}"
             ),
         }
     }

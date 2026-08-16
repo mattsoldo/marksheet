@@ -1,0 +1,20 @@
+{
+  "schema": "marksheet.calculation-scenario@1",
+  "profile": "portable-a1@1",
+  "source": "fills_a1.ms",
+  "expect": {
+    "cells": {
+      "main!C1": { "kind": "number", "value": 10 },
+      "main!C2": { "kind": "number", "value": 40 },
+      "main!C3": { "kind": "number", "value": 90 },
+      "main!D1": { "kind": "number", "value": 11 },
+      "main!D2": { "kind": "number", "value": 21 },
+      "main!D3": { "kind": "number", "value": 31 },
+      "main!E1": { "kind": "number", "value": 11 },
+      "main!E2": { "kind": "number", "value": 21 },
+      "main!E3": { "kind": "number", "value": 31 }
+    },
+    "diagnostics": [],
+    "source_invariants": { "virtual_formulas_only": true }
+  }
+}

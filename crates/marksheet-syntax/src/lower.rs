@@ -5,9 +5,9 @@ use std::collections::{HashMap, HashSet};
 use marksheet_model::{
     Apply, ApplyTarget, Block, Cell, Color, ColumnGeometry, ColumnRange, Coordinate, Extension,
     ExtensionDeclaration, ExtensionId, Fill, FillTarget, FormulaSource, HorizontalAlignment, Name,
-    NameId, NameTarget, NumberFormat, Origin, Range, RowGeometry, RowRange, Sheet, SheetId,
-    SheetItem, SheetRange, Style, StyleId, StyleProperties, Table, TableId, TableRegion, Value,
-    VerticalAlignment, Workbook,
+    NameId, NameTarget, NumberFormat, Origin, Range, RowGeometry, RowRange, Sheet, SheetCoordinate,
+    SheetId, SheetItem, SheetRange, Style, StyleId, StyleProperties, Table, TableId, TableRegion,
+    Value, VerticalAlignment, Workbook,
 };
 
 use crate::cst::{CsvBlock, CsvKind, Directive, ExtensionBlock, Node, Span};
@@ -437,6 +437,14 @@ impl Lowerer<'_> {
             ));
             return;
         }
+        if matches!(id_raw, "true" | "false") {
+            self.diagnostics.push(error(
+                "MS1201",
+                "a name cannot use a boolean literal as its identifier",
+                id_span,
+            ));
+            return;
+        }
         if let Some(first) = self.value_ids.insert(id.to_string(), id_span) {
             self.duplicate(
                 id_span,
@@ -455,10 +463,19 @@ impl Lowerer<'_> {
 
     fn resolve_names(&mut self) {
         for (id, target, span) in std::mem::take(&mut self.pending_names) {
-            let resolved = if let Some((sheet_raw, range_raw)) = target.split_once('!') {
-                match (SheetId::parse(sheet_raw), Range::parse(range_raw)) {
-                    (Ok(sheet), Ok(range)) if self.sheet_ids.contains_key(sheet.as_str()) => {
-                        Some(NameTarget::Range(SheetRange { sheet, range }))
+            let resolved = if let Some((sheet_raw, target_raw)) = target.split_once('!') {
+                match SheetId::parse(sheet_raw) {
+                    Ok(sheet) if self.sheet_ids.contains_key(sheet.as_str()) => {
+                        // Preserve the authored reference shape. `A1` is a scalar
+                        // named cell, while `A1:A1` remains a range despite
+                        // covering the same coordinate.
+                        if let Ok(coordinate) = Coordinate::parse(target_raw) {
+                            Some(NameTarget::Cell(SheetCoordinate { sheet, coordinate }))
+                        } else if let Ok(range) = Range::parse(target_raw) {
+                            Some(NameTarget::Range(SheetRange { sheet, range }))
+                        } else {
+                            None
+                        }
                     }
                     _ => None,
                 }

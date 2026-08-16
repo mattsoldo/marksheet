@@ -1,0 +1,86 @@
+{
+  "schema": "marksheet.formula-conformance@1",
+  "profile": "portable-a1@1",
+  "cases": [
+    {
+      "id": "parser.reference.local-cell",
+      "formula": "=a1",
+      "expect": { "ast": "(cell - A1)" }
+    },
+    {
+      "id": "parser.reference.absolute-cell",
+      "formula": "=$a$1",
+      "expect": { "ast": "(cell - $A$1)" }
+    },
+    {
+      "id": "parser.reference.mixed-cell",
+      "formula": "=$B7+C$8",
+      "expect": { "ast": "(binary + (cell - $B7) (cell - C$8))" }
+    },
+    {
+      "id": "parser.reference.local-range",
+      "formula": "=A1:b3",
+      "expect": { "ast": "(range - A1 B3)" }
+    },
+    {
+      "id": "parser.reference.cross-sheet-range",
+      "formula": "=inputs!a1:B3",
+      "expect": { "ast": "(range inputs A1 B3)" }
+    },
+    {
+      "id": "parser.reference.boolean-word-sheet-id",
+      "formula": "=true!A1",
+      "expect": { "ast": "(cell true A1)" }
+    },
+    {
+      "id": "parser.reference.table-column",
+      "formula": "=costs[Cost]",
+      "expect": { "ast": "(table-column costs Cost)" }
+    },
+    {
+      "id": "parser.reference.boolean-word-table-id",
+      "formula": "=true[H]",
+      "expect": { "ast": "(table-column true H)" }
+    },
+    {
+      "id": "parser.reference.table-column-spaced-header",
+      "formula": "=costs[Unit Cost]",
+      "expect": { "ast": "(table-column costs \"Unit Cost\")" }
+    },
+    {
+      "id": "parser.reference.table-header-escaped-bracket",
+      "formula": "=fees[Fee]]]",
+      "expect": { "ast": "(table-column fees Fee])" }
+    },
+    {
+      "id": "parser.reference.table-headers",
+      "formula": "=costs[#Headers]",
+      "expect": { "ast": "(table-region costs headers)" }
+    },
+    {
+      "id": "parser.reference.table-data",
+      "formula": "=costs[#Data]",
+      "expect": { "ast": "(table-region costs data)" }
+    },
+    {
+      "id": "parser.reference.qualified-current-row",
+      "formula": "=costs[@Cost]",
+      "expect": { "ast": "(current-row costs Cost)" }
+    },
+    {
+      "id": "parser.reference.unqualified-current-row",
+      "formula": "=[@Cost]",
+      "expect": { "ast": "(current-row - Cost)" }
+    },
+    {
+      "id": "parser.reference.current-row-spaced-header",
+      "formula": "=[@Unit Cost]",
+      "expect": { "ast": "(current-row - \"Unit Cost\")" }
+    },
+    {
+      "id": "parser.reference.range-in-call",
+      "formula": "=SUM(inputs!A1:A3)",
+      "expect": { "ast": "(call SUM (range inputs A1 A3))" }
+    }
+  ]
+}

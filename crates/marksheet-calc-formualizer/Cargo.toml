@@ -1,0 +1,36 @@
+[package]
+name = "marksheet-calc-formualizer"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+license = "MIT"
+description = "Isolated Formualizer feasibility probe for Marksheet calculation"
+
+# This intentionally starts a workspace boundary.  The spike must not join the
+# production workspace until an integration review accepts its dependency and
+# semantic trade-offs.
+[workspace]
+
+[features]
+# The core is still under active construction. Keep the engine feasibility
+# tests runnable without pretending that this probe implements its future API.
+default = []
+calc-link = ["dep:marksheet-calc"]
+
+[dependencies]
+marksheet-calc = { path = "../marksheet-calc", optional = true }
+marksheet-model = { path = "../marksheet-model" }
+# `portable-wasm` is Formualizer's documented full evaluation profile without
+# its ambient `system-clock` or `js-runtime` features.
+formualizer = { version = "=0.8.4", default-features = false, features = ["portable-wasm"] }
+
+[dev-dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

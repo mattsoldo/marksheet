@@ -1,0 +1,36 @@
+{
+  "schema": "marksheet.formula-conformance@1",
+  "profile": "portable-a1@1",
+  "cases": [
+    {
+      "id": "format.whitespace.function-boolean-cell-case",
+      "formula": "= \t sum ( tRuE , a1 ) \n",
+      "expect": { "canonical": "=SUM(TRUE,A1)" }
+    },
+    {
+      "id": "format.number.shortest-roundtrip",
+      "formula": "=1.2500e-2",
+      "expect": { "canonical": "=0.0125" }
+    },
+    {
+      "id": "format.parentheses.removes-redundant-precedence",
+      "formula": "=1+(2*3)",
+      "expect": { "canonical": "=1+2*3" }
+    },
+    {
+      "id": "format.parentheses.retains-required-power-left-operand",
+      "formula": "=((1+2)*3)^4",
+      "expect": { "canonical": "=((1+2)*3)^4" }
+    },
+    {
+      "id": "format.text.escapes-doubled-quotes",
+      "formula": "=  \"a\"\"b\"  ",
+      "expect": { "canonical": "=\"a\"\"b\"" }
+    },
+    {
+      "id": "format.structured.escapes-bracket-and-preserves-header-whitespace",
+      "formula": "=fees[ Fee]] ]",
+      "expect": { "canonical": "=fees[ Fee]] ]" }
+    }
+  ]
+}

@@ -80,6 +80,61 @@ fn check_reports_io_failures_with_exit_code_two() {
 }
 
 #[test]
+fn check_rejects_malformed_formulas_after_source_validation() {
+    let temporary = TempFile::write(
+        "malformed-formula.ms",
+        b"#!marksheet 0.1\n@sheet s \"Sheet\"\n@block A1 csv\n=SUM(1,\n@end\n",
+    );
+
+    let output = marksheet()
+        .arg("check")
+        .arg(temporary.path())
+        .output()
+        .expect("CLI executes");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("error[MS2202]"));
+}
+
+#[test]
+fn check_rejects_unresolved_formula_references() {
+    let temporary = TempFile::write(
+        "unresolved-formula.ms",
+        b"#!marksheet 0.1\n@sheet s \"Sheet\"\n@block A1 csv\n=missing_name\n@end\n",
+    );
+
+    let output = marksheet()
+        .arg("check")
+        .arg(temporary.path())
+        .output()
+        .expect("CLI executes");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("error[MS2103]"));
+}
+
+#[test]
+fn fmt_refuses_formula_validation_failures_without_rewriting() {
+    let source = b"#!marksheet 0.1\n@sheet s \"Sheet\"\n@block A1 csv\n=SUM(1,\n@end\n";
+    let temporary = TempFile::write("invalid-formula-format.ms", source);
+
+    let output = marksheet()
+        .arg("fmt")
+        .arg(temporary.path())
+        .output()
+        .expect("CLI executes");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("error[MS2202]"));
+    assert_eq!(
+        fs::read(temporary.path()).expect("source remains readable"),
+        source
+    );
+}
+
+#[test]
 fn fmt_check_accepts_the_documented_example() {
     let output = marksheet()
         .args(["fmt", "--check"])

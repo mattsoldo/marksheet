@@ -2,6 +2,7 @@
 members = [
     "crates/marksheet-model",
     "crates/marksheet-syntax",
+    "crates/marksheet-calc",
     "crates/marksheet-cli",
 ]
 resolver = "2"

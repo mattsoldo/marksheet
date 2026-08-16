@@ -1,0 +1,28 @@
+{
+  "schema": "marksheet.formula-conformance@1",
+  "profile": "portable-a1@1",
+  "cases": [
+    { "id": "eval.function.sum.mixed-range", "cells": { "A1": { "kind": "number", "value": 2 }, "A2": { "kind": "blank" }, "A3": { "kind": "text", "value": "3" }, "A4": { "kind": "boolean", "value": true }, "A5": { "kind": "number", "value": 4 } }, "formula": "=SUM(A1:A5)", "expect": { "value": { "kind": "number", "value": 6 } } },
+    { "id": "eval.function.sum.no-numbers", "cells": { "A1": { "kind": "blank" }, "A2": { "kind": "text", "value": "x" } }, "formula": "=SUM(A1:A2)", "expect": { "value": { "kind": "number", "value": 0 } } },
+    { "id": "eval.function.sum.one-cell-range", "cells": { "A1": { "kind": "number", "value": 7 } }, "formula": "=SUM(A1:A1)", "expect": { "value": { "kind": "number", "value": 7 } } },
+    { "id": "eval.function.average.numbers", "cells": { "A1": { "kind": "number", "value": 2 }, "A2": { "kind": "blank" }, "A3": { "kind": "number", "value": 4 } }, "formula": "=AVERAGE(A1:A3)", "expect": { "value": { "kind": "number", "value": 3 } } },
+    { "id": "eval.function.average.no-numbers", "cells": { "A1": { "kind": "blank" } }, "formula": "=AVERAGE(A1)", "expect": { "value": { "kind": "error", "value": "#DIV/0!" } } },
+    { "id": "eval.function.min.numbers", "formula": "=MIN(3,-1,2)", "expect": { "value": { "kind": "number", "value": -1 } } },
+    { "id": "eval.function.min.no-numbers", "formula": "=MIN(\"x\")", "expect": { "value": { "kind": "error", "value": "#VALUE!" } } },
+    { "id": "eval.function.max.numbers", "formula": "=MAX(3,-1,2)", "expect": { "value": { "kind": "number", "value": 3 } } },
+    { "id": "eval.function.count.types", "cells": { "A1": { "kind": "number", "value": 1 }, "A2": { "kind": "text", "value": "2" }, "A3": { "kind": "boolean", "value": true }, "A4": { "kind": "blank" } }, "formula": "=COUNT(A1:A4)", "expect": { "value": { "kind": "number", "value": 1 } } },
+    { "id": "eval.function.counta.types", "cells": { "A1": { "kind": "blank" }, "A2": { "kind": "text", "value": "" }, "A3": { "kind": "error", "value": "#N/A" } }, "formula": "=COUNTA(A1:A3)", "expect": { "value": { "kind": "number", "value": 2 } } },
+    { "id": "eval.function.aggregate.first-error", "cells": { "A1": { "kind": "error", "value": "#REF!" }, "A2": { "kind": "error", "value": "#N/A" } }, "formula": "=SUM(A1:A2)", "expect": { "value": { "kind": "error", "value": "#REF!" } } },
+    { "id": "eval.function.if.true-lazy", "formula": "=IF(TRUE,7,1/0)", "expect": { "value": { "kind": "number", "value": 7 } } },
+    { "id": "eval.function.if.false-lazy", "formula": "=IF(0,1/0,8)", "expect": { "value": { "kind": "number", "value": 8 } } },
+    { "id": "eval.function.if.text-condition", "formula": "=IF(\"yes\",1,0)", "expect": { "value": { "kind": "error", "value": "#VALUE!" } } },
+    { "id": "eval.function.iferror.error-lazy", "formula": "=IFERROR(1/0,9)", "expect": { "value": { "kind": "number", "value": 9 } } },
+    { "id": "eval.function.iferror.success-lazy", "formula": "=IFERROR(3,#N/A)", "expect": { "value": { "kind": "number", "value": 3 } } },
+    { "id": "eval.function.and.short-circuit", "formula": "=AND(FALSE,#N/A)", "expect": { "value": { "kind": "boolean", "value": false } } },
+    { "id": "eval.function.and.error-first", "formula": "=AND(#N/A,FALSE)", "expect": { "value": { "kind": "error", "value": "#N/A" } } },
+    { "id": "eval.function.or.short-circuit", "formula": "=OR(TRUE,#N/A)", "expect": { "value": { "kind": "boolean", "value": true } } },
+    { "id": "eval.function.or.numeric-coercion", "formula": "=OR(0,2)", "expect": { "value": { "kind": "boolean", "value": true } } },
+    { "id": "eval.function.not.blank", "cells": { "A1": { "kind": "blank" } }, "formula": "=NOT(A1)", "expect": { "value": { "kind": "boolean", "value": true } } },
+    { "id": "eval.function.logic.wrong-arity", "formula": "=IF(TRUE,1)", "expect": { "value": { "kind": "error", "value": "#VALUE!" } } }
+  ]
+}

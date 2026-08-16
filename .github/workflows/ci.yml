@@ -36,6 +36,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
+            crates/marksheet-calc-formualizer/target
           key: ${{ runner.os }}-rust-1.85-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-rust-1.85-
@@ -56,3 +57,9 @@ jobs:
 
       - name: Build release artifacts
         run: cargo build --workspace --release --all-features
+
+      - name: Test isolated Formualizer spike
+        run: cargo test --manifest-path crates/marksheet-calc-formualizer/Cargo.toml --features calc-link
+
+      - name: Lint isolated Formualizer spike
+        run: cargo clippy --manifest-path crates/marksheet-calc-formualizer/Cargo.toml --all-targets --features calc-link -- -D warnings

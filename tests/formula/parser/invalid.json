@@ -1,0 +1,24 @@
+{
+  "schema": "marksheet.formula-conformance@1",
+  "profile": "portable-a1@1",
+  "cases": [
+    { "id": "parser.invalid.empty", "formula": "=", "expect": { "diagnostic": "MS2202" } },
+    { "id": "parser.invalid.missing-right-operand", "formula": "=1+", "expect": { "diagnostic": "MS2202" } },
+    { "id": "parser.invalid.unclosed-parenthesis", "formula": "=(1+2", "expect": { "diagnostic": "MS2202" } },
+    { "id": "parser.invalid.trailing-expression", "formula": "=1 2", "expect": { "diagnostic": "MS2202" } },
+    { "id": "parser.invalid.unterminated-string", "formula": "=\"unterminated", "expect": { "diagnostic": "MS2202" } },
+    { "id": "parser.invalid.newline-in-string", "formula": "=\"line\nbreak\"", "expect": { "diagnostic": "MS2202" } },
+    { "id": "parser.invalid.comma-union", "formula": "=A1,B1", "expect": { "diagnostic": "MS2202" } },
+    { "id": "parser.invalid.chained-comparison", "formula": "=1<2<3", "expect": { "diagnostic": "MS2202" } },
+    { "id": "parser.invalid.whitespace-in-cell", "formula": "=A 1", "expect": { "diagnostic": "MS2202" } },
+    { "id": "parser.invalid.whitespace-before-structured-selector", "formula": "=costs [Unit Cost]", "expect": { "diagnostic": "MS2202" } },
+    { "id": "parser.invalid.split-qualified-range", "formula": "=inputs!A1:other!B2", "expect": { "diagnostic": "MS2202" } },
+    { "id": "parser.invalid.trailing-comma", "formula": "=SUM(1,)", "expect": { "diagnostic": "MS2202" } },
+    { "id": "parser.invalid.leading-comma", "formula": "=SUM(,1)", "expect": { "diagnostic": "MS2202" } },
+    { "id": "parser.invalid.percent-operator", "formula": "=10%", "expect": { "diagnostic": "MS2202" } },
+    { "id": "parser.invalid.row-zero", "formula": "=A0", "expect": { "diagnostic": "MS2202" } },
+    { "id": "parser.invalid.bad-exponent", "formula": "=1e", "expect": { "diagnostic": "MS2202" } },
+    { "id": "parser.invalid.multiple-colons", "formula": "=A1:B2:C3", "expect": { "diagnostic": "MS2202" } },
+    { "id": "parser.invalid.non-ascii-space", "formula": "=1 +2", "expect": { "diagnostic": "MS2202" } }
+  ]
+}

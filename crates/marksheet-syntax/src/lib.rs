@@ -73,6 +73,7 @@ pub fn lossless_bytes(document: &ParsedDocument) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use marksheet_model::{Coordinate, NameTarget, SheetId};
 
     #[test]
     fn complete_example_lowers_and_is_already_canonical() {
@@ -215,5 +216,60 @@ mod tests {
                 "accepted invalid directive {directive}"
             );
         }
+    }
+
+    #[test]
+    fn boolean_literals_are_reserved_name_identifiers() {
+        for reserved in ["true", "false"] {
+            let source = format!(
+                "#!marksheet 0.1\n@name {reserved} = sheet!A1\n@sheet sheet \"Sheet\"\n@block A1 csv\nvalue\n@end\n"
+            );
+            let document = parse(source.as_bytes());
+            let codes: Vec<_> = document
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code.as_str())
+                .collect();
+            assert_eq!(codes, ["MS1201"], "accepted reserved name {reserved}");
+            assert!(
+                document
+                    .workbook
+                    .as_ref()
+                    .is_some_and(|workbook| workbook.names.is_empty()),
+                "reserved name escaped into the workbook model"
+            );
+        }
+    }
+
+    #[test]
+    fn named_cells_remain_distinct_from_single_cell_ranges() {
+        let source = b"#!marksheet 0.1\n@name scalar = summary!B2\n@name range = summary!B2:B2\n@sheet summary \"Summary\"\n@block A1 csv\nvalue\n@end\n";
+        let document = parse(source);
+        assert!(!document.has_errors(), "{:?}", document.diagnostics);
+
+        let workbook = document.workbook.expect("valid workbook");
+        assert_eq!(workbook.names.len(), 2);
+        assert!(matches!(
+            &workbook.names[0].target,
+            NameTarget::Cell(cell)
+                if cell.sheet == SheetId::parse("summary").unwrap()
+                    && cell.coordinate == Coordinate::parse("B2").unwrap()
+        ));
+        assert!(matches!(
+            &workbook.names[1].target,
+            NameTarget::Range(range)
+                if range.sheet == SheetId::parse("summary").unwrap()
+                    && range.range.start == Coordinate::parse("B2").unwrap()
+                    && range.range.end == Coordinate::parse("B2").unwrap()
+        ));
+    }
+
+    #[test]
+    fn outer_scalar_numbers_use_canonical_exponents_and_signed_zero() {
+        let source =
+            b"#!marksheet 0.1\n\n@sheet s \"Sheet\"\n@block A1 csv\n1e+20,0.0000001,-0.0\n@end\n";
+        let once = canonicalize(&parse(source)).expect("valid numeric scalars");
+        assert!(String::from_utf8_lossy(&once).contains("1e20,1e-7,-0\n"));
+        assert_eq!(canonicalize(&parse(&once)).unwrap(), once);
     }
 }

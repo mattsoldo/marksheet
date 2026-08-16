@@ -126,10 +126,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
+name = "marksheet-calc"
+version = "0.1.0"
+dependencies = [
+ "marksheet-model",
+ "marksheet-syntax",
+ "serde",
+ "serde_json",
+ "time",
+]
+
+[[package]]
 name = "marksheet-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "marksheet-calc",
  "marksheet-model",
  "marksheet-syntax",
  "serde",
@@ -148,6 +160,7 @@ dependencies = [
 name = "marksheet-syntax"
 version = "0.1.0"
 dependencies = [
+ "marksheet-calc",
  "marksheet-model",
  "serde_json",
  "time",

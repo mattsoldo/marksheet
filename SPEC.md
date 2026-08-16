@@ -390,6 +390,10 @@ A workbook-scoped named cell or range is declared before the first sheet:
 - A name MUST resolve after the entire workbook is parsed.
 - Forward references are allowed.
 - Duplicate or unresolved names are invalid.
+- A name MUST NOT be `true` or `false`. Those spellings are reserved for the
+  case-insensitive formula Boolean literals. This restriction applies only to
+  bare workbook names: a sheet or table may use either identifier because
+  `true!A1` and `true[Header]` are unambiguous contextual references.
 - Formula constants and computed named expressions are not part of the 0.1
   core.
 - Structural edits SHOULD update a name definition rather than rewriting each
@@ -421,11 +425,51 @@ formatting MUST preserve formula-body spelling exactly. This implementation
 milestone does not relax the final formula requirements in this section or the
 calculator conformance requirements in [20.2](#202-calculator).
 
-### 13.2 Operators
+### 13.2 Lexical grammar
+
+The leading `=` identifies a formula and is not part of its expression AST. An
+expression may contain ASCII space, tab, CR, or LF between tokens. Other
+Unicode whitespace is not formula whitespace. Whitespace is not permitted
+inside an A1 cell or range reference, inside a sheet qualifier, or between a
+table identifier and the `[` that begins its structured selector.
+
+The header portion inside a structured selector is data rather than token
+whitespace. It may contain ASCII or Unicode whitespace, which is preserved and
+matched exactly; implementations MUST NOT trim it. Thus `costs[Unit Cost]`
+refers to the header `Unit Cost`. In a current-row selector, `@` is the first
+selector character and the complete remainder is the header, so
+`[@Unit Cost]` refers to that same header in the current row. The special
+selectors are recognized only by the exact bracket contents `#Headers` and
+`#Data`.
+
+Formula literals are:
+
+- the finite number grammar from [Numbers](#111-numbers), without a leading
+  sign (signs are operators);
+- case-insensitive bare `TRUE` and `FALSE`. A following `!` or `[` instead
+  makes `true` or `false` a contextual sheet or table identifier;
+- the core error tokens from [Errors](#113-errors); and
+- double-quoted text. Within formula text, `""` represents one `"` and a bare
+  newline or unmatched `"` is invalid. Backslash has no special meaning.
+
+Function names contain ASCII letters, digits, and underscores, begin with a
+letter, and are case-insensitive. Canonical spelling is uppercase. Bare
+workbook names use the lowercase identifier grammar in section 4.1 and remain
+case-sensitive. A function call is distinguished from a name by its following
+`(`. Commas separate function arguments; comma unions and array literals are
+not part of this profile.
+
+A syntactically malformed formula makes the document invalid and produces an
+`MS2202` diagnostic connected to both the formula source span and its cell.
+Malformed formulas are not converted into a new runtime error value. Unknown
+function or workbook names are syntactically valid and are handled during
+resolution and evaluation.
+
+### 13.3 Operators and precedence
 
 From highest to lowest precedence, portable A1 formulas support:
 
-1. Parentheses and function calls
+1. Parentheses, literals, references, and function calls
 2. Exponentiation: `^`
 3. Unary signs: `+`, `-`
 4. Multiplication and division: `*`, `/`
@@ -433,10 +477,44 @@ From highest to lowest precedence, portable A1 formulas support:
 6. String concatenation: `&`
 7. Comparisons: `=`, `<>`, `<`, `<=`, `>`, `>=`
 
-Exponentiation associates right-to-left. Other binary arithmetic operators
-associate left-to-right.
+Exponentiation associates right-to-left. The other binary arithmetic and
+concatenation operators associate left-to-right. Comparisons do not chain: an
+unparenthesized expression such as `1<2<3` is invalid. Unary signs may appear on
+the right of exponentiation. Consequently, `-2^2` is `-(2^2)`, `(-2)^2` is
+`4`, and `2^-2` is `0.25`.
 
-### 13.3 References
+Arithmetic operands use this numeric coercion:
+
+| Input | Numeric value |
+| --- | --- |
+| Number | Unchanged |
+| Blank | `0` |
+| Boolean | `TRUE` is `1`; `FALSE` is `0` |
+| Text, Date, DateTime | `#VALUE!` |
+| Error | The same error |
+
+Division by zero returns `#DIV/0!`. `0^0` is `1`; zero raised to a negative
+power returns `#DIV/0!`; and a negative base raised to a non-integral power
+returns `#NUM!`. Any arithmetic result that is NaN or infinite returns
+`#NUM!`.
+
+Concatenation converts Blank to empty text, Number to its canonical finite
+number spelling, Boolean to `TRUE` or `FALSE`, Date to `YYYY-MM-DD`, and
+DateTime to its canonical RFC 3339 spelling with its stored offset. Text is
+unchanged and Error propagates.
+
+Equality compares values of the same type exactly. Blank equals only Blank,
+and text comparison is case-sensitive lexicographic comparison by Unicode
+scalar value without normalization. Values of different non-error types are
+unequal; `<>` is the negation of `=`. DateTime equality compares both the
+represented instant and the stored UTC offset, so two spellings of the same
+instant with different offsets are unequal. Ordering comparisons require two
+values of the same type and support Number, Text, Boolean (`FALSE` before
+`TRUE`), Date (civil chronology), and DateTime (instant chronology, regardless
+of stored offset). Other ordering comparisons return `#VALUE!`. Errors
+propagate before comparison.
+
+### 13.4 References and ranges
 
 Formulas may reference:
 
@@ -446,9 +524,67 @@ Formulas may reference:
 - table columns and regions; and
 - current-row table cells.
 
-External workbook and network references are not part of the core.
+A sheet qualifier applies to an entire reference, as in `inputs!A1:B5`.
+Qualifying only one range endpoint is invalid. Absolute markers affect copying
+and structural editing but not lookup of the authored formula: `$A$1`, `$A1`,
+and `A$1` all read `A1` before a copy adjustment.
 
-### 13.4 Required functions in `portable-a1@1`
+A reference's authored syntax determines its kind; resolved cardinality does
+not change it. Cell syntax such as `A1` evaluates to one scalar. Any explicit
+range or area syntax, including `A1:A1`, a named target authored as
+`sheet!A1:A1`, and a table column or region that currently has one row,
+evaluates to an internal
+rectangular Range traversed in row-major order. There is no implicit
+intersection or implicit array result: using a Range where a scalar is required
+returns `#VALUE!`. Only functions whose signatures accept ranges may consume
+one. This distinction remains stable when a table grows or shrinks.
+
+Structured selectors `#Headers` and `#Data` use that exact spelling. Table and
+header names are case-sensitive; `]]` represents `]` within a header. A
+current-row reference is resolvable only for a formula evaluated in a data row
+of that same table. A qualifier on `table[@Header]` MUST identify the current
+table. An unresolved sheet, table, header, or invalid current-row context
+produces `MS2103` during validation and `#REF!` if evaluation is requested. An
+unresolved bare workbook name produces `MS2103` and evaluates to `#NAME?`.
+
+External workbook references, whole-row or whole-column references, range
+unions, intersections, and network references are not part of the core.
+
+### 13.5 Evaluation and error propagation
+
+Formula evaluation has the scalar types Blank, Text, Number, Boolean, Date,
+DateTime, and Error, plus the internal Range described above. It does not add a
+date serial-number type or equate Blank with empty Text.
+
+Required operands and function arguments are evaluated left-to-right. Ranges
+are traversed row-major. Unless a function explicitly inspects or counts an
+error, the first evaluated error is returned; errors have no severity ranking.
+`IF`, `IFERROR`, `AND`, and `OR` are the lazy exceptions described below.
+
+Runtime failures use these errors:
+
+| Condition | Result |
+| --- | --- |
+| Division or modulo by zero | `#DIV/0!` |
+| Lookup has no match | `#N/A` |
+| Unknown function or workbook name | `#NAME?` |
+| Non-finite result or numeric/date domain failure | `#NUM!` |
+| Unresolved or out-of-bounds reference | `#REF!` |
+| Wrong type, arity, or range shape | `#VALUE!` |
+| Circular dependency | `#CIRC!` |
+
+A calculator MUST discover dependencies from every syntactic reference,
+including references in a branch that may not be evaluated. It MUST evaluate
+acyclic dependencies in dependency order. Every formula cell in a strongly
+connected component, including a self-loop, returns `#CIRC!`; dependents
+outside that component observe and propagate that error normally. Iterative
+calculation is an extension.
+
+Formulas are pure and MUST NOT perform I/O. A calculator MUST NOT silently
+substitute cached values for unsupported formulas because core files do not
+contain authoritative caches.
+
+### 13.6 Required functions in `portable-a1@1`
 
 The initial function set is deliberately compact:
 
@@ -462,24 +598,111 @@ The initial function set is deliberately compact:
 | Date | `DATE`, `YEAR`, `MONTH`, `DAY` |
 | Inspection | `ISBLANK`, `ISNUMBER`, `ISTEXT`, `ISERROR` |
 
-Exact argument coercion, error propagation, and edge cases will be captured in
-the formula conformance corpus before the profile reaches stable status. Until
-then, this table defines required surface area but not final edge semantics.
+Except where stated otherwise, an arity mismatch returns `#VALUE!`, a required
+scalar receiving a range returns `#VALUE!`, and an evaluated Error propagates.
+
+#### 13.6.1 Aggregation
+
+The aggregation functions take one or more scalar or range arguments and
+flatten ranges row-major. `SUM`, `AVERAGE`, `MIN`, and `MAX` use Number values,
+ignore Blank, Text, Boolean, Date, and DateTime values, and propagate Error.
+`SUM` returns `0` if there are no numbers; `AVERAGE` returns `#DIV/0!`; and
+`MIN` and `MAX` return `#VALUE!`. Accumulation that becomes non-finite returns
+`#NUM!`.
+
+`COUNT` counts Number values, ignores non-error values of every other type, and
+propagates Error. `COUNTA` counts every non-Blank value, including empty Text
+and Error; it therefore does not propagate an error merely because it counts
+one.
+
+#### 13.6.2 Logic
+
+Logical coercion keeps Boolean unchanged, treats Blank and numeric zero as
+false, and treats every other Number as true. Text, Date, DateTime, and Range in
+a scalar position return `#VALUE!`.
+
+`IF(condition, when_true, when_false)` evaluates the condition and exactly one
+branch. `IFERROR(value, fallback)` returns `fallback` only when `value`
+evaluates to any Error; its unused expression is not evaluated. `NOT` accepts
+exactly one scalar.
+
+`AND` and `OR` accept one or more scalar or range arguments and traverse them
+left-to-right and row-major. They apply logical coercion to each value. `AND`
+returns immediately on false and `OR` immediately on true, so an error after a
+decisive value is not evaluated. An error encountered first propagates.
+
+#### 13.6.3 Numeric
+
+`ABS(value)` and `INT(value)` accept one numerically coercible scalar. `INT`
+rounds toward negative infinity. `MOD(number, divisor)` uses
+`number - divisor * floor(number / divisor)` and therefore has the divisor's
+sign; a zero divisor returns `#DIV/0!`.
+
+`ROUND(number, digits)`, `ROUNDUP(number, digits)`, and
+`ROUNDDOWN(number, digits)` require exactly two arguments. The first is
+numerically coercible. `digits` MUST be an integral Number from `-308` through
+`308`; otherwise the result is `#NUM!`. Positive digits select decimal places
+and negative digits select places to the left of the decimal point. `ROUND`
+breaks exact halfway cases away from zero, `ROUNDUP` moves away from zero, and
+`ROUNDDOWN` moves toward zero. These operations start with the exact binary64
+input value and return the nearest representable finite binary64 result; a
+non-finite intermediate or result is `#NUM!`.
+
+#### 13.6.4 Text
+
+`CONCAT` takes one or more scalar or range arguments, flattens ranges row-major,
+and applies the concatenation conversion from section 13.3. The other text
+functions take scalar input and use that same conversion.
+
+`LEFT(text[, count])` and `RIGHT(text[, count])` default `count` to `1`.
+`MID(text, start, count)` uses a one-based `start`. Counts MUST be non-negative
+integral Numbers and `start` MUST be a positive integral Number; violations
+return `#NUM!`. A position beyond the end returns empty Text. Positions and
+`LEN` count Unicode scalar values, not bytes, UTF-16 code units, or grapheme
+clusters.
+
+`LOWER` and `UPPER` change only ASCII `A` through `Z` or `a` through `z`;
+non-ASCII text is unchanged. `TRIM` removes leading and trailing U+0020 SPACE
+characters and collapses each internal run of U+0020 to one. It does not alter
+tabs, line breaks, or other Unicode whitespace.
+
+#### 13.6.5 Lookup
+
+`INDEX(array, index)` requires a one-row or one-column range and uses one-based
+row-major position. `INDEX(array, row, column)` accepts any finite rectangular
+range and uses one-based row and column positions. Indices MUST be positive
+integral Numbers; an index outside the range returns `#REF!`, while a wrong
+shape or type returns `#VALUE!`. The selected cell's calculated typed value is
+returned.
+
+`MATCH(value, array[, match_type])` requires a one-row or one-column range and
+scans in its natural order. The omitted `match_type` is `0`; `0` is the only
+mode in this profile and any other value returns `#VALUE!`. Matching uses the
+equality rules in section 13.3 and returns the one-based position of the first
+match. An error encountered before a match propagates. No match returns
+`#N/A`.
+
+#### 13.6.6 Dates
+
+`DATE(year, month, day)` requires three integral Numbers and constructs a strict
+proleptic Gregorian date. Years are `1` through `9999`; month and day MUST form
+a valid date and are not normalized across boundaries. Invalid inputs return
+`#NUM!`.
+
+`YEAR`, `MONTH`, and `DAY` each require exactly one Date or DateTime. For a
+DateTime they inspect the civil components in its stored offset, not the
+workbook display timezone. They return a Number.
+
+#### 13.6.7 Inspection
+
+`ISBLANK`, `ISNUMBER`, `ISTEXT`, and `ISERROR` each inspect exactly one scalar
+without propagating that scalar if it is an Error. Only the named type returns
+true; in particular, empty Text is not Blank. A range argument returns
+`#VALUE!`.
 
 Volatile functions such as `NOW`, `TODAY`, `RAND`, and `RANDBETWEEN` are not in
 the core profile. They would make identical source produce different results at
 different times.
-
-### 13.5 Calculation
-
-- Formulas are pure and MUST NOT perform I/O.
-- A calculator MUST construct dependencies and evaluate in dependency order.
-- A circular dependency returns `#CIRC!` for every cell in the cycle.
-- Iterative calculation is an extension.
-- Blank arithmetic coercion and function-specific coercion are defined by the
-  formula profile, not by the container grammar.
-- A calculator MUST NOT silently substitute cached values for unsupported
-  formulas because core files do not contain authoritative caches.
 
 ## 14. Formula fills
 
@@ -664,12 +887,38 @@ Canonical output MUST:
 10. Preserve explicitly authored `@book` properties, including properties set
     to their Draft 0.1 defaults, and do not synthesize properties that were
     omitted from the source.
-11. Normalize directive whitespace and values, but in Milestone 1 preserve
-    formula-body spelling exactly rather than canonicalizing it.
+11. Normalize directive whitespace and values. Implementations limited to
+    Milestone 1 MAY preserve formula-body spelling; a Milestone 2 canonicalizer
+    MUST use the formula rules below.
 12. Normalize CRLF line endings to LF in opaque extension payloads while
     preserving all other payload bytes.
 13. Exclude save times, generator versions, random IDs, and other volatile
     metadata unless explicitly authored as extension data.
+
+For `portable-a1@1`, canonical formula output MUST be produced from the parsed
+AST and MUST:
+
+- begin with exactly one `=` and contain no insignificant whitespace;
+- use uppercase function names, Boolean literals, and A1 column letters while
+  retaining lowercase stable sheet, name, and table identifiers;
+- retain authored `$` markers and emit decimal row numbers without leading
+  zeroes;
+- use the shortest finite decimal spelling that round-trips to the formula's
+  binary64 Number value, and use the canonical core error tokens;
+- delimit text with `"`, encode an embedded `"` as `""`, and preserve every
+  other text scalar exactly;
+- emit structured selectors with exact `#Headers`, `#Data`, and `@` spelling,
+  preserve header content exactly, and encode `]` within a header as `]]`;
+- separate function arguments with `,` and emit binary and unary operators
+  without surrounding whitespace; and
+- remove redundant parentheses while retaining every parenthesis required to
+  preserve the AST under the precedence and associativity rules in section
+  13.3. In particular, it MUST preserve distinctions such as `-(2^2)` versus
+  `(-2)^2`, right-associative exponentiation, and the operand order of
+  non-associative operators.
+
+Canonicalizing a formula MUST NOT resolve names, expand ranges, materialize a
+fill, or otherwise replace authored reference syntax with calculated targets.
 
 A canonicalizer MUST NOT reorder directives, properties, table rows, sheets,
 style applications, comments, or other constructs for which order or placement
