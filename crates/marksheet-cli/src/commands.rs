@@ -26,6 +26,7 @@ pub(crate) struct ConvertOptions<'a> {
     pub(crate) range: Option<Range>,
     pub(crate) table: Option<TableId>,
     pub(crate) anchor: Option<Coordinate>,
+    pub(crate) strict: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -98,6 +99,13 @@ pub(crate) fn convert(path: &Path, options: &ConvertOptions<'_>) -> Result<ExitC
         print_conversion_report(&conversion.report)?;
         return Ok(ExitCode::from(1));
     }
+    // `--strict` refuses to write anything the report already admits is not an
+    // exact carry-over. The report is unchanged so the caller can still see
+    // precisely which features would have been approximated or omitted.
+    if options.strict && conversion.report.fidelity() != marksheet_convert::Fidelity::Lossless {
+        print_conversion_report(&conversion.report)?;
+        return Ok(ExitCode::from(1));
+    }
     replace_atomically(&output, &conversion.value)?;
     print_conversion_report(&conversion.report)?;
     Ok(ExitCode::SUCCESS)
@@ -127,13 +135,13 @@ fn perform_conversion(
             reject_csv_options(options).map_err(|error| {
                 cli_conversion_failure(source_format, options.target, error, options)
             })?;
-            let workbook = validated_workbook(source).map_err(|error| {
+            let workbook = validated_workbook(source, options.strict).map_err(|error| {
                 cli_conversion_failure(source_format, options.target, error, options)
             })?;
             marksheet_convert::export_xlsx(&workbook, limits)
         }
         (SourceFormat::Marksheet, ConversionTarget::Csv) => {
-            let workbook = validated_workbook(source).map_err(|error| {
+            let workbook = validated_workbook(source, options.strict).map_err(|error| {
                 cli_conversion_failure(source_format, options.target, error, options)
             })?;
             let selection = csv_export_selection(options).map_err(|error| {
@@ -209,8 +217,27 @@ fn serialize_imported_workbook(
     })
 }
 
+/// Diagnostics that report a *defined evaluation outcome* rather than a broken
+/// document. SPEC section 13 gives each of these a runtime error value —
+/// `MS2103` evaluates to `#REF!` or `#NAME?`, `MS2303` to `#CIRC!` — and a
+/// spreadsheet GUI stores such workbooks happily, so refusing to convert one
+/// would leave the importer able to produce a workbook the exporter rejects.
+/// `--strict` restores the stricter contract for callers that want it.
+///
+/// Everything else stays fatal in both modes. A malformed formula (`MS2202`)
+/// "makes the document invalid" per section 13.2 rather than becoming a runtime
+/// error, and the compile and resource-limit codes mean the calculator could not
+/// finish its analysis at all.
+fn is_evaluation_outcome(code: &DiagnosticCode) -> bool {
+    matches!(
+        code.as_str(),
+        marksheet_calc::UNRESOLVED_REFERENCE_DIAGNOSTIC | marksheet_calc::FORMULA_CYCLE_DIAGNOSTIC
+    )
+}
+
 fn validated_workbook(
     source: &[u8],
+    strict: bool,
 ) -> Result<marksheet_model::Workbook, marksheet_convert::ConvertError> {
     let mut document = parse_with_extensions(source);
     if document.parsed.has_errors() || !document.capabilities_complete {
@@ -236,13 +263,21 @@ fn validated_workbook(
     let formula_diagnostics = validate_formulas(&workbook);
     if let Some(diagnostic) = formula_diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.severity == Severity::Error)
+        .filter(|diagnostic| diagnostic.severity == Severity::Error)
+        .find(|diagnostic| strict || !is_evaluation_outcome(&diagnostic.code))
     {
         return Err(conversion_error(
             marksheet_convert::ConvertErrorCode::InvalidWorkbook,
             format!(
-                "Marksheet formula validation failed ({}: {})",
-                diagnostic.code, diagnostic.message
+                "Marksheet formula validation failed ({}: {}){}",
+                diagnostic.code,
+                diagnostic.message,
+                if strict && is_evaluation_outcome(&diagnostic.code) {
+                    "; this formula evaluates to a defined error value and is \
+                     accepted without --strict"
+                } else {
+                    ""
+                }
             ),
         ));
     }
@@ -408,7 +443,10 @@ fn source_format(path: &Path) -> Result<SourceFormat, CliError> {
         .map(str::to_ascii_lowercase);
     match extension.as_deref() {
         Some("ms") => Ok(SourceFormat::Marksheet),
-        Some("xlsx") => Ok(SourceFormat::Xlsx),
+        // Macro-enabled and template workbooks are the same OOXML package the
+        // importer already reads; it reports their macro content as omitted
+        // rather than refusing the file, so inference accepts them too.
+        Some("xlsx" | "xlsm" | "xltx" | "xltm") => Ok(SourceFormat::Xlsx),
         Some("csv") => Ok(SourceFormat::Csv),
         _ => Err(CliError::UnknownInputFormat(path.to_owned())),
     }
@@ -1081,7 +1119,7 @@ impl fmt::Display for CliError {
             ),
             Self::UnknownInputFormat(path) => write!(
                 formatter,
-                "cannot infer input format from {}; expected .ms, .xlsx, or .csv",
+                "cannot infer input format from {}; expected .ms, .xlsx, .xlsm, .xltx, .xltm, or .csv",
                 path.display()
             ),
             Self::MissingWorkbook => {

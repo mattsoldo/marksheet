@@ -982,11 +982,22 @@ fn render_excel_reference(
                 render_a1(&range.end)
             ))
         }
-        Reference::Name { name } => symbols
-            .name_names
-            .get(name.as_str())
-            .cloned()
-            .ok_or_else(|| invalid_workbook(format!("formula refers to unresolved name {name}"))),
+        Reference::Name { name } => symbols.name_names.get(name.as_str()).cloned().map_or_else(
+            || {
+                // An undeclared name has no defined name to point at, but its
+                // own spelling is a valid Excel name, and Excel resolves it to
+                // `#NAME?` -- exactly the value SPEC section 13 requires.
+                // Writing it through is therefore faithful, not lossy.
+                if valid_defined_name(name.as_str()) {
+                    Ok(name.as_str().to_owned())
+                } else {
+                    Err(invalid_workbook(format!(
+                        "formula refers to unresolved name {name}"
+                    )))
+                }
+            },
+            Ok,
+        ),
         Reference::Structured(reference) => match reference {
             StructuredReference::Column { table, header } => Ok(format!(
                 "{}[{}]",
@@ -1086,7 +1097,9 @@ fn valid_defined_name(value: &str) -> bool {
     matches!(characters.next(), Some(first) if first.is_ascii_alphabetic() || first == '_')
         && characters
             .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '.'))
-        && Coordinate::parse(value).is_err()
+        // Shares the importer's and serializer's single definition, so a name
+        // that survived import is not renamed on the way back out.
+        && !marksheet_model::resembles_cell_address(value)
         && !matches!(value.to_ascii_lowercase().as_str(), "r" | "c")
 }
 

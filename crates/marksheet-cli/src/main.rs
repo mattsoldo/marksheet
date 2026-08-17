@@ -133,6 +133,14 @@ enum Command {
         /// Target table anchor for CSV import.
         #[arg(long)]
         anchor: Option<marksheet_model::Coordinate>,
+        /// Refuse any conversion that would not be exact.
+        ///
+        /// Importing rejects a source whose fidelity is not `lossless`, and
+        /// exporting additionally rejects formulas that evaluate to a defined
+        /// error value such as `#CIRC!` or `#NAME?`, which are otherwise
+        /// converted and reported.
+        #[arg(long)]
+        strict: bool,
         /// Source workbook or CSV file.
         path: PathBuf,
     },
@@ -210,6 +218,7 @@ fn main() -> ExitCode {
             range,
             table,
             anchor,
+            strict,
             path,
         } => commands::convert(
             &path,
@@ -221,6 +230,7 @@ fn main() -> ExitCode {
                 range,
                 table,
                 anchor,
+                strict,
             },
         ),
     };
