@@ -173,6 +173,14 @@ impl Lowerer<'_> {
         let Some(tokens) = self.exact_tokens(directive.arguments, 2) else {
             return;
         };
+        if tokens[0].quoted {
+            self.diagnostics.push(error(
+                "MS1201",
+                "sheet identifier must not be a JSON string",
+                tokens[0].span,
+            ));
+            return;
+        }
         let Ok(id) = SheetId::parse(&tokens[0].text) else {
             self.diagnostics
                 .push(error("MS1201", "invalid sheet identifier", tokens[0].span));
@@ -209,7 +217,15 @@ impl Lowerer<'_> {
         let Some(tokens) = self.exact_tokens(csv.directive.arguments, expected) else {
             return;
         };
-        if tokens.last().is_none_or(|token| token.text != "csv") {
+        // The grammar spells the encoding as a bare `csv` literal, so a JSON
+        // string that decodes to `csv` must not be accepted here.
+        let encoding = &tokens[expected - 1];
+        if encoding.quoted {
+            let span = encoding.span;
+            self.invalid(span, "block encoding must not be a JSON string");
+            return;
+        }
+        if encoding.text != "csv" {
             self.invalid(
                 csv.directive.arguments,
                 "only the csv block encoding is supported",
@@ -217,6 +233,14 @@ impl Lowerer<'_> {
             return;
         }
         let anchor_index = usize::from(csv.kind == CsvKind::Table);
+        if tokens[anchor_index].quoted {
+            self.diagnostics.push(error(
+                "MS1202",
+                "block anchor must not be a JSON string",
+                tokens[anchor_index].span,
+            ));
+            return;
+        }
         let Ok(anchor) = Coordinate::parse(&tokens[anchor_index].text) else {
             self.diagnostics.push(error(
                 "MS1202",
@@ -278,6 +302,14 @@ impl Lowerer<'_> {
         }
 
         if csv.kind == CsvKind::Table {
+            if tokens[0].quoted {
+                self.diagnostics.push(error(
+                    "MS1201",
+                    "table identifier must not be a JSON string",
+                    tokens[0].span,
+                ));
+                return;
+            }
             let Ok(table_id) = TableId::parse(&tokens[0].text) else {
                 self.diagnostics
                     .push(error("MS1201", "invalid table identifier", tokens[0].span));
@@ -364,6 +396,14 @@ impl Lowerer<'_> {
         let Some((id_token, property_span)) = self.first_token_and_rest(directive.arguments) else {
             return;
         };
+        if id_token.quoted {
+            self.diagnostics.push(error(
+                "MS1201",
+                "style identifier must not be a JSON string",
+                id_token.span,
+            ));
+            return;
+        }
         let Ok(id) = StyleId::parse(&id_token.text) else {
             self.diagnostics
                 .push(error("MS1201", "invalid style identifier", id_token.span));
@@ -524,6 +564,14 @@ impl Lowerer<'_> {
         let Some(tokens) = self.exact_tokens(directive.arguments, 1) else {
             return;
         };
+        if tokens[0].quoted {
+            self.diagnostics.push(error(
+                "MS1201",
+                "extension capability must not be a JSON string",
+                tokens[0].span,
+            ));
+            return;
+        }
         let Ok(capability) = ExtensionId::parse(&tokens[0].text) else {
             self.diagnostics.push(error(
                 "MS1201",
@@ -578,6 +626,14 @@ impl Lowerer<'_> {
         let Some(tokens) = self.exact_tokens(extension.directive.arguments, 2) else {
             return;
         };
+        if tokens[0].quoted {
+            self.diagnostics.push(error(
+                "MS1201",
+                "extension capability must not be a JSON string",
+                tokens[0].span,
+            ));
+            return;
+        }
         let Ok(capability) = ExtensionId::parse(&tokens[0].text) else {
             self.diagnostics.push(error(
                 "MS1201",
@@ -750,6 +806,14 @@ impl Lowerer<'_> {
         };
         let mut styles = Vec::new();
         for token in &tokens {
+            if token.quoted {
+                self.diagnostics.push(error(
+                    "MS1201",
+                    "style identifier must not be a JSON string",
+                    token.span,
+                ));
+                continue;
+            }
             let Ok(style) = StyleId::parse(&token.text) else {
                 self.diagnostics
                     .push(error("MS1201", "invalid style identifier", token.span));
@@ -823,11 +887,27 @@ impl Lowerer<'_> {
         let Some(tokens) = self.exact_tokens(directive.arguments, 2) else {
             return;
         };
+        if tokens[0].quoted {
+            self.diagnostics.push(error(
+                "MS1202",
+                "column range must not be a JSON string",
+                tokens[0].span,
+            ));
+            return;
+        }
         let Some(columns) = parse_column_range(&tokens[0].text) else {
             self.diagnostics
                 .push(error("MS1202", "invalid column range", tokens[0].span));
             return;
         };
+        if tokens[1].quoted {
+            self.diagnostics.push(error(
+                "MS2201",
+                "column width must not be a JSON string",
+                tokens[1].span,
+            ));
+            return;
+        }
         let Some(width) = tokens[1]
             .text
             .strip_prefix("width=")
@@ -855,11 +935,27 @@ impl Lowerer<'_> {
         let Some(tokens) = self.exact_tokens(directive.arguments, 2) else {
             return;
         };
+        if tokens[0].quoted {
+            self.diagnostics.push(error(
+                "MS1202",
+                "row range must not be a JSON string",
+                tokens[0].span,
+            ));
+            return;
+        }
         let Some(rows) = parse_row_range(&tokens[0].text) else {
             self.diagnostics
                 .push(error("MS1202", "invalid row range", tokens[0].span));
             return;
         };
+        if tokens[1].quoted {
+            self.diagnostics.push(error(
+                "MS2201",
+                "row height must not be a JSON string",
+                tokens[1].span,
+            ));
+            return;
+        }
         let Some(height) = tokens[1]
             .text
             .strip_prefix("height=")
