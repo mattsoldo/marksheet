@@ -42,15 +42,15 @@ pub struct ViewLimits {
     pub max_style_regions: usize,
     /// Maximum ordered style applications resolved for one presented cell.
     pub max_style_layers_per_cell: usize,
-    /// Maximum pre-indexed `@apply` directives examined while projecting one
+    /// Maximum pre-indexed `@apply` directives resolved while projecting one
     /// viewport.
     ///
-    /// Each sheet keeps a per-axis interval index over its `@apply` targets,
-    /// so a request only examines the applications whose row or column band
-    /// reaches the requested range. Directives elsewhere on the sheet are
-    /// pruned without being examined and do not count against this limit: a
+    /// Each sheet keeps a rectangle index over its `@apply` targets, so a
+    /// request resolves exactly the applications whose target rectangle
+    /// intersects the requested range on *both* axes. Directives that do not
+    /// reach the request are pruned and do not count against this limit: a
     /// sheet may hold far more applications than this, and only a viewport
-    /// that would actually have to look at more than this many is refused.
+    /// that genuinely overlaps more than this many is refused.
     pub max_style_applications: usize,
     /// Bounds used when indexing fills and calculating viewport values.
     pub calculation: CalcLimits,
@@ -281,7 +281,7 @@ impl fmt::Display for ViewError {
                 limit,
             } => write!(
                 formatter,
-                "viewport must examine at least {applications} style applications; limit is {limit}"
+                "viewport overlaps at least {applications} style applications; limit is {limit}"
             ),
             Self::CoordinateOverflow => formatter.write_str("viewport coordinate overflow"),
         }
@@ -296,81 +296,148 @@ struct IndexedStyleApplication {
     source_order: u64,
 }
 
-/// One `@apply` target's inclusive extent on a single sheet axis.
-#[derive(Clone, Copy, Debug)]
-struct AxisInterval {
-    start: u64,
-    end: u64,
+/// One `@apply` target's inclusive rectangle, tagged with its source order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ApplicationRectangle {
+    row_start: u64,
+    row_end: u64,
+    column_start: u64,
+    column_end: u64,
     /// Position of the owning application within its sheet's source order.
     application: usize,
 }
 
-/// A bounded band query against an [`AxisIntervalIndex`].
+impl ApplicationRectangle {
+    fn from_range(range: Range, application: usize) -> Self {
+        Self {
+            row_start: range.start.row,
+            row_end: range.end.row,
+            column_start: range.start.column,
+            column_end: range.end.column,
+            application,
+        }
+    }
+}
+
+/// A bounded rectangular query against an [`ApplicationRectangleIndex`].
 #[derive(Clone, Copy, Debug)]
-struct AxisIntervalQuery {
-    start: u64,
-    end: u64,
-    /// Maximum intervals the caller is willing to have examined.
+struct RectangleQuery {
+    row_start: u64,
+    row_end: u64,
+    column_start: u64,
+    column_end: u64,
+    /// Maximum overlapping rectangles the caller is willing to receive.
     limit: usize,
 }
 
-/// An interval index over one axis of a sheet's `@apply` targets.
-///
-/// Intervals are held sorted by start with a max-end tournament tree above
-/// them. A subtree is skipped whole when its smallest start is past the
-/// queried band or its largest end is before it, so a query descends only
-/// where an overlapping interval can exist. Enumerating the applications near
-/// a viewport therefore costs work proportional to the overlapping intervals
-/// plus the tree depth, never to the number of `@apply` directives authored
-/// on the sheet. The index itself stays a small constant factor of the
-/// applications the view already retains, so no build-time bound is traded
-/// away for the per-viewport one.
-#[derive(Clone, Debug, Default)]
-struct AxisIntervalIndex {
-    /// Sorted by `start`, then by source order for a stable layout.
-    intervals: Vec<AxisInterval>,
-    /// `max_end[node]` is the largest interval end within that node's subtree.
-    max_end: Vec<u64>,
+impl RectangleQuery {
+    fn new(range: Range, limit: usize) -> Self {
+        Self {
+            row_start: range.start.row,
+            row_end: range.end.row,
+            column_start: range.start.column,
+            column_end: range.end.column,
+            limit,
+        }
+    }
 }
 
-impl AxisIntervalIndex {
-    fn new(mut intervals: Vec<AxisInterval>) -> Self {
-        intervals.sort_unstable_by_key(|interval| (interval.start, interval.application));
-        let nodes = intervals.len().saturating_mul(4);
+/// The extent of every rectangle beneath one node of the index.
+#[derive(Clone, Copy, Debug)]
+struct SubtreeBounds {
+    max_row_end: u64,
+    min_column_start: u64,
+    max_column_end: u64,
+}
+
+impl SubtreeBounds {
+    /// Bounds that reject every query, used for nodes with no rectangles.
+    const EMPTY: Self = Self {
+        max_row_end: 0,
+        min_column_start: u64::MAX,
+        max_column_end: 0,
+    };
+}
+
+/// A rectangle index over one sheet's `@apply` targets.
+///
+/// Rectangles are held sorted by row start with a tournament tree above them
+/// that carries each subtree's bounding box. A subtree is skipped whole when
+/// that box cannot reach the queried rectangle on *either* axis: its smallest
+/// row start is past the query, its largest row end is before it, its
+/// smallest column start is past the query, or its largest column end is
+/// before it. A query therefore descends only where a rectangle overlapping
+/// on *both* axes can exist, and every position it reports is a true overlap
+/// rather than a single-axis candidate.
+///
+/// Testing both axes together is what keeps a viewport away from the styled
+/// area cheap on a sheet that mixes full-height and full-width applications:
+/// neither axis alone discriminates there, since the whole-column directives
+/// span every row and the whole-row directives span every column, yet the
+/// bounding boxes still separate both groups from the request.
+///
+/// The column tests only ever prune further, so a query descends no more
+/// nodes than the row bound alone would: work stays proportional to the
+/// applications sharing the requested row band, plus the tree depth, and is
+/// never proportional to the `@apply` directives authored elsewhere on the
+/// sheet. The index stays a small constant factor of the applications the
+/// view already retains, so no build-time bound is traded away for the
+/// per-viewport one.
+#[derive(Clone, Debug, Default)]
+struct ApplicationRectangleIndex {
+    /// Sorted by `row_start`, then by source order for a stable layout.
+    rectangles: Vec<ApplicationRectangle>,
+    /// `bounds[node]` is the bounding box of that node's subtree.
+    bounds: Vec<SubtreeBounds>,
+}
+
+impl ApplicationRectangleIndex {
+    fn new(mut rectangles: Vec<ApplicationRectangle>) -> Self {
+        rectangles.sort_unstable_by_key(|rectangle| (rectangle.row_start, rectangle.application));
+        let nodes = rectangles.len().saturating_mul(4);
         let mut index = Self {
-            intervals,
-            max_end: vec![0; nodes],
+            rectangles,
+            bounds: vec![SubtreeBounds::EMPTY; nodes],
         };
-        if let Some(last) = index.intervals.len().checked_sub(1) {
+        if let Some(last) = index.rectangles.len().checked_sub(1) {
             index.fill(0, 0, last);
         }
         index
     }
 
-    /// Populates `max_end` for the subtree covering `intervals[low..=high]`.
-    fn fill(&mut self, node: usize, low: usize, high: usize) -> u64 {
+    /// Populates `bounds` for the subtree covering `rectangles[low..=high]`.
+    fn fill(&mut self, node: usize, low: usize, high: usize) -> SubtreeBounds {
         let value = if low == high {
-            self.intervals[low].end
+            let rectangle = self.rectangles[low];
+            SubtreeBounds {
+                max_row_end: rectangle.row_end,
+                min_column_start: rectangle.column_start,
+                max_column_end: rectangle.column_end,
+            }
         } else {
             let middle = low + (high - low) / 2;
             let left = self.fill(node * 2 + 1, low, middle);
             let right = self.fill(node * 2 + 2, middle + 1, high);
-            left.max(right)
+            SubtreeBounds {
+                max_row_end: left.max_row_end.max(right.max_row_end),
+                min_column_start: left.min_column_start.min(right.min_column_start),
+                max_column_end: left.max_column_end.max(right.max_column_end),
+            }
         };
-        self.max_end[node] = value;
+        self.bounds[node] = value;
         value
     }
 
-    /// Collects the source-order positions of every interval overlapping the
-    /// queried band, in index order.
+    /// Collects the source-order positions of every rectangle overlapping the
+    /// query on both axes, in index order.
     ///
     /// # Errors
     ///
-    /// Returns the number of intervals examined, `limit + 1`, as soon as the
-    /// band is found to overlap more intervals than the query allows.
-    fn overlapping(&self, query: AxisIntervalQuery) -> Result<Vec<usize>, usize> {
+    /// Returns the number of overlapping rectangles found, `limit + 1`, as
+    /// soon as the query is known to overlap more than it allows.
+    fn overlapping(&self, query: RectangleQuery) -> Result<Vec<usize>, usize> {
         let mut found = Vec::new();
-        let Some(last) = self.intervals.len().checked_sub(1) else {
+        let Some(last) = self.rectangles.len().checked_sub(1) else {
             return Ok(found);
         };
         if self.collect(0, 0, last, query, &mut found) {
@@ -380,24 +447,32 @@ impl AxisIntervalIndex {
         }
     }
 
-    /// Walks the subtree covering `intervals[low..=high]`, returning `false`
-    /// once more than `query.limit` intervals have been examined.
+    /// Walks the subtree covering `rectangles[low..=high]`, returning `false`
+    /// once more than `query.limit` overlapping rectangles have been found.
     fn collect(
         &self,
         node: usize,
         low: usize,
         high: usize,
-        query: AxisIntervalQuery,
+        query: RectangleQuery,
         found: &mut Vec<usize>,
     ) -> bool {
-        // Sorted starts make `intervals[low].start` the smallest start in this
-        // subtree, and the tournament tree makes `max_end[node]` its largest
-        // end. Either bound failing rules out every interval below this node.
-        if self.intervals[low].start > query.end || self.max_end[node] < query.start {
+        // Sorted starts make `rectangles[low].row_start` the smallest row
+        // start in this subtree, and the tournament tree carries the other
+        // three bounds. Any one of them failing rules out every rectangle
+        // below this node.
+        let bounds = self.bounds[node];
+        if self.rectangles[low].row_start > query.row_end
+            || bounds.max_row_end < query.row_start
+            || bounds.min_column_start > query.column_end
+            || bounds.max_column_end < query.column_start
+        {
             return true;
         }
         if low == high {
-            found.push(self.intervals[low].application);
+            // A leaf's bounding box is its own rectangle, so passing all four
+            // tests above is exactly a two-axis overlap.
+            found.push(self.rectangles[low].application);
             return found.len() <= query.limit;
         }
         let middle = low + (high - low) / 2;
@@ -406,82 +481,52 @@ impl AxisIntervalIndex {
     }
 }
 
-/// One sheet's `@apply` applications in source order, with an interval index
-/// over each axis of their targets.
+/// One sheet's `@apply` applications in source order, with a rectangle index
+/// over their targets.
 #[derive(Clone, Debug, Default)]
 struct SheetStyleIndex {
     applications: Vec<IndexedStyleApplication>,
-    rows: AxisIntervalIndex,
-    columns: AxisIntervalIndex,
+    targets: ApplicationRectangleIndex,
 }
 
 impl SheetStyleIndex {
     fn new(applications: Vec<IndexedStyleApplication>) -> Self {
-        let rows = AxisIntervalIndex::new(
+        let targets = ApplicationRectangleIndex::new(
             applications
                 .iter()
                 .enumerate()
-                .map(|(application, indexed)| AxisInterval {
-                    start: indexed.range.start.row,
-                    end: indexed.range.end.row,
-                    application,
-                })
-                .collect(),
-        );
-        let columns = AxisIntervalIndex::new(
-            applications
-                .iter()
-                .enumerate()
-                .map(|(application, indexed)| AxisInterval {
-                    start: indexed.range.start.column,
-                    end: indexed.range.end.column,
-                    application,
+                .map(|(application, indexed)| {
+                    ApplicationRectangle::from_range(indexed.range, application)
                 })
                 .collect(),
         );
         Self {
             applications,
-            rows,
-            columns,
+            targets,
         }
     }
 
-    /// Returns the applications overlapping `range` in source order, having
-    /// examined at most `limit` of them.
+    /// Returns the applications whose target overlaps `range`, in source
+    /// order.
     ///
     /// # Errors
     ///
-    /// Returns the number examined when neither axis can narrow the range to
-    /// `limit` applications or fewer.
+    /// Returns the number found when more than `limit` applications truly
+    /// overlap `range`.
     fn overlapping(
         &self,
         range: Range,
         limit: usize,
     ) -> Result<Vec<&IndexedStyleApplication>, usize> {
-        // Either axis alone yields a superset of the overlapping applications.
-        // Rows are tried first because a viewport typically scrolls along
-        // them; a viewport that shares its rows with too many applications can
-        // still be cheap on the column axis, so that is the fallback before
-        // the request is refused.
-        let mut positions = match self.rows.overlapping(AxisIntervalQuery {
-            start: range.start.row,
-            end: range.end.row,
-            limit,
-        }) {
-            Ok(positions) => positions,
-            Err(_) => self.columns.overlapping(AxisIntervalQuery {
-                start: range.start.column,
-                end: range.end.column,
-                limit,
-            })?,
-        };
-        // Style precedence is source order, which the per-axis index layout
-        // does not preserve.
+        let mut positions = self
+            .targets
+            .overlapping(RectangleQuery::new(range, limit))?;
+        // Style precedence is source order, which the index layout, sorted by
+        // row start, does not preserve.
         positions.sort_unstable();
         Ok(positions
             .into_iter()
             .filter_map(|position| self.applications.get(position))
-            .filter(|application| application.range.overlaps(range))
             .collect())
     }
 }
@@ -867,15 +912,16 @@ impl WorkbookView {
         })
     }
 
-    /// Resolves the `@apply` intervals overlapping `request`, bounding both
-    /// the work examined and the results returned.
+    /// Resolves the `@apply` targets overlapping `request`, bounding both the
+    /// work done and the results returned.
     ///
-    /// The sheet's interval index reports only the applications whose row or
-    /// column band reaches the requested range, so
+    /// The sheet's rectangle index reports exactly the applications whose
+    /// target intersects the requested range on both axes, so
     /// [`ViewLimits::max_style_applications`] bounds the applications this one
-    /// request examines. A viewport away from the styled area of an
-    /// application-heavy sheet examines nothing and is projected normally.
-    /// Both limits are checked before any output is allocated.
+    /// request resolves. A viewport away from the styled area of an
+    /// application-heavy sheet resolves nothing and is projected normally,
+    /// however many applications the sheet declares elsewhere. Both limits are
+    /// checked before any output is allocated.
     fn resolve_style_regions(
         &self,
         request: &VisibleRegionRequest,
@@ -1042,10 +1088,10 @@ fn rows_for(geometry: &AxisGeometryIndex, range: Range) -> Result<Vec<RowPresent
 ///
 /// This runs once at build time and is not itself bounded by
 /// [`ViewLimits::max_style_applications`]: that limit is a per-viewport bound
-/// on the work examined while projecting a requested region, so a sheet with
-/// many `@apply` directives must still open successfully. The limit is
-/// enforced later, in [`WorkbookView::visible_region`], against the
-/// applications the [`SheetStyleIndex`] reports as near that request.
+/// on the applications resolved while projecting a requested region, so a
+/// sheet with many `@apply` directives must still open successfully. The limit
+/// is enforced later, in [`WorkbookView::visible_region`], against the
+/// applications the [`SheetStyleIndex`] reports as overlapping that request.
 fn index_style_applications(
     sheet: &Sheet,
     prepared: &PreparedSheet,
@@ -1545,14 +1591,14 @@ mod tests {
             })
         };
 
-        // Far on both axes: the row index prunes every application.
+        // Far on both axes: the index prunes every application.
         let far = project("ZZ9000:ZZ9000").unwrap();
         assert!(far.style_regions.is_empty());
-        // Distant rows, styled column: still pruned by the row index.
+        // Distant rows, styled column: pruned on the row axis.
         let below = project("A9000:C9100").unwrap();
         assert!(below.style_regions.is_empty());
-        // Every application shares this row band, so the row index cannot
-        // narrow the request; the column index prunes them instead.
+        // Every application shares this row band, so the row axis cannot
+        // narrow the request; the column axis prunes them instead.
         let beside = project("ZZ1:ZZ1025").unwrap();
         assert!(beside.style_regions.is_empty());
         // A viewport that genuinely overlaps a few applications resolves them.
@@ -1635,47 +1681,149 @@ mod tests {
     }
 
     #[test]
-    fn axis_interval_index_examines_only_intervals_near_the_band() {
-        // One interval spans the whole axis while a thousand short ones sit at
-        // its start. A band far from the short intervals must be answerable
-        // within a limit far below their count.
-        let mut intervals = (0..1_000)
-            .map(|application| AxisInterval {
-                start: 1,
-                end: 2,
+    fn rectangle_index_reports_only_two_axis_overlaps() {
+        // One rectangle spans the whole sheet while a thousand small ones sit
+        // in its top-left corner. A viewport far from the small rectangles
+        // must be answerable within a limit far below their count, and a
+        // viewport off the sheet's styled area must report nothing at all.
+        let mut rectangles = (0..1_000)
+            .map(|application| ApplicationRectangle {
+                row_start: 1,
+                row_end: 2,
+                column_start: 1,
+                column_end: 2,
                 application,
             })
             .collect::<Vec<_>>();
-        intervals.push(AxisInterval {
-            start: 1,
-            end: 1_000_000,
+        rectangles.push(ApplicationRectangle {
+            row_start: 1,
+            row_end: 1_000_000,
+            column_start: 1,
+            column_end: 1_000_000,
             application: 1_000,
         });
-        let index = AxisIntervalIndex::new(intervals);
+        let index = ApplicationRectangleIndex::new(rectangles);
 
         assert_eq!(
-            index.overlapping(AxisIntervalQuery {
-                start: 900_000,
-                end: 900_001,
+            index.overlapping(RectangleQuery {
+                row_start: 900_000,
+                row_end: 900_001,
+                column_start: 900_000,
+                column_end: 900_001,
                 limit: 1,
             }),
             Ok(vec![1_000])
         );
         assert_eq!(
-            index.overlapping(AxisIntervalQuery {
-                start: 2_000_000,
-                end: 2_000_001,
+            index.overlapping(RectangleQuery {
+                row_start: 2_000_000,
+                row_end: 2_000_001,
+                column_start: 1,
+                column_end: 1,
+                limit: 1,
+            }),
+            Ok(Vec::new())
+        );
+        // Sharing the row band alone is not an overlap: the columns are past
+        // every rectangle on the sheet.
+        assert_eq!(
+            index.overlapping(RectangleQuery {
+                row_start: 1,
+                row_end: 2,
+                column_start: 2_000_000,
+                column_end: 2_000_001,
                 limit: 1,
             }),
             Ok(Vec::new())
         );
         assert_eq!(
-            index.overlapping(AxisIntervalQuery {
-                start: 1,
-                end: 1,
+            index.overlapping(RectangleQuery {
+                row_start: 1,
+                row_end: 1,
+                column_start: 1,
+                column_end: 1,
                 limit: 8,
             }),
             Err(9)
         );
+    }
+
+    /// Builds a sheet carrying 1025 whole-column `@apply` directives on
+    /// columns A..ALO and 1025 whole-row directives on rows 1..=1025.
+    fn banded_style_document() -> ParsedDocument {
+        use std::fmt::Write as _;
+
+        let mut source =
+            String::from("#!marksheet 0.1\n@style note italic=true\n@sheet s \"Styled\"\n");
+        for index in 0..1_025u32 {
+            let mut column = String::new();
+            let mut remaining = index;
+            loop {
+                column.insert(
+                    0,
+                    char::from(b'A' + u8::try_from(remaining % 26).unwrap_or_default()),
+                );
+                match remaining.checked_div(26) {
+                    Some(0) | None => break,
+                    Some(next) => remaining = next - 1,
+                }
+            }
+            let _ = writeln!(source, "@apply {column}1:{column}1048576 note");
+        }
+        for row in 1..=1_025u32 {
+            let _ = writeln!(source, "@apply A{row}:XFD{row} note");
+        }
+        let document = parse(source.as_bytes());
+        assert!(!document.has_errors(), "{:?}", document.diagnostics);
+        document
+    }
+
+    #[test]
+    fn banded_rows_and_columns_do_not_refuse_a_viewport_they_miss() {
+        // Regression test: a sheet may hold more whole-column applications
+        // than the limit *and* more whole-row applications than the limit. The
+        // row band alone then fails to narrow the request, and so does the
+        // column band, but a viewport outside every band overlaps nothing and
+        // must project normally rather than be refused.
+        let document = banded_style_document();
+        let mut view = WorkbookView::from_document(&document, ViewLimits::default()).unwrap();
+        let region = view
+            .visible_region(&VisibleRegionRequest {
+                // Column 5000 carries no whole-column band and row 500000
+                // carries no whole-row band.
+                sheet: "s".parse().unwrap(),
+                range: Range::parse("GJH500000").unwrap(),
+                calculate: false,
+            })
+            .unwrap();
+        assert!(region.style_regions.is_empty());
+
+        // A viewport that does sit on one band still resolves exactly it.
+        let on_a_row = view
+            .visible_region(&VisibleRegionRequest {
+                sheet: "s".parse().unwrap(),
+                range: Range::parse("GJH7").unwrap(),
+                calculate: false,
+            })
+            .unwrap();
+        assert_eq!(
+            on_a_row
+                .style_regions
+                .iter()
+                .map(|region| region.range)
+                .collect::<Vec<_>>(),
+            vec![Range::parse("GJH7").unwrap()]
+        );
+
+        // The crossing of one whole-column band and one whole-row band
+        // overlaps exactly two applications.
+        let crossing = view
+            .visible_region(&VisibleRegionRequest {
+                sheet: "s".parse().unwrap(),
+                range: Range::parse("C7").unwrap(),
+                calculate: false,
+            })
+            .unwrap();
+        assert_eq!(crossing.style_regions.len(), 2);
     }
 }
