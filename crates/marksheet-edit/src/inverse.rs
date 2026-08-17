@@ -32,6 +32,17 @@ impl InverseTransaction {
         self.patches.patches()
     }
 
+    /// The underlying exact, source-bound patch set.
+    ///
+    /// This is the single representation of an edit's undo/redo data: it
+    /// backs both [`InverseTransaction::execute`]'s validated round trip and
+    /// any caller that needs the raw byte patches directly (fixture
+    /// comparisons, `PatchSet::apply`, and similar).
+    #[must_use]
+    pub fn patch_set(&self) -> &PatchSet {
+        &self.patches
+    }
+
     /// Returns whether the transaction changes no bytes.
     #[must_use]
     pub fn is_empty(&self) -> bool {

@@ -133,12 +133,12 @@ fn calc_csv_neutralizes_text_that_csv_consumers_may_interpret_as_formulas() {
 fn calc_text_escapes_controls_without_splitting_selected_rows() {
     let workbook = TempFile::write(
         "text-controls.ms",
-        b"#!marksheet 0.1\n@sheet s \"Sheet\"\n@block A1 csv\n\"has\ttab\",\"line one\nline two\",\"carriage\rreturn\"\n@end\n",
+        b"#!marksheet 0.1\n@sheet s \"Sheet\"\n@block A1 csv\n\"has\ttab\",\"line one\nline two\"\n@end\n",
     );
 
     let output = marksheet()
         .args([
-            "calc", "--sheet", "s", "--range", "A1:C1", "--format", "text",
+            "calc", "--sheet", "s", "--range", "A1:B1", "--format", "text",
         ])
         .arg(workbook.path())
         .output()
@@ -147,7 +147,32 @@ fn calc_text_escapes_controls_without_splitting_selected_rows() {
     assert!(output.status.success(), "stderr: {}", text(&output.stderr));
     assert_eq!(
         text(&output.stdout),
-        "s!A1:C1\n\"has\\ttab\"\t|\t\"line one\\nline two\"\t|\t\"carriage\\rreturn\"\n"
+        "s!A1:B1\n\"has\\ttab\"\t|\t\"line one\\nline two\"\n"
+    );
+}
+
+/// A tab or LF is data inside a quoted field, but a bare carriage return is a
+/// SPEC section 2 line-ending violation rather than a third control character a
+/// cell may carry.
+#[test]
+fn calc_rejects_a_bare_carriage_return_inside_a_quoted_field() {
+    let workbook = TempFile::write(
+        "text-carriage-return.ms",
+        b"#!marksheet 0.1\n@sheet s \"Sheet\"\n@block A1 csv\n\"carriage\rreturn\"\n@end\n",
+    );
+
+    let output = marksheet()
+        .args(["calc", "--sheet", "s", "--range", "A1", "--format", "text"])
+        .arg(workbook.path())
+        .output()
+        .expect("CLI executes");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        text(&output.stderr)
+            .contains("error[MS1102]: bare carriage return is not a valid line ending"),
+        "stderr: {}",
+        text(&output.stderr)
     );
 }
 

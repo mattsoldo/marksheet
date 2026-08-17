@@ -350,7 +350,8 @@ fn transaction_fixtures_execute_through_the_public_edit_api() {
                 );
                 assert_eq!(
                     result
-                        .inverse
+                        .inverse_transaction
+                        .patch_set()
                         .apply(&result.source)
                         .expect("inverse applies"),
                     before,
@@ -359,7 +360,7 @@ fn transaction_fixtures_execute_through_the_public_edit_api() {
                 );
                 if let Some(expected_inverse) = fixture.inverse_patches {
                     assert_eq!(
-                        actual_patches(result.inverse.patches()),
+                        actual_patches(result.inverse_transaction.patches()),
                         expected_inverse,
                         "fixture {} produced a different inverse patch plan",
                         case.id
@@ -377,7 +378,7 @@ fn transaction_fixtures_execute_through_the_public_edit_api() {
                     .unwrap_or_else(|error| panic!("no-op fixture {} failed: {error}", case.id));
                 assert!(!result.changed());
                 assert!(result.patches.is_empty());
-                assert!(result.inverse.is_empty());
+                assert!(result.inverse_transaction.is_empty());
                 assert_eq!(result.source, source(&fixture.after));
             }
             "reject" => {

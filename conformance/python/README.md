@@ -6,7 +6,9 @@ binary, WebAssembly module, FFI boundary, generated protocol declaration, or
 any production parser code. It exists so a future Rust reference projection can
 be compared against an independently implemented consumer.
 
-It validates UTF-8/BOM and LF/CRLF physical lines, directive structure,
+It validates UTF-8/BOM and LF/CRLF physical lines (a byte-order mark is
+`MS1002`, and invalid UTF-8 is `MS1003` and withholds the semantic model,
+matching the reference parser), directive structure,
 CSV quoting and multiline records, scalar classification, source byte spans,
 workbook declarations, sparse blocks/tables, styles, names, fills, applies,
 geometry, opaque extensions, and extension-registry diagnostics `MS3101`–

@@ -93,6 +93,56 @@ fn assert_expected_codes_are_present(path: &Path, expected: &[String], actual: &
     }
 }
 
+/// Byte ranges that SPEC section 17 makes opaque: the payload of every
+/// `@extension` block, whose unknown bytes must survive verbatim.
+///
+/// Everything outside these ranges is structural, and SPEC section 18 item 2
+/// requires it to use LF line endings.
+fn opaque_payload_ranges(document: &marksheet_syntax::ParsedDocument) -> Vec<(usize, usize)> {
+    document
+        .source_map
+        .extensions()
+        .iter()
+        .map(|extension| {
+            let start = usize::try_from(extension.payload.start).expect("payload start fits usize");
+            let end = usize::try_from(extension.payload.end).expect("payload end fits usize");
+            (start, end)
+        })
+        .collect()
+}
+
+/// Whether the byte at `offset` belongs to an opaque payload.
+fn is_inside_opaque_payload(ranges: &[(usize, usize)], offset: usize) -> bool {
+    ranges
+        .iter()
+        .any(|&(start, end)| offset >= start && offset < end)
+}
+
+/// Whether inserting a byte at `offset` extends an opaque payload without
+/// disturbing the structure around it. Inserting at the end bound changes the
+/// first byte of the structural `@end` line, so that boundary is excluded.
+fn extends_opaque_payload(ranges: &[(usize, usize)], offset: usize) -> bool {
+    ranges
+        .iter()
+        .any(|&(start, end)| offset >= start && offset < end)
+}
+
+/// Asserts that no structural byte of `bytes` is a carriage return.
+///
+/// SPEC section 18 item 12 keeps opaque payload bytes other than CRLF, so the
+/// LF-only rule is checked against structural content only.
+fn assert_no_structural_carriage_return(path: &Path, bytes: &[u8], description: &str) {
+    let document = parse(bytes);
+    let ranges = opaque_payload_ranges(&document);
+    for (offset, byte) in bytes.iter().enumerate() {
+        assert!(
+            *byte != b'\r' || is_inside_opaque_payload(&ranges, offset),
+            "{} {description} must use LF line endings; a structural carriage return remains at byte {offset}",
+            path.display()
+        );
+    }
+}
+
 fn assert_canonicalizes_cleanly(path: &Path, original: &[u8]) {
     let document = parse(original);
     assert!(
@@ -111,11 +161,7 @@ fn assert_canonicalizes_cleanly(path: &Path, original: &[u8]) {
     let canonical = canonicalize(&document).unwrap_or_else(|diagnostics| {
         panic!("{} should canonicalize: {diagnostics:?}", path.display())
     });
-    assert!(
-        !canonical.windows(2).any(|bytes| bytes == b"\r\n"),
-        "{} canonical output must use LF line endings",
-        path.display()
-    );
+    assert_no_structural_carriage_return(path, &canonical, "canonical output");
 
     let reparsed = parse(&canonical);
     assert!(
@@ -185,6 +231,92 @@ fn all_valid_fixtures_are_lossless_and_canonicalizable() {
     for path in fixtures {
         let input = source(&path);
         assert_canonicalizes_cleanly(&path, &input);
+    }
+}
+
+/// Canonical output normalizes structural line endings, so any structural
+/// position where a lone carriage return could slip through undiagnosed is a
+/// position where `fmt` would silently rewrite a byte. Injecting one at every
+/// byte offset of every valid fixture keeps that guarantee from regressing in a
+/// code path no fixture happens to cover.
+///
+/// Opaque `@extension` payload interiors are exempt by SPEC sections 17 and 18
+/// item 12: a carriage return there is unknown payload data that must survive
+/// rather than a line ending. Payload offsets are therefore asserted the other
+/// way round — no diagnostic, and canonical output that still carries the byte.
+///
+/// A structural injection can also relocate the byte into a payload, because
+/// splitting an `@end` line makes the payload run on. That mutation damages the
+/// document elsewhere, so the only guarantee left is the one that matters: the
+/// byte is never silently rewritten.
+#[test]
+fn a_lone_carriage_return_is_diagnosed_unless_it_is_opaque_payload_data() {
+    let mut fixtures = fixture_paths("tests/conformance/valid");
+    fixtures.extend(fixture_paths("tests/roundtrip"));
+    for path in fixtures {
+        let input = source(&path);
+        let payloads = opaque_payload_ranges(&parse(&input));
+        for offset in 0..=input.len() {
+            // Inserting before an LF spells a legal CRLF rather than a lone CR.
+            if input.get(offset) == Some(&b'\n') {
+                continue;
+            }
+            let mut mutated = input[..offset].to_vec();
+            mutated.push(b'\r');
+            mutated.extend_from_slice(&input[offset..]);
+            let document = parse(&mutated);
+            assert_eq!(
+                lossless_bytes(&document),
+                mutated,
+                "{} must stay byte-identical after a carriage return at byte {offset}",
+                path.display()
+            );
+            if extends_opaque_payload(&payloads, offset) {
+                assert!(
+                    !document.has_errors(),
+                    "{} must accept a carriage return at byte {offset} as opaque payload data: {:?}",
+                    path.display(),
+                    diagnostic_codes(&document)
+                );
+                let canonical = canonicalize(&document).unwrap_or_else(|diagnostics| {
+                    panic!(
+                        "{} must canonicalize with an opaque payload carriage return at byte {offset}: {diagnostics:?}",
+                        path.display()
+                    )
+                });
+                assert!(
+                    canonical.contains(&b'\r'),
+                    "{} must keep the opaque payload carriage return injected at byte {offset}",
+                    path.display()
+                );
+                continue;
+            }
+            if is_inside_opaque_payload(&opaque_payload_ranges(&document), offset) {
+                assert!(
+                    !diagnostic_codes(&document).contains(&"MS1004".to_owned()),
+                    "{} must not report a carriage return at byte {offset} as a line ending once it is payload data",
+                    path.display()
+                );
+                if let Ok(canonical) = canonicalize(&document) {
+                    assert!(
+                        canonical.contains(&b'\r'),
+                        "{} must keep the relocated payload carriage return injected at byte {offset}",
+                        path.display()
+                    );
+                }
+                continue;
+            }
+            assert!(
+                document.has_errors(),
+                "{} with a lone carriage return injected at byte {offset} parsed without errors, so canonical output would rewrite it silently",
+                path.display()
+            );
+            assert!(
+                canonicalize(&document).is_err(),
+                "{} must refuse canonicalization with a lone carriage return at byte {offset}",
+                path.display()
+            );
+        }
     }
 }
 
