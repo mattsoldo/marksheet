@@ -80,11 +80,11 @@ Marksheet is at **Draft 0.1**. The format is being designed in public and is not
 yet stable. Files written during the `0.x` period may require migration as the
 core is refined. Stability rules become strict at `1.0`.
 
-The reference implementation has completed the Milestone 4 browser and GUI
-proof. It includes lossless parsing, canonical formatting, deterministic
-`portable-a1@1` calculation, source-aware semantic transactions, exact inverse
-patches, undo/redo, conservative external-change rebasing, semantic diff, and
-the following browser-facing layers:
+The reference implementation has completed the Milestone 5 interoperability
+and extensions proof. It includes lossless parsing, canonical formatting,
+deterministic `portable-a1@1` calculation, source-aware semantic transactions,
+exact inverse patches, undo/redo, conservative external-change rebasing,
+semantic diff, and the following interoperable layers:
 
 - `marksheet-view`, a sparse, pure-Rust, renderer-neutral projection layer. It
   returns bounded viewports and keeps authored values, virtual fills,
@@ -96,6 +96,14 @@ the following browser-facing layers:
 - `viewer`, a standalone TypeScript/DOM workbench that packages the real Wasm
   worker and displays an exact synchronized source view alongside a bounded
   grid.
+- `marksheet-convert`, a bounded semantic-IR converter for deterministic XLSX
+  import/export and explicitly selected CSV ranges or tables. Every conversion
+  returns a versioned report that distinguishes exact, approximated, omitted,
+  and unsupported features.
+- `marksheet-extensions`, a trusted static registry with exact `id@major`
+  matching and the declarative `assertions@1` demonstration extension.
+- `conformance/python`, a standard-library-only independent parser and checked
+  projection consumer for the byte-level conformance corpus.
 
 Formula diagnostics do not erase the source: a workbook that can be projected
 remains viewable with source-linked diagnostics, but semantic edits are refused
@@ -106,7 +114,13 @@ as the external source and produces no write; an unchanged document also does
 not create a writable. Browsers without a file handle use an explicit download
 instead of overwriting the selected file.
 
-Milestone 5 is the next implementation slice.
+Required unavailable extensions keep source and core structure viewable but
+make calculation and rendering explicitly incomplete. Optional unavailable and
+undeclared opaque extensions remain visible and preserved. Workbooks never
+select code, URLs, package paths, or installation behavior.
+
+Milestone 6, the coding-harness integration kit, is the next implementation
+slice.
 
 ## Build and CLI usage
 
@@ -120,6 +134,10 @@ cargo run -p marksheet-cli -- fmt --check examples/budget.ms
 cargo run -p marksheet-cli -- calc examples/budget.ms \
   --sheet summary --range A1:B4 --format json
 cargo run -p marksheet-cli -- diff old.ms new.ms
+cargo run -p marksheet-cli -- convert examples/budget.ms \
+  --to xlsx --output budget.xlsx
+cargo run -p marksheet-cli -- convert examples/budget.ms \
+  --to csv --sheet summary --range A1:B4 --output summary.csv
 ```
 
 To build the standalone `marksheet` executable:
@@ -144,6 +162,14 @@ volatile functions, I/O, clocks, randomness, and network access are not part of
 spelling. Human output is concise; `--format json` emits the versioned
 `marksheet-diff@1` envelope. Equivalent workbooks exit `0`, semantic
 differences exit `1`, and operational failures exit `2`.
+
+`marksheet convert <source> --to <marksheet|xlsx|csv>` writes its destination
+atomically and emits a `marksheet-conversion@1` JSON report on standard output.
+XLSX conversion records unsupported Office features instead of silently
+discarding them. CSV export requires exactly one `--table` or explicit
+`--sheet` plus `--range`; CSV import likewise requires an explicit target sheet
+and range or table anchor. An unsupported conversion does not write a partial
+artifact.
 
 The `marksheet-edit` crate exposes typed transactions for authored-cell edits,
 table-row appends, sheet and name renames, complete block movement, and focused

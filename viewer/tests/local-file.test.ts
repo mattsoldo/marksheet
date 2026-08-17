@@ -39,6 +39,16 @@ function snapshot(revision: number) {
     names: [],
     style_count: 0,
     name_count: 0,
+    extension_declarations: [],
+    extension_instances: [],
+    extension_support: {
+      supported_capabilities: ["assertions@1"],
+      capabilities_complete: true,
+      calculation_complete: true,
+      rendering_complete: true,
+      validation_complete: true,
+      valid: true,
+    },
   };
 }
 

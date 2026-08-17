@@ -251,6 +251,8 @@ The core `csv` body follows the field, quote, and record rules of
 - a quote inside a quoted field is written `""`;
 - quoted fields MAY contain commas and newlines;
 - LF and CRLF records are accepted;
+- a CRLF sequence inside a quoted field decodes to one LF scalar, while the
+  original field bytes remain available to lossless source-aware tools;
 - canonical output uses LF; and
 - canonical output quotes a field only when required by CSV syntax or by the
   `@end` terminator rule.
@@ -840,6 +842,34 @@ source=summary!A1:B13
 - A parser MAY still expose the core workbook model when a required extension
   is unsupported.
 
+### 17.1 Registry resolution and diagnostics
+
+An extension registry is a host-owned, trusted mapping from one **exact**
+extension ID (for example, `assertions@1`) to one implementation. An
+implementation registered for `assertions@1` does not support `assertions@2`,
+and a registry MUST NOT select a "nearest" major version. Registering the same
+exact ID more than once is a host configuration error; the host MUST reject the
+duplicate rather than making registration order observable.
+
+The following diagnostics make registry resolution observable to people and
+tools:
+
+| Code | Severity | Condition |
+| --- | --- | --- |
+| `MS3101` | error | a declared `@require` capability is unavailable |
+| `MS3102` | warning | a declared `@use` capability is unavailable |
+| `MS3103` | warning | an `@extension` instance has no declaration for its exact ID |
+
+`MS3103` does not make an otherwise well-formed extension block invalid. The
+core MUST retain that block as opaque source data, whether or not another
+extension with the same base identifier but a different major is declared.
+When a required capability is unavailable, the parser may expose the core
+workbook, but `calculation_complete` and `rendering_complete` MUST both be
+false. Optional unavailable capabilities do not make either completeness flag
+false. Registry diagnostics MUST be deterministic: order them by source span,
+then code, and cap any extension-supplied diagnostic list with an explicit
+truncation diagnostic rather than silently dropping entries.
+
 Extension support is evaluated against the application's extension registry.
 An empty registry supports no extension IDs: every `@use` produces a visible
 warning and every `@require` produces an error. Unsupported extension instances
@@ -850,7 +880,7 @@ declaration.
 Workbooks do not contain plugin URLs or executable plugin code. They MUST NOT
 cause an application to install, download, or run a plugin automatically.
 
-### 17.1 Implementation plugin surface
+### 17.2 Implementation plugin surface
 
 A runtime MAY expose hooks equivalent to:
 
@@ -864,6 +894,40 @@ registerConverter(id, converter)
 The API names and host language are not normative. The security boundary is:
 the user or host application installs implementation code; the workbook only
 contains declarative content referring to it.
+
+An extension implementation is trusted static or link-time host code in Draft
+0.1. Dynamic loading, workbook-selected paths, network fetches, subprocesses,
+and automatic installation are outside the extension model. A host passes an
+extension parser only its opaque payload and a read-only workbook view; any
+extension result, including diagnostics, is bounded by host-configured limits.
+
+### 17.3 `assertions@1` demonstration extension
+
+`assertions@1` is the reference demonstration of a declarative extension. Its
+payload is UTF-8 text containing zero or more physical lines in this grammar:
+
+```text
+assert <target> <operator> <literal>
+```
+
+`assert` is lowercase. Exactly one ASCII space separates the four tokens. A
+`target` is one concrete A1 cell, not a range. In a sheet-scoped instance it
+is an unqualified coordinate such as `B2`; in a workbook-scoped instance it
+MUST be an explicitly qualified core reference such as `inputs!B2`.
+`operator` is exactly one of `=`, `!=`, `<`, `<=`, `>`, or `>=`. A `literal`
+uses the scalar spelling in section 11, except that a textual literal is a JSON
+string and `blank` denotes a blank cell. Formula literals are forbidden. Empty
+payloads and lines beginning with `#` are permitted; every other nonempty line
+is invalid. A malformed line produces `MS3202`, a failed comparison produces
+`MS3201`, and a configured payload, line, target, range-area, or diagnostic
+limit produces `MS3203`; the latter must stop that extension instance before
+unbounded work occurs.
+
+Assertions run after core calculation and only observe a typed calculated or
+authored scalar. `=` and `!=` compare kind and value exactly; ordered operators
+require two finite numbers, two dates, or two offset datetimes. A type mismatch
+is a failed assertion, not a coercion. Assertions do not modify a workbook,
+register functions, access external state, or affect source serialization.
 
 ## 18. Canonical serialization
 
@@ -1277,17 +1341,57 @@ an implementation that exposes semantic diff MUST apply section 19.2.
 
 ### 20.6 Converter
 
-A converter SHOULD emit a report containing:
+A converter MUST emit a `marksheet-conversion@1` report. The report contains
+the source and destination format identifiers and versions, a deterministic
+ordered list of feature outcomes, diagnostics, and a top-level `fidelity` of
+`lossless`, `lossy`, or `unsupported`. Every feature outcome has a stable
+feature ID, an outcome (`exact`, `approximated`, `omitted`, or `unsupported`),
+and an optional cell, range, table, sheet, or source location. Formula
+outcomes additionally state whether the formula was preserved, translated, or
+replaced. Unknown target content encountered during import is an omission or
+unsupported outcome; it MUST NOT disappear without a report entry.
 
-- source and destination formats and versions;
-- features converted exactly;
-- features approximated;
-- features omitted;
-- formulas translated or replaced; and
-- cell or source locations for every warning.
+`lossless` is permitted only when every feature outcome is `exact` and there
+are no warning or error diagnostics. Any approximation or omission requires
+`lossy`; any failed required conversion capability or resource limit requires
+`unsupported`. A converter MUST NOT write a successful destination artifact
+when fidelity is `unsupported`. Reports are ordered by source location, then
+feature ID, then outcome, so equal inputs and options produce byte-equivalent
+JSON reports.
 
-It MUST NOT describe a conversion as lossless when the report contains an
-approximation or omission.
+The initial XLSX profile supports workbook sheet order and labels, scalar
+cells, portable-profile formulas that map exactly, rectangular tables and
+headers, named ranges, Draft 0.1 core styles, and row/column geometry. It
+explicitly reports macros, external links, pivots, charts, unsupported formula
+functions, conditional formatting, merged cells, themes, borders, font-family
+choices, rich text, data validation, hidden/grouped dimensions, and other
+advanced formatting. Importers MUST also report any unsupported OOXML part
+instead of assuming it is harmless.
+
+An XLSX writer MUST produce deterministic package bytes: fixed ZIP member
+order, fixed timestamps, stable relationship identifiers, stable XML attribute
+ordering, LF XML line endings, and no generator, save-time, random, or host
+metadata. It MUST reject, with report diagnostics, input archives exceeding
+configured limits for archive bytes, member count, uncompressed bytes, XML
+depth, worksheets, cells, shared strings, formulas, or style records; it MUST
+not silently truncate imported content.
+
+The reference converter uses `MS4101` for a refused conversion resource limit,
+`MS4102` for a reported approximation or omission, and `MS4103` for a CSV
+request without one explicit table or sheet-range selection. `MS4104` reports
+a CSV import request without an explicit Marksheet target sheet identifier and
+label. `MS4105` reports another rejected conversion source or unsupported
+required conversion capability, including a malformed package or invalid
+semantic workbook. These codes are stable at the
+`marksheet-conversion@1` boundary.
+
+CSV is a single rectangular table and has no faithful workbook default. A CSV
+export request MUST select exactly one named table or one sheet plus an explicit
+concrete range; a selection that is absent, ambiguous, crosses sheets, or has
+no authored or virtual rectangle is rejected. The conversion report identifies
+the selection and reports omitted workbook features outside it. CSV import
+produces one selected target sheet and block or table using the RFC 4180 dialect
+from section 9.1; callers must supply the target sheet identifier and label.
 
 ## 21. Security and resource handling
 

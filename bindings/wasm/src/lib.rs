@@ -22,11 +22,15 @@ use marksheet_edit::{
     patch::SourcePatch,
     transaction::{EditExpectations, EditOperation, EditTransaction, SourceExpectation},
 };
-use marksheet_model::{
-    ApplyTarget, ByteSpan, Coordinate, Diagnostic, FillTarget, NameTarget, Range, Severity, Sheet,
-    SheetId, SheetItem, Value, Workbook,
+use marksheet_extensions::{
+    AVAILABILITY_REQUIRED_DIAGNOSTIC, AVAILABILITY_WARNING_DIAGNOSTIC, CapabilityAvailability,
+    ExtensionLimits, ExtensionRegistry, ExtensionReport, ExtensionScope, InstanceOutcome,
 };
-use marksheet_syntax::parse;
+use marksheet_model::{
+    ApplyTarget, ByteSpan, Coordinate, Diagnostic, ExtensionId, FillTarget, NameTarget, Range,
+    Severity, Sheet, SheetId, SheetItem, Value, Workbook,
+};
+use marksheet_syntax::{ParseOptions, ParsedDocument, parse_with_options};
 use marksheet_view::{
     ViewLimits, VisibleRegion as ViewVisibleRegion, VisibleRegionRequest, WorkbookView,
 };
@@ -237,10 +241,12 @@ impl From<&SourcePatch> for PatchSummary {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorkbookSnapshot {
     pub revision: u64,
-    /// Parser and formula diagnostics for the exact source at `revision`.
+    /// Parser, formula, and trusted-extension diagnostics for the exact source
+    /// at `revision`.
     pub diagnostics: Vec<Diagnostic>,
     pub diagnostics_omitted: usize,
-    /// A document with error diagnostics remains viewable but is not editable.
+    /// Source/formula errors disable editing. Extension validation findings do
+    /// not: editing is how a user can repair a failed assertion.
     pub editable: bool,
     pub locale: String,
     pub timezone: String,
@@ -250,6 +256,77 @@ pub struct WorkbookSnapshot {
     /// Typed workbook names in declaration order, suitable for a name box.
     pub names: Vec<NameSummary>,
     pub name_count: usize,
+    /// Trusted extension declarations and instances, without opaque payload
+    /// bytes crossing the worker boundary.
+    pub extension_declarations: Vec<ExtensionDeclarationSummary>,
+    pub extension_instances: Vec<ExtensionInstanceSummary>,
+    /// Exact host support and independently meaningful completeness claims.
+    pub extension_support: ExtensionSupportSummary,
+}
+
+/// One exact workbook-level extension declaration.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExtensionDeclarationSummary {
+    pub capability: String,
+    pub required: bool,
+    pub availability: ExtensionAvailabilitySummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_span: Option<ByteSpan>,
+}
+
+/// Availability is exact-major: a registered `id@1` never satisfies `id@2`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtensionAvailabilitySummary {
+    Available,
+    UnavailableOptional,
+    UnavailableRequired,
+}
+
+/// Opaque extension placement. Payload content deliberately remains private.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ExtensionScopeSummary {
+    Workbook,
+    Sheet { sheet: String },
+}
+
+/// Host disposition for one opaque instance.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtensionInstanceOutcomeSummary {
+    Processed,
+    SkippedUnavailable,
+    SkippedUndeclared,
+    RejectedDuplicate,
+    RejectedByLimit,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExtensionInstanceSummary {
+    pub capability: String,
+    pub name: String,
+    pub scope: ExtensionScopeSummary,
+    pub declared: bool,
+    pub supported: bool,
+    pub outcome: ExtensionInstanceOutcomeSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_span: Option<ByteSpan>,
+}
+
+/// Extension host state for this exact document revision.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+// These are deliberately independent protocol claims, matching the extension
+// host report rather than collapsing distinct capability and validity states.
+#[allow(clippy::struct_excessive_bools)]
+pub struct ExtensionSupportSummary {
+    /// Statically linked exact capabilities, in deterministic lexical order.
+    pub supported_capabilities: Vec<String>,
+    pub capabilities_complete: bool,
+    pub calculation_complete: bool,
+    pub rendering_complete: bool,
+    pub validation_complete: bool,
+    pub valid: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -337,6 +414,10 @@ pub struct WorkbenchSession {
     workbook: Workbook,
     view: WorkbookView,
     calculation: Option<PreparedCalculation>,
+    extension_report: ExtensionReport,
+    calculation_complete: bool,
+    rendering_complete: bool,
+    editable: bool,
     /// Full source diagnostics retained within the independently bounded
     /// source-structure budget. Browser responses receive the capped subset.
     persistent_diagnostics: Vec<Diagnostic>,
@@ -347,55 +428,29 @@ pub struct WorkbenchSession {
 }
 
 impl WorkbenchSession {
-    /// Opens one valid source snapshot at revision one.
+    /// Opens one valid or capability-incomplete recoverable source snapshot at
+    /// revision one.
     ///
     /// # Errors
     ///
     /// Returns structured diagnostics for invalid source or a resource limit.
     pub fn open(source: Vec<u8>, limits: SessionLimits) -> Result<Self, WorkerError> {
         validate_source_size(&source, &limits)?;
-        validate_diagnostic_budget(&source, &limits)?;
-        let parsed = parse(&source);
-        if parsed.has_errors() {
-            let (diagnostics, diagnostics_omitted) =
-                bounded_diagnostics(parsed.diagnostics, limits.max_diagnostics);
-            return Err(WorkerError::with_diagnostics(
-                WorkerErrorCode::InvalidSource,
-                "source is not a valid Marksheet document",
-                diagnostics,
-                diagnostics_omitted,
-            ));
-        }
-        let Some(workbook) = parsed.workbook.clone() else {
-            let (diagnostics, diagnostics_omitted) =
-                bounded_diagnostics(parsed.diagnostics.clone(), limits.max_diagnostics);
-            return Err(WorkerError::with_diagnostics(
-                WorkerErrorCode::InvalidSource,
-                "source did not produce a complete Marksheet workbook",
-                diagnostics,
-                diagnostics_omitted,
-            ));
-        };
-        validate_browser_safe_workbook(&workbook)?;
-        let view = WorkbookView::from_document(&parsed, view_limits(&limits)).map_err(|error| {
-            let (diagnostics, diagnostics_omitted) =
-                bounded_diagnostics(parsed.diagnostics.clone(), limits.max_diagnostics);
-            WorkerError::with_diagnostics(
-                WorkerErrorCode::InvalidSource,
-                format!("source could not be prepared for sparse presentation: {error}"),
-                diagnostics,
-                diagnostics_omitted,
-            )
-        })?;
-        let persistent_diagnostics = view.summary().diagnostics;
-        let (diagnostics, diagnostics_omitted) =
-            bounded_diagnostics(persistent_diagnostics.clone(), limits.max_diagnostics);
+        let prepared = prepare_source(&source, &limits)?;
+        let (diagnostics, diagnostics_omitted) = bounded_diagnostics(
+            prepared.persistent_diagnostics.clone(),
+            limits.max_diagnostics,
+        );
         Ok(Self {
             source,
-            workbook,
-            view,
+            workbook: prepared.workbook,
+            view: prepared.view,
             calculation: None,
-            persistent_diagnostics,
+            extension_report: prepared.extension_report,
+            calculation_complete: prepared.calculation_complete,
+            rendering_complete: prepared.rendering_complete,
+            editable: prepared.editable,
+            persistent_diagnostics: prepared.persistent_diagnostics,
             diagnostics,
             diagnostics_omitted,
             revision: 1,
@@ -415,13 +470,7 @@ impl WorkbenchSession {
 
     #[must_use]
     pub fn snapshot(&self) -> WorkbookSnapshot {
-        snapshot(
-            &self.workbook,
-            self.revision,
-            &self.diagnostics,
-            self.diagnostics_omitted,
-            is_editable(&self.persistent_diagnostics),
-        )
+        snapshot(self)
     }
 
     /// Replaces the complete source atomically. Reparse succeeds before the
@@ -430,13 +479,17 @@ impl WorkbenchSession {
     /// # Errors
     ///
     /// Returns an error when the replacement exceeds resource limits or is
-    /// not a valid document that can be projected by `marksheet-view`.
+    /// not a recoverable document that can be projected by `marksheet-view`.
     pub fn replace_source(&mut self, source: Vec<u8>) -> Result<WorkbookSnapshot, WorkerError> {
         let replacement = Self::open(source, self.limits.clone())?;
         self.source = replacement.source;
         self.workbook = replacement.workbook;
         self.view = replacement.view;
         self.calculation = None;
+        self.extension_report = replacement.extension_report;
+        self.calculation_complete = replacement.calculation_complete;
+        self.rendering_complete = replacement.rendering_complete;
+        self.editable = replacement.editable;
         self.persistent_diagnostics = replacement.persistent_diagnostics;
         self.diagnostics = replacement.diagnostics;
         self.diagnostics_omitted = replacement.diagnostics_omitted;
@@ -477,8 +530,13 @@ impl WorkbenchSession {
                 format!("unable to project visible region: {error}"),
             )
         })?;
+        region.completeness.calculation_complete &= self.calculation_complete;
+        region.completeness.rendering_complete &= self.rendering_complete;
         let (diagnostics, diagnostics_omitted) = bounded_diagnostics(
-            std::mem::take(&mut region.diagnostics),
+            merge_diagnostics(
+                &self.persistent_diagnostics,
+                &std::mem::take(&mut region.diagnostics),
+            ),
             self.limits.max_diagnostics,
         );
         region.diagnostics = diagnostics;
@@ -507,6 +565,14 @@ impl WorkbenchSession {
         range: Range,
     ) -> Result<(CalculationResult, usize), WorkerError> {
         validate_area(range, self.limits.max_calculation_cells, "calculation")?;
+        if !self.calculation_complete {
+            return Err(WorkerError::with_diagnostics(
+                WorkerErrorCode::Calculation,
+                "calculated values are unavailable because workbook capabilities are incomplete",
+                self.diagnostics.clone(),
+                self.diagnostics_omitted,
+            ));
+        }
         let sheet = parse_sheet_id(sheet_id)?;
         if self.calculation.is_none() {
             let engine = ReferenceCalcEngine;
@@ -557,7 +623,7 @@ impl WorkbenchSession {
         &mut self,
         transaction: &EditTransaction,
     ) -> Result<(bool, Vec<PatchSummary>, WorkbookSnapshot), WorkerError> {
-        if !is_editable(&self.persistent_diagnostics) {
+        if !self.editable {
             return Err(WorkerError::with_diagnostics(
                 WorkerErrorCode::Edit,
                 "workbook is not editable until its error diagnostics are resolved",
@@ -565,19 +631,23 @@ impl WorkbenchSession {
                 self.diagnostics_omitted,
             ));
         }
-        let result = transaction.execute(&self.source).map_err(|error| {
-            let message = if error.kind == marksheet_edit::transaction::EditErrorKind::VirtualCell {
-                format!("virtual cell edit refused: {}", error.message)
-            } else {
-                error.message
-            };
-            WorkerError::with_diagnostics(WorkerErrorCode::Edit, message, error.diagnostics, 0)
-        })?;
+        let options = extension_parse_options();
+        let result = transaction
+            .execute_with_parse_options(&self.source, &options)
+            .map_err(|error| {
+                let message =
+                    if error.kind == marksheet_edit::transaction::EditErrorKind::VirtualCell {
+                        format!("virtual cell edit refused: {}", error.message)
+                    } else {
+                        error.message
+                    };
+                WorkerError::with_diagnostics(WorkerErrorCode::Edit, message, error.diagnostics, 0)
+            })?;
         validate_source_size(&result.source, &self.limits)?;
         // Keep syntax-backed source locations aligned with the edited bytes.
         // The edit engine has already validated these bytes; rebuilding the
         // view before mutating this session preserves atomic worker semantics.
-        let view = build_view(&result.source, &self.limits)?;
+        let prepared = prepare_source(&result.source, &self.limits)?;
         let changed = result.changed();
         let patches = result
             .patches
@@ -587,14 +657,18 @@ impl WorkbenchSession {
             .collect();
         if changed {
             self.source = result.source;
-            self.workbook = result.workbook;
-            let persistent_diagnostics = view.summary().diagnostics;
+            self.workbook = prepared.workbook;
+            let persistent_diagnostics = prepared.persistent_diagnostics;
             let (diagnostics, omitted) =
                 bounded_diagnostics(persistent_diagnostics.clone(), self.limits.max_diagnostics);
             self.persistent_diagnostics = persistent_diagnostics;
             self.diagnostics = diagnostics;
             self.diagnostics_omitted = omitted;
-            self.view = view;
+            self.view = prepared.view;
+            self.extension_report = prepared.extension_report;
+            self.calculation_complete = prepared.calculation_complete;
+            self.rendering_complete = prepared.rendering_complete;
+            self.editable = prepared.editable;
             self.calculation = None;
             self.revision = self.revision.wrapping_add(1);
         }
@@ -1008,26 +1082,131 @@ impl Write for BoundedJsonWriter {
     }
 }
 
-fn build_view(source: &[u8], limits: &SessionLimits) -> Result<WorkbookView, WorkerError> {
+struct PreparedSource {
+    workbook: Workbook,
+    view: WorkbookView,
+    extension_report: ExtensionReport,
+    calculation_complete: bool,
+    rendering_complete: bool,
+    editable: bool,
+    persistent_diagnostics: Vec<Diagnostic>,
+}
+
+fn prepare_source(source: &[u8], limits: &SessionLimits) -> Result<PreparedSource, WorkerError> {
     validate_diagnostic_budget(source, limits)?;
-    let document = parse(source);
-    let workbook = document.workbook.as_ref().ok_or_else(|| {
-        WorkerError::new(
-            WorkerErrorCode::InvalidSource,
-            "edited source did not produce a complete Marksheet workbook",
-        )
-    })?;
-    validate_browser_safe_workbook(workbook)?;
-    WorkbookView::from_document(&document, view_limits(limits)).map_err(|error| {
+    let options = extension_parse_options();
+    let document = parse_with_options(source, &options);
+    if has_unrecoverable_parse_errors(&document) {
         let (diagnostics, diagnostics_omitted) =
             bounded_diagnostics(document.diagnostics, limits.max_diagnostics);
+        return Err(WorkerError::with_diagnostics(
+            WorkerErrorCode::InvalidSource,
+            "source is not a valid Marksheet document",
+            diagnostics,
+            diagnostics_omitted,
+        ));
+    }
+    let workbook = document.workbook.clone().ok_or_else(|| {
+        let (diagnostics, diagnostics_omitted) =
+            bounded_diagnostics(document.diagnostics.clone(), limits.max_diagnostics);
+        WorkerError::with_diagnostics(
+            WorkerErrorCode::InvalidSource,
+            "source did not produce a recoverable Marksheet workbook",
+            diagnostics,
+            diagnostics_omitted,
+        )
+    })?;
+    validate_browser_safe_workbook(&workbook)?;
+    let view = WorkbookView::from_document(&document, view_limits(limits)).map_err(|error| {
+        let (diagnostics, diagnostics_omitted) =
+            bounded_diagnostics(document.diagnostics.clone(), limits.max_diagnostics);
         WorkerError::with_diagnostics(
             WorkerErrorCode::InvalidSource,
             format!("source could not be prepared for sparse presentation: {error}"),
             diagnostics,
             diagnostics_omitted,
         )
+    })?;
+    let view_summary = view.summary();
+    let editable = is_editable(&view_summary.diagnostics);
+    let registry = extension_registry();
+    let extension_report = registry.validate(&workbook, &extension_limits(limits));
+    let persistent_diagnostics = merge_extension_diagnostics(
+        view_summary.diagnostics,
+        extension_report
+            .diagnostics
+            .iter()
+            .map(|item| item.diagnostic.clone()),
+    );
+    Ok(PreparedSource {
+        workbook,
+        view,
+        calculation_complete: view_summary.completeness.calculation_complete
+            && extension_report.calculation_complete,
+        rendering_complete: view_summary.completeness.rendering_complete
+            && extension_report.rendering_complete,
+        editable,
+        extension_report,
+        persistent_diagnostics,
     })
+}
+
+fn extension_registry() -> ExtensionRegistry<'static> {
+    ExtensionRegistry::with_assertions()
+}
+
+fn extension_parse_options() -> ParseOptions {
+    let registry = extension_registry();
+    ParseOptions {
+        supported_extensions: registry
+            .capabilities()
+            .iter()
+            .map(extension_id_string)
+            .collect(),
+    }
+}
+
+fn extension_limits(session: &SessionLimits) -> ExtensionLimits {
+    let mut limits = ExtensionLimits::default();
+    limits.max_payload_bytes = limits.max_payload_bytes.min(session.max_source_bytes);
+    limits.calculation = view_limits(session).calculation;
+    limits
+}
+
+fn has_unrecoverable_parse_errors(document: &ParsedDocument) -> bool {
+    document.diagnostics.iter().any(|diagnostic| {
+        diagnostic.severity == Severity::Error
+            && diagnostic.code.as_str() != AVAILABILITY_REQUIRED_DIAGNOSTIC
+    })
+}
+
+fn merge_extension_diagnostics(
+    mut diagnostics: Vec<Diagnostic>,
+    extension_diagnostics: impl IntoIterator<Item = Diagnostic>,
+) -> Vec<Diagnostic> {
+    for diagnostic in extension_diagnostics {
+        let duplicate = diagnostics.iter().any(|existing| {
+            existing == &diagnostic || equivalent_availability_diagnostic(existing, &diagnostic)
+        });
+        if !duplicate {
+            diagnostics.push(diagnostic);
+        }
+    }
+    diagnostics
+}
+
+fn equivalent_availability_diagnostic(left: &Diagnostic, right: &Diagnostic) -> bool {
+    let code = left.code.as_str();
+    matches!(
+        code,
+        AVAILABILITY_REQUIRED_DIAGNOSTIC | AVAILABILITY_WARNING_DIAGNOSTIC
+    ) && right.code.as_str() == code
+        && left.severity == right.severity
+        && spans_overlap(left.primary.span, right.primary.span)
+}
+
+const fn spans_overlap(left: ByteSpan, right: ByteSpan) -> bool {
+    left.start < right.end && right.start < left.end
 }
 
 fn view_limits(session: &SessionLimits) -> ViewLimits {
@@ -1336,16 +1515,17 @@ fn validate_worker_edit_transaction(
         .expectations
         .as_ref()
         .and_then(|expectations| expectations.source.as_ref())
-        && source.bytes.len() > limits.max_source_bytes
     {
-        return Err(WorkerError::new(
-            WorkerErrorCode::Limit,
-            format!(
-                "edit source expectation has {} bytes, exceeding the {} byte worker limit",
-                source.bytes.len(),
-                limits.max_source_bytes
-            ),
-        ));
+        if source.bytes.len() > limits.max_source_bytes {
+            return Err(WorkerError::new(
+                WorkerErrorCode::Limit,
+                format!(
+                    "edit source expectation has {} bytes, exceeding the {} byte worker limit",
+                    source.bytes.len(),
+                    limits.max_source_bytes
+                ),
+            ));
+        }
     }
     let payload_bytes = bounded_json_payload_bytes(transaction, MAX_EDIT_PAYLOAD_BYTES)
         .ok_or_else(|| {
@@ -1407,21 +1587,22 @@ fn parse_sheet_id(id: &str) -> Result<SheetId, WorkerError> {
     })
 }
 
-fn snapshot(
-    workbook: &Workbook,
-    revision: u64,
-    diagnostics: &[Diagnostic],
-    diagnostics_omitted: usize,
-    editable: bool,
-) -> WorkbookSnapshot {
+fn snapshot(session: &WorkbenchSession) -> WorkbookSnapshot {
+    let workbook = &session.workbook;
+    let extension_report = &session.extension_report;
+    let supported_capabilities = extension_registry()
+        .capabilities()
+        .iter()
+        .map(extension_id_string)
+        .collect::<Vec<_>>();
     WorkbookSnapshot {
-        revision,
-        diagnostics: diagnostics.to_vec(),
-        diagnostics_omitted,
-        // This deliberately comes from the full persistent diagnostic set,
-        // not the browser response's capped prefix. An error after the first
-        // `max_diagnostics` warnings must still disable editing.
-        editable,
+        revision: session.revision,
+        diagnostics: session.diagnostics.clone(),
+        diagnostics_omitted: session.diagnostics_omitted,
+        // This is derived from the full source/formula diagnostic set before
+        // the response cap. Trusted extension validation errors remain
+        // editable so a semantic edit can repair them.
+        editable: session.editable,
         locale: workbook.settings.locale.clone(),
         timezone: workbook.settings.timezone.clone(),
         formula_profile: workbook.settings.formula_profile.clone(),
@@ -1451,6 +1632,128 @@ fn snapshot(
             })
             .collect(),
         name_count: workbook.names.len(),
+        extension_declarations: workbook
+            .extensions
+            .iter()
+            .map(|declaration| {
+                let availability = extension_report
+                    .capabilities
+                    .iter()
+                    .find(|check| check.capability == declaration.capability)
+                    .map_or_else(
+                        || {
+                            if supported_capabilities
+                                .contains(&extension_id_string(&declaration.capability))
+                            {
+                                ExtensionAvailabilitySummary::Available
+                            } else if declaration.required {
+                                ExtensionAvailabilitySummary::UnavailableRequired
+                            } else {
+                                ExtensionAvailabilitySummary::UnavailableOptional
+                            }
+                        },
+                        |check| availability_summary(check.availability),
+                    );
+                ExtensionDeclarationSummary {
+                    capability: extension_id_string(&declaration.capability),
+                    required: declaration.required,
+                    availability,
+                    source_span: declaration.origin.map(|origin| origin.span),
+                }
+            })
+            .collect(),
+        extension_instances: extension_report
+            .instances
+            .iter()
+            .map(|instance| ExtensionInstanceSummary {
+                capability: extension_id_string(&instance.capability),
+                name: instance.instance_name.clone(),
+                scope: extension_scope_summary(&instance.scope),
+                declared: workbook
+                    .extensions
+                    .iter()
+                    .any(|declaration| declaration.capability == instance.capability),
+                supported: supported_capabilities
+                    .contains(&extension_id_string(&instance.capability)),
+                outcome: instance_outcome_summary(instance.outcome),
+                source_span: extension_instance_span(workbook, instance),
+            })
+            .collect(),
+        extension_support: ExtensionSupportSummary {
+            supported_capabilities,
+            capabilities_complete: extension_report.capabilities_complete,
+            calculation_complete: session.calculation_complete,
+            rendering_complete: session.rendering_complete,
+            validation_complete: extension_report.validation_complete,
+            valid: extension_report.valid,
+        },
+    }
+}
+
+fn extension_id_string(capability: &ExtensionId) -> String {
+    format!("{}@{}", capability.id, capability.major)
+}
+
+const fn availability_summary(
+    availability: CapabilityAvailability,
+) -> ExtensionAvailabilitySummary {
+    match availability {
+        CapabilityAvailability::Available => ExtensionAvailabilitySummary::Available,
+        CapabilityAvailability::UnavailableOptional => {
+            ExtensionAvailabilitySummary::UnavailableOptional
+        }
+        CapabilityAvailability::UnavailableRequired => {
+            ExtensionAvailabilitySummary::UnavailableRequired
+        }
+    }
+}
+
+fn extension_scope_summary(scope: &ExtensionScope) -> ExtensionScopeSummary {
+    match scope {
+        ExtensionScope::Workbook => ExtensionScopeSummary::Workbook,
+        ExtensionScope::Sheet(sheet) => ExtensionScopeSummary::Sheet {
+            sheet: sheet.as_str().to_owned(),
+        },
+    }
+}
+
+const fn instance_outcome_summary(outcome: InstanceOutcome) -> ExtensionInstanceOutcomeSummary {
+    match outcome {
+        InstanceOutcome::Processed => ExtensionInstanceOutcomeSummary::Processed,
+        InstanceOutcome::SkippedUnavailable => ExtensionInstanceOutcomeSummary::SkippedUnavailable,
+        InstanceOutcome::SkippedUndeclared => ExtensionInstanceOutcomeSummary::SkippedUndeclared,
+        InstanceOutcome::RejectedDuplicate => ExtensionInstanceOutcomeSummary::RejectedDuplicate,
+        InstanceOutcome::RejectedByLimit => ExtensionInstanceOutcomeSummary::RejectedByLimit,
+    }
+}
+
+fn extension_instance_span(
+    workbook: &Workbook,
+    report: &marksheet_extensions::InstanceReport,
+) -> Option<ByteSpan> {
+    match &report.scope {
+        ExtensionScope::Workbook => workbook
+            .extension_instances
+            .iter()
+            .find(|extension| {
+                extension.capability == report.capability && extension.name == report.instance_name
+            })
+            .and_then(|extension| extension.origin.map(|origin| origin.span)),
+        ExtensionScope::Sheet(sheet_id) => workbook
+            .sheets
+            .iter()
+            .find(|sheet| sheet.id == *sheet_id)
+            .and_then(|sheet| {
+                sheet.items.iter().find_map(|item| match item {
+                    SheetItem::Extension(extension)
+                        if extension.capability == report.capability
+                            && extension.name == report.instance_name =>
+                    {
+                        extension.origin.map(|origin| origin.span)
+                    }
+                    _ => None,
+                })
+            }),
     }
 }
 
@@ -2157,6 +2460,7 @@ mod tests {
         session.persistent_diagnostics = vec![warning.clone(), error];
         session.diagnostics = vec![warning];
         session.diagnostics_omitted = 1;
+        session.editable = is_editable(&session.persistent_diagnostics);
 
         let snapshot = session.snapshot();
         assert_eq!(snapshot.diagnostics.len(), 1);
@@ -2348,5 +2652,186 @@ mod tests {
                 range: Range::parse("A2").unwrap(),
             })
         );
+    }
+
+    fn diagnostic_codes(snapshot: &WorkbookSnapshot) -> Vec<&str> {
+        snapshot
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn trusted_assertions_execute_and_are_exposed_without_payloads() {
+        let source = b"#!marksheet 0.1\n@use assertions@1\n@sheet s \"S\"\n@block A1 csv\nValue\n2\n@end\n@extension assertions@1 \"checks\"\nassert A2 = 2\n@end\n";
+        let session = WorkbenchSession::open(source.to_vec(), SessionLimits::default()).unwrap();
+        let snapshot = session.snapshot();
+
+        assert!(snapshot.extension_support.capabilities_complete);
+        assert!(snapshot.extension_support.calculation_complete);
+        assert!(snapshot.extension_support.rendering_complete);
+        assert!(snapshot.extension_support.validation_complete);
+        assert!(snapshot.extension_support.valid);
+        assert_eq!(
+            snapshot.extension_support.supported_capabilities,
+            ["assertions@1"]
+        );
+        assert_eq!(snapshot.extension_declarations.len(), 1);
+        assert_eq!(
+            snapshot.extension_declarations[0].availability,
+            ExtensionAvailabilitySummary::Available
+        );
+        assert_eq!(snapshot.extension_instances.len(), 1);
+        assert_eq!(
+            snapshot.extension_instances[0].outcome,
+            ExtensionInstanceOutcomeSummary::Processed
+        );
+        let json = serde_json::to_string(&snapshot).unwrap();
+        assert!(!json.contains("assert A2 = 2"));
+    }
+
+    #[test]
+    fn failed_and_malformed_assertions_return_structured_host_diagnostics() {
+        for (payload, expected) in [("assert A2 = 3", "MS3201"), ("assert A2 == 2", "MS3202")] {
+            let source = format!(
+                "#!marksheet 0.1\n@use assertions@1\n@sheet s \"S\"\n@block A1 csv\nValue\n2\n@end\n@extension assertions@1 \"checks\"\n{payload}\n@end\n"
+            );
+            let session =
+                WorkbenchSession::open(source.into_bytes(), SessionLimits::default()).unwrap();
+            let snapshot = session.snapshot();
+            assert_eq!(diagnostic_codes(&snapshot), [expected]);
+            assert!(snapshot.editable);
+            assert!(snapshot.extension_support.calculation_complete);
+            assert!(snapshot.extension_support.rendering_complete);
+            assert!(!snapshot.extension_support.valid);
+        }
+    }
+
+    #[test]
+    fn optional_exact_major_mismatch_warns_without_incomplete_core_claims() {
+        let source = b"#!marksheet 0.1\n@use assertions@2\n@sheet s \"S\"\n";
+        let session = WorkbenchSession::open(source.to_vec(), SessionLimits::default()).unwrap();
+        let snapshot = session.snapshot();
+
+        assert_eq!(diagnostic_codes(&snapshot), ["MS3102"]);
+        assert!(snapshot.editable);
+        assert!(snapshot.extension_support.capabilities_complete);
+        assert!(snapshot.extension_support.calculation_complete);
+        assert!(snapshot.extension_support.rendering_complete);
+        assert_eq!(
+            snapshot.extension_declarations[0].availability,
+            ExtensionAvailabilitySummary::UnavailableOptional
+        );
+    }
+
+    #[test]
+    fn required_exact_major_mismatch_is_recoverable_but_never_calculated_as_complete() {
+        let source =
+            b"#!marksheet 0.1\n@require assertions@2\n@sheet s \"S\"\n@block A1 csv\n=1+1\n@end\n";
+        let mut session =
+            WorkbenchSession::open(source.to_vec(), SessionLimits::default()).unwrap();
+        let snapshot = session.snapshot();
+
+        assert_eq!(diagnostic_codes(&snapshot), ["MS3101"]);
+        assert!(!snapshot.editable);
+        assert!(!snapshot.extension_support.capabilities_complete);
+        assert!(!snapshot.extension_support.calculation_complete);
+        assert!(!snapshot.extension_support.rendering_complete);
+        assert_eq!(
+            snapshot.extension_declarations[0].availability,
+            ExtensionAvailabilitySummary::UnavailableRequired
+        );
+
+        let error = session
+            .calculate("s", Range::parse("A1").unwrap())
+            .unwrap_err();
+        assert_eq!(error.code, WorkerErrorCode::Calculation);
+        let region = session
+            .visible_region("s", Range::parse("A1").unwrap())
+            .unwrap();
+        assert!(!region.completeness.calculation_complete);
+        assert!(!region.completeness.rendering_complete);
+        assert!(region.cells[0].calculated.is_none());
+    }
+
+    #[test]
+    fn undeclared_opaque_instance_is_preserved_as_warning_and_complete() {
+        let source = b"#!marksheet 0.1\n@extension vendor_data@1 \"secret\"\nopaque-private-payload\n@end\n@sheet s \"S\"\n";
+        let session = WorkbenchSession::open(source.to_vec(), SessionLimits::default()).unwrap();
+        let snapshot = session.snapshot();
+
+        assert_eq!(diagnostic_codes(&snapshot), ["MS3103"]);
+        assert!(snapshot.editable);
+        assert!(snapshot.extension_support.capabilities_complete);
+        assert!(snapshot.extension_support.calculation_complete);
+        assert!(snapshot.extension_support.rendering_complete);
+        assert_eq!(snapshot.extension_instances.len(), 1);
+        assert!(!snapshot.extension_instances[0].declared);
+        assert!(!snapshot.extension_instances[0].supported);
+        assert_eq!(
+            snapshot.extension_instances[0].outcome,
+            ExtensionInstanceOutcomeSummary::SkippedUndeclared
+        );
+        let json = serde_json::to_string(&snapshot).unwrap();
+        assert!(!json.contains("opaque-private-payload"));
+    }
+
+    #[test]
+    fn edit_reparses_with_installed_exact_extensions_and_commits_atomically() {
+        let source = b"#!marksheet 0.1\n@require assertions@1\n@sheet s \"S\"\n@block A1 csv\nValue\n2\n@end\n@extension assertions@1 \"checks\"\nassert A2 = 2\n@end\n";
+        let mut session =
+            WorkbenchSession::open(source.to_vec(), SessionLimits::default()).unwrap();
+        let (changed, _, snapshot) = session
+            .edit(&EditTransaction::single(EditOperation::RenameSheetLabel {
+                sheet: SheetId::parse("s").unwrap(),
+                label: "Renamed".to_owned(),
+            }))
+            .unwrap();
+
+        assert!(changed);
+        assert_eq!(session.revision(), 2);
+        assert_eq!(snapshot.sheets[0].label, "Renamed");
+        assert!(snapshot.extension_support.valid);
+        assert!(diagnostic_codes(&snapshot).is_empty());
+    }
+
+    #[test]
+    fn assertion_failure_remains_editable_and_can_be_repaired() {
+        let source = b"#!marksheet 0.1\n@require assertions@1\n@sheet s \"S\"\n@block A1 csv\nValue\n2\n@end\n@extension assertions@1 \"checks\"\nassert A2 = 3\n@end\n";
+        let mut session =
+            WorkbenchSession::open(source.to_vec(), SessionLimits::default()).unwrap();
+        assert!(session.snapshot().editable);
+        assert_eq!(diagnostic_codes(&session.snapshot()), ["MS3201"]);
+        let region = session
+            .visible_region("s", Range::parse("A2").unwrap())
+            .unwrap();
+        assert!(region.completeness.calculation_complete);
+        assert!(region.completeness.rendering_complete);
+        assert!(
+            region
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code.as_str() == "MS3201")
+        );
+        let calculation = session.calculate("s", Range::parse("A2").unwrap()).unwrap();
+        assert_eq!(calculation.cells.len(), 1);
+        assert!(
+            calculation
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code.as_str() == "MS3201")
+        );
+
+        let (_, _, snapshot) = session
+            .edit(&EditTransaction::single(EditOperation::SetCell {
+                sheet: SheetId::parse("s").unwrap(),
+                coordinate: Coordinate::parse("A2").unwrap(),
+                value: Value::Number(3.0),
+            }))
+            .unwrap();
+        assert!(snapshot.editable);
+        assert!(snapshot.extension_support.valid);
+        assert!(diagnostic_codes(&snapshot).is_empty());
     }
 }

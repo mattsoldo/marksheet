@@ -1,0 +1,227 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 130,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          34
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          35
+        ]
+      },
+      {
+        "content_span": [
+          35,
+          48
+        ],
+        "ending": "lf",
+        "span": [
+          35,
+          49
+        ]
+      },
+      {
+        "content_span": [
+          49,
+          59
+        ],
+        "ending": "lf",
+        "span": [
+          49,
+          60
+        ]
+      },
+      {
+        "content_span": [
+          60,
+          77
+        ],
+        "ending": "lf",
+        "span": [
+          60,
+          78
+        ]
+      },
+      {
+        "content_span": [
+          78,
+          97
+        ],
+        "ending": "lf",
+        "span": [
+          78,
+          98
+        ]
+      },
+      {
+        "content_span": [
+          98,
+          124
+        ],
+        "ending": "lf",
+        "span": [
+          98,
+          125
+        ]
+      },
+      {
+        "content_span": [
+          125,
+          129
+        ],
+        "ending": "lf",
+        "span": [
+          125,
+          130
+        ]
+      }
+    ],
+    "sha256": "7f0961022e9086d3e6a75393a482a439ce23644f5bb199a32fedda31fc7a3ee7"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [],
+    "extensions": [],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "main",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              49,
+              125
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "kind",
+                    "span": [
+                      49,
+                      53
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "kind"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "value",
+                    "span": [
+                      54,
+                      59
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "value"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "terminator",
+                    "span": [
+                      60,
+                      70
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "terminator"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "\"@end\"",
+                    "span": [
+                      71,
+                      77
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "@end"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "multiline",
+                    "span": [
+                      78,
+                      87
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "multiline"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "\"line one\nline two, with \"\"quotes\"\"\"",
+                    "span": [
+                      88,
+                      124
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "line one\nline two, with \"quotes\""
+                  }
+                }
+              ]
+            ],
+            "span": [
+              35,
+              48
+            ]
+          }
+        ],
+        "label": "Main",
+        "span": [
+          16,
+          34
+        ]
+      }
+    ],
+    "styles": []
+  }
+}

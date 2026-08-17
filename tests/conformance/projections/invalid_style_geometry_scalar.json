@@ -1,0 +1,228 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [
+    {
+      "code": "MS2201",
+      "severity": "error",
+      "span": [
+        16,
+        66
+      ]
+    },
+    {
+      "code": "MS2201",
+      "severity": "error",
+      "span": [
+        86,
+        104
+      ]
+    },
+    {
+      "code": "MS2201",
+      "severity": "error",
+      "span": [
+        105,
+        120
+      ]
+    },
+    {
+      "code": "MS2201",
+      "severity": "error",
+      "span": [
+        140,
+        150
+      ]
+    }
+  ],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 156,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          66
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          67
+        ]
+      },
+      {
+        "content_span": [
+          67,
+          85
+        ],
+        "ending": "lf",
+        "span": [
+          67,
+          86
+        ]
+      },
+      {
+        "content_span": [
+          86,
+          104
+        ],
+        "ending": "lf",
+        "span": [
+          86,
+          105
+        ]
+      },
+      {
+        "content_span": [
+          105,
+          120
+        ],
+        "ending": "lf",
+        "span": [
+          105,
+          121
+        ]
+      },
+      {
+        "content_span": [
+          121,
+          134
+        ],
+        "ending": "lf",
+        "span": [
+          121,
+          135
+        ]
+      },
+      {
+        "content_span": [
+          135,
+          139
+        ],
+        "ending": "lf",
+        "span": [
+          135,
+          140
+        ]
+      },
+      {
+        "content_span": [
+          140,
+          150
+        ],
+        "ending": "lf",
+        "span": [
+          140,
+          151
+        ]
+      },
+      {
+        "content_span": [
+          151,
+          155
+        ],
+        "ending": "lf",
+        "span": [
+          151,
+          156
+        ]
+      }
+    ],
+    "sha256": "44dd4f0c39fe8967add5b78968abf748eabad7187404aa2d575519adcd7f2ac5"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [],
+    "extensions": [],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "main",
+        "items": [
+          {
+            "anchor": {
+              "column": 3,
+              "row": 1
+            },
+            "body_span": [
+              135,
+              151
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "when",
+                    "span": [
+                      135,
+                      139
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "when"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "2026-02-30",
+                    "span": [
+                      140,
+                      150
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "2026-02-30"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              121,
+              134
+            ]
+          }
+        ],
+        "label": "Main",
+        "span": [
+          67,
+          85
+        ]
+      }
+    ],
+    "styles": [
+      {
+        "id": "bad",
+        "properties": {
+          "number": "currency"
+        },
+        "span": [
+          16,
+          66
+        ]
+      }
+    ]
+  }
+}

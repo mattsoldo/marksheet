@@ -15,6 +15,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 marksheet-calc = { path = "../../crates/marksheet-calc" }
 marksheet-edit = { path = "../../crates/marksheet-edit" }
+marksheet-extensions = { path = "../../crates/marksheet-extensions" }
 marksheet-model = { path = "../../crates/marksheet-model" }
 marksheet-syntax = { path = "../../crates/marksheet-syntax" }
 marksheet-view = { path = "../../crates/marksheet-view" }

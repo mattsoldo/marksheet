@@ -5,9 +5,12 @@ import type {
   A1Range,
   Diagnostic,
   EditTransaction,
+  ExtensionSupportSummary,
   StyledRegion,
   StyleProperties,
+  ViewCompleteness,
   VisibleRegion,
+  WorkbookSnapshot,
   WorkerResponseEnvelope,
 } from "../src/protocol";
 import type { WorkbenchAdapter } from "../src/worker-adapter";
@@ -48,13 +51,37 @@ const defaultSheets = [
   { id: "summary", label: "Summary", authored_cell_count: 1, table_count: 0 },
 ];
 
+type ExtensionState = Pick<
+  WorkbookSnapshot,
+  "extension_declarations" | "extension_instances" | "extension_support"
+>;
+
+function completeExtensions(
+  overrides: Partial<ExtensionSupportSummary> = {},
+): ExtensionState {
+  return {
+    extension_declarations: [],
+    extension_instances: [],
+    extension_support: {
+      supported_capabilities: ["assertions@1"],
+      capabilities_complete: true,
+      calculation_complete: true,
+      rendering_complete: true,
+      validation_complete: true,
+      valid: true,
+      ...overrides,
+    },
+  };
+}
+
 function snapshot(
   revision = 1,
   editable = true,
   diagnostics: Diagnostic[] = [],
   sheets = defaultSheets,
   diagnosticsOmitted = 0,
-) {
+  extensions = completeExtensions(),
+): WorkbookSnapshot {
   return {
     revision,
     diagnostics,
@@ -70,10 +97,15 @@ function snapshot(
     }],
     style_count: 1,
     name_count: 1,
+    ...extensions,
   };
 }
 
-function region(sheet: string, range: A1Range): VisibleRegion {
+function region(
+  sheet: string,
+  range: A1Range,
+  completeness: ViewCompleteness = { calculation_complete: true, rendering_complete: true },
+): VisibleRegion {
   return {
     sheet: {
       id: sheet,
@@ -84,6 +116,7 @@ function region(sheet: string, range: A1Range): VisibleRegion {
       source_span: null,
     },
     range,
+    completeness,
     cells: [{
       coordinate: { column: 1, row: 1 },
       source: { Authored: { value: { kind: "formula", value: "=1+1" }, source_span: { start: 10, end: 14 } } },
@@ -113,6 +146,9 @@ class MockAdapter implements WorkbenchAdapter {
   diagnosticsOmitted = 0;
   regionDiagnosticsOmitted = 0;
   calculationDiagnosticsOmitted = 0;
+  editable = true;
+  extensionState = completeExtensions();
+  regionCompleteness: ViewCompleteness = { calculation_complete: true, rendering_complete: true };
   sheets = defaultSheets;
   styleRegions: StyledRegion[] = [];
   edit = vi.fn(async (_transaction: EditTransaction) => {
@@ -124,10 +160,11 @@ class MockAdapter implements WorkbenchAdapter {
       patches: [{ span: { start: 42, end: 43 }, replacement: [50] }],
       snapshot: snapshot(
         this.currentRevision,
-        true,
+        this.editable,
         this.diagnostics,
         this.sheets,
         this.diagnosticsOmitted,
+        this.extensionState,
       ),
     }, this.currentRevision);
   });
@@ -146,10 +183,11 @@ class MockAdapter implements WorkbenchAdapter {
       kind,
       snapshot: snapshot(
         this.currentRevision,
-        true,
+        this.editable,
         this.diagnostics,
         this.sheets,
         this.diagnosticsOmitted,
+        this.extensionState,
       ),
     }, this.currentRevision);
   }
@@ -161,10 +199,11 @@ class MockAdapter implements WorkbenchAdapter {
       kind: "replaced",
       snapshot: snapshot(
         this.currentRevision,
-        true,
+        this.editable,
         this.diagnostics,
         this.sheets,
         this.diagnosticsOmitted,
+        this.extensionState,
       ),
     }, this.currentRevision);
   }
@@ -175,16 +214,17 @@ class MockAdapter implements WorkbenchAdapter {
       kind: "snapshot",
       snapshot: snapshot(
         this.currentRevision,
-        !viewOnly,
+        this.editable && !viewOnly,
         viewOnly ? [diagnostic("MS2303", "formula cycle")] : this.diagnostics,
         this.sheets,
         this.diagnosticsOmitted,
+        this.extensionState,
       ),
     }, this.currentRevision);
   }
 
   async visibleRegion(sheet: string, range: A1Range) {
-    const visible = region(sheet, range);
+    const visible = region(sheet, range, this.regionCompleteness);
     visible.style_regions = this.styleRegions;
     const payload = {
       kind: "visible_region" as const,
@@ -398,6 +438,34 @@ describe("viewer browser shell", () => {
     root.remove();
   });
 
+  it("does not overwrite an incomplete post-edit refresh with a success status", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    const edit = adapter.edit;
+    adapter.edit = vi.fn(async (transaction: EditTransaction) => {
+      const result = await edit(transaction);
+      adapter.regionCompleteness = { calculation_complete: false, rendering_complete: false };
+      adapter.calculationError = Object.assign(new Error("workbook capabilities are incomplete"), {
+        diagnostics: [diagnostic("MS3101", "required extension unavailable")],
+        diagnostics_omitted: 0,
+      });
+      return result;
+    });
+    const app = new ViewerApp(root, adapter);
+    await app.openSource(encoder.encode("fixture"), "fixture.ms");
+
+    const formula = root.querySelector("#formula-input") as HTMLInputElement;
+    formula.value = "=2+2";
+    formula.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    await vi.waitFor(() => expect(root.querySelector("#status")?.textContent).toContain("Incomplete workbook view"));
+    expect(root.querySelector("#status")?.className).toBe("status-error");
+    expect(root.querySelector("#status")?.textContent).not.toContain("Committed");
+    app.dispose();
+    root.remove();
+  });
+
   it("switches to view-only controls after calculation discovers formula errors", async () => {
     const root = document.createElement("main");
     document.body.append(root);
@@ -435,6 +503,129 @@ describe("viewer browser shell", () => {
     expect(root.querySelector("#diagnostic-list")?.textContent).toContain("unsupported formula");
     expect(root.querySelector("#diagnostic-list")?.textContent)
       .toContain("7 additional calculation diagnostics were omitted by the worker resource cap.");
+    app.dispose();
+    root.remove();
+  });
+
+  it("marks a required-extension workbook as incomplete without presenting calculated rendering as complete", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    adapter.editable = false;
+    adapter.diagnostics = [diagnostic("MS3101", "required extension assertions@2 is unavailable")];
+    adapter.extensionState = completeExtensions({
+      capabilities_complete: false,
+      calculation_complete: false,
+      rendering_complete: false,
+      valid: false,
+    });
+    adapter.extensionState.extension_declarations = [{
+      capability: "assertions@2",
+      required: true,
+      availability: "unavailable_required",
+    }];
+    adapter.extensionState.extension_instances = [{
+      capability: "assertions@2",
+      declared: true,
+      name: "checks",
+      outcome: "skipped_unavailable",
+      scope: { kind: "workbook" },
+      supported: false,
+    }];
+    adapter.regionCompleteness = { calculation_complete: false, rendering_complete: false };
+    adapter.calculationError = Object.assign(new Error("workbook capabilities are incomplete"), {
+      diagnostics: adapter.diagnostics,
+      diagnostics_omitted: 0,
+    });
+    const app = new ViewerApp(root, adapter);
+
+    await app.openSource(encoder.encode("fixture"), "required.ms");
+
+    expect(root.querySelector("#grid")?.hasAttribute("hidden")).toBe(false);
+    expect(root.querySelector("#status")?.textContent).toBe(
+      "Incomplete workbook view: required extension support is unavailable (assertions@2); "
+      + "the viewer cannot provide calculated values or complete rendering.",
+    );
+    expect(root.querySelector("#status")?.className).toBe("status-error");
+    expect(root.querySelector("#diagnostic-list")?.textContent).toContain("required extension assertions@2");
+    expect((root.querySelector("#formula-input") as HTMLInputElement).disabled).toBe(true);
+    expect((root.querySelector("#apply-style") as HTMLButtonElement).disabled).toBe(true);
+    app.dispose();
+    root.remove();
+  });
+
+  it("keeps optional and undeclared extension warnings usable", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    adapter.diagnostics = [
+      { ...diagnostic("MS3102", "optional assertions@2 unavailable"), severity: "warning" },
+      { ...diagnostic("MS3103", "undeclared vendor instance skipped", 2), severity: "warning" },
+    ];
+    adapter.extensionState.extension_declarations = [{
+      capability: "assertions@2",
+      required: false,
+      availability: "unavailable_optional",
+    }];
+    adapter.extensionState.extension_instances = [{
+      capability: "vendor_data@1",
+      declared: false,
+      name: "opaque-secret",
+      outcome: "skipped_undeclared",
+      scope: { kind: "workbook" },
+      supported: false,
+    }];
+    const app = new ViewerApp(root, adapter);
+
+    await app.openSource(encoder.encode("fixture"), "warnings.ms");
+
+    expect(root.querySelector("#status")?.textContent).toBe(
+      "Opened warnings.ms with extension warnings (optional capability unavailable; undeclared instance skipped); "
+      + "calculation and rendering remain complete",
+    );
+    expect(root.querySelector("#status")?.textContent).not.toContain("opaque-secret");
+    expect(root.querySelector("#status")?.className).toBe("status-warning");
+    expect(root.querySelector("#diagnostic-list")?.textContent).toContain("optional assertions@2 unavailable");
+    expect(root.querySelector("#diagnostic-list")?.textContent).toContain("undeclared vendor instance skipped");
+    expect((root.querySelector("#formula-input") as HTMLInputElement).disabled).toBe(false);
+    expect((root.querySelector("#apply-style") as HTMLButtonElement).disabled).toBe(false);
+    app.dispose();
+    root.remove();
+  });
+
+  it("keeps failed extension assertions editable for repair", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    adapter.diagnostics = [diagnostic("MS3201", "assertion failed")];
+    adapter.extensionState = completeExtensions({ valid: false });
+    adapter.extensionState.extension_declarations = [{
+      capability: "assertions@1",
+      required: true,
+      availability: "available",
+    }];
+    adapter.extensionState.extension_instances = [{
+      capability: "assertions@1",
+      declared: true,
+      name: "checks",
+      outcome: "processed",
+      scope: { kind: "workbook" },
+      supported: true,
+    }];
+    const app = new ViewerApp(root, adapter);
+
+    await app.openSource(encoder.encode("fixture"), "assertions.ms");
+
+    expect(root.querySelector("#status")?.textContent).toBe(
+      "Opened assertions.ms with extension validation failures; the workbook remains editable for repair",
+    );
+    expect(root.querySelector("#diagnostic-list")?.textContent).toContain("assertion failed");
+    const formula = root.querySelector("#formula-input") as HTMLInputElement;
+    expect(formula.disabled).toBe(false);
+    expect((root.querySelector("#apply-style") as HTMLButtonElement).disabled).toBe(false);
+    formula.value = "=2+2";
+    formula.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await vi.waitFor(() => expect(adapter.edit).toHaveBeenCalledTimes(1));
     app.dispose();
     root.remove();
   });

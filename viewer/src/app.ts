@@ -95,12 +95,18 @@ export class ViewerApp {
       this.updateWorkbookChrome();
       const refreshed = await this.refreshVisibleRegion();
       if (refreshed) {
-        this.setStatus(
-          opened.snapshot.editable
-            ? `Opened ${fileName} at revision ${opened.snapshot.revision}`
-            : `Opened ${fileName} view-only; resolve formula diagnostics before editing`,
-          opened.snapshot.editable ? "ok" : "warning",
-        );
+        const snapshot = this.#snapshot ?? opened.snapshot;
+        const extensionNotice = extensionOpenNotice(snapshot);
+        if (!snapshot.editable) {
+          this.setStatus(
+            `Opened ${fileName} view-only; resolve formula diagnostics before editing`,
+            "warning",
+          );
+        } else if (extensionNotice) {
+          this.setStatus(`Opened ${fileName} ${extensionNotice}`, "warning");
+        } else {
+          this.setStatus(`Opened ${fileName} at revision ${snapshot.revision}`, "ok");
+        }
       }
     } catch (error) {
       this.setError(error);
@@ -384,6 +390,11 @@ export class ViewerApp {
             }
           : upstreamDiagnosticsOmitted,
       );
+      const incompleteMessage = incompleteViewMessage(this.#snapshot, mergedRegion);
+      if (incompleteMessage) {
+        this.setStatus(incompleteMessage, "error");
+        return false;
+      }
       if (calculationError) {
         const message = calculationError instanceof Error ? calculationError.message : String(calculationError);
         this.setStatus(`Calculation failed: ${message}`, "error");
@@ -423,7 +434,8 @@ export class ViewerApp {
         this.#source = Uint8Array.from(source.source);
         this.updateSourceView();
       }
-      await this.refreshVisibleRegion();
+      const refreshed = await this.refreshVisibleRegion();
+      if (!refreshed) return;
       const patchSummary = edited.patches
         .map((patch) => `${patch.span.start}..${patch.span.end}`)
         .join(", ");
@@ -913,4 +925,47 @@ function diagnosticsOmitted(value: unknown): number {
 function diagnosticOmissionEntries(omissions: DiagnosticOmissions): Array<[DiagnosticScope, number]> {
   return (Object.entries(omissions) as Array<[DiagnosticScope, number | undefined]>)
     .filter((entry): entry is [DiagnosticScope, number] => Number.isSafeInteger(entry[1]) && (entry[1] ?? 0) > 0);
+}
+
+function incompleteViewMessage(snapshot: WorkbookSnapshot, region: VisibleRegion): string | undefined {
+  const support = snapshot.extension_support;
+  const calculationComplete = support.calculation_complete && region.completeness.calculation_complete;
+  const renderingComplete = support.rendering_complete && region.completeness.rendering_complete;
+  if (calculationComplete && renderingComplete) return undefined;
+
+  const required = snapshot.extension_declarations
+    .filter((declaration) => declaration.availability === "unavailable_required")
+    .map((declaration) => declaration.capability);
+  const capability = required.length > 0 ? ` (${required.join(", ")})` : "";
+  const unavailable = [
+    !calculationComplete ? "calculated values" : undefined,
+    !renderingComplete ? "complete rendering" : undefined,
+  ].filter((value): value is string => Boolean(value));
+  const reason = required.length > 0
+    ? `required extension support is unavailable${capability}`
+    : "workbook capabilities are incomplete";
+  return `Incomplete workbook view: ${reason}; the viewer cannot provide ${unavailable.join(" or ")}.`;
+}
+
+function extensionOpenNotice(snapshot: WorkbookSnapshot): string | undefined {
+  if (!snapshot.extension_support.valid) {
+    return "with extension validation failures; the workbook remains editable for repair";
+  }
+  const optionalUnavailable = snapshot.extension_declarations.some(
+    (declaration) => declaration.availability === "unavailable_optional",
+  );
+  const undeclaredInstance = snapshot.extension_instances.some(
+    (instance) => instance.outcome === "skipped_undeclared",
+  );
+  const skippedUnavailable = snapshot.extension_instances.some(
+    (instance) => instance.outcome === "skipped_unavailable",
+  );
+  const warnings = [
+    optionalUnavailable ? "optional capability unavailable" : undefined,
+    undeclaredInstance ? "undeclared instance skipped" : undefined,
+    skippedUnavailable && !optionalUnavailable ? "unavailable instance skipped" : undefined,
+  ].filter((value): value is string => Boolean(value));
+  return warnings.length > 0
+    ? `with extension warnings (${warnings.join("; ")}); calculation and rendering remain complete`
+    : undefined;
 }

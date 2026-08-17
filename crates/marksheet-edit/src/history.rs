@@ -14,7 +14,7 @@ use std::fmt;
 use marksheet_model::{
     Coordinate, Diagnostic, NameId, NameTarget, SheetId, SheetItem, TableId, Value, Workbook,
 };
-use marksheet_syntax::parse;
+use marksheet_syntax::{ParseOptions, parse_with_options};
 
 use crate::{
     inverse::{InverseEditError, InverseEditErrorKind, InverseEditResult, InverseTransaction},
@@ -126,6 +126,7 @@ impl EditIntent {
 #[derive(Clone, Debug)]
 pub struct EditSession {
     source: Vec<u8>,
+    parse_options: ParseOptions,
     undo: Vec<HistoryEntry>,
     redo: Vec<HistoryEntry>,
 }
@@ -136,11 +137,30 @@ impl EditSession {
     /// creates patches.
     #[must_use]
     pub fn new(source: impl Into<Vec<u8>>) -> Self {
+        Self::new_with_parse_options(source, &ParseOptions::default())
+    }
+
+    /// Starts an editor session with fixed host extension capabilities.
+    ///
+    /// Every parse performed while capturing intent, executing, rebasing,
+    /// undoing, or redoing uses this exact option set.
+    #[must_use]
+    pub fn new_with_parse_options(
+        source: impl Into<Vec<u8>>,
+        parse_options: &ParseOptions,
+    ) -> Self {
         Self {
             source: source.into(),
+            parse_options: parse_options.clone(),
             undo: Vec::new(),
             redo: Vec::new(),
         }
+    }
+
+    /// Host extension capabilities fixed for this session's lifetime.
+    #[must_use]
+    pub fn parse_options(&self) -> &ParseOptions {
+        &self.parse_options
     }
 
     /// Returns the current exact document bytes.
@@ -197,7 +217,7 @@ impl EditSession {
     /// Returns [`HistoryErrorKind::InvalidSource`] when current bytes do not
     /// form a complete Marksheet workbook.
     pub fn intent(&self, transaction: EditTransaction) -> Result<EditIntent, HistoryError> {
-        let workbook = parse_workbook(&self.source)?;
+        let workbook = parse_workbook(&self.source, &self.parse_options)?;
         Ok(EditIntent {
             source: SourceFingerprint::of(&self.source),
             base_source: self.source.clone(),
@@ -231,7 +251,7 @@ impl EditSession {
     /// Returns [`HistoryErrorKind::Conflict`] unless the intent's retained
     /// byte snapshot exactly equals the current source.
     pub fn execute_intent(&mut self, intent: EditIntent) -> Result<EditResult, HistoryError> {
-        validate_intent(&intent)?;
+        validate_intent(&intent, &self.parse_options)?;
         if intent.base_source != self.source {
             return Err(HistoryError::conflict(
                 "the document changed after this edit intent was created; rebase it explicitly",
@@ -260,13 +280,13 @@ impl EditSession {
         if external_source == self.source && intent.base_source == self.source {
             return self.execute_intent(intent);
         }
-        validate_intent(&intent)?;
+        validate_intent(&intent, &self.parse_options)?;
         if intent.transaction.expectations.source.is_some() {
             return Err(HistoryError::conflict(
                 "a source-fingerprint precondition cannot be semantically rebased",
             ));
         }
-        let external_workbook = parse_workbook(external_source)?;
+        let external_workbook = parse_workbook(external_source, &self.parse_options)?;
         verify_preconditions(&external_workbook, &intent.preconditions)?;
 
         // The transaction may now be planned on the external formatting and
@@ -287,7 +307,7 @@ impl EditSession {
         // history untouched, just like any other failed transaction.
         let result = rebased
             .transaction
-            .execute(external_source)
+            .execute_with_parse_options(external_source, &self.parse_options)
             .map_err(HistoryError::from_edit)?;
         self.clear_history();
         Ok(self.record(rebased, result))
@@ -326,11 +346,18 @@ impl EditSession {
             .undo
             .pop()
             .ok_or_else(|| HistoryError::new(HistoryErrorKind::NothingToUndo, "nothing to undo"))?;
-        let restored = match entry.inverse.execute(&self.source) {
+        let restored = match entry
+            .inverse
+            .execute_with_parse_options(&self.source, &self.parse_options)
+        {
             Ok(restored) => restored,
             Err(error) => {
                 self.undo.push(entry);
-                return Err(history_inverse_error(error, &self.source));
+                return Err(history_inverse_error(
+                    error,
+                    &self.source,
+                    &self.parse_options,
+                ));
             }
         };
         self.source.clone_from(&restored.source);
@@ -364,11 +391,18 @@ impl EditSession {
             .redo
             .pop()
             .ok_or_else(|| HistoryError::new(HistoryErrorKind::NothingToRedo, "nothing to redo"))?;
-        let reapplied = match entry.forward.execute(&self.source) {
+        let reapplied = match entry
+            .forward
+            .execute_with_parse_options(&self.source, &self.parse_options)
+        {
             Ok(reapplied) => reapplied,
             Err(error) => {
                 self.redo.push(entry);
-                return Err(history_inverse_error(error, &self.source));
+                return Err(history_inverse_error(
+                    error,
+                    &self.source,
+                    &self.parse_options,
+                ));
             }
         };
         self.source.clone_from(&reapplied.source);
@@ -389,7 +423,7 @@ impl EditSession {
     fn commit(&mut self, intent: EditIntent) -> Result<EditResult, HistoryError> {
         let result = intent
             .transaction
-            .execute(&self.source)
+            .execute_with_parse_options(&self.source, &self.parse_options)
             .map_err(HistoryError::from_edit)?;
         // `EditResult::source` was constructed by applying the same exact
         // PatchSet that we retain for redo. Preserve it rather than rendering
@@ -492,8 +526,8 @@ impl fmt::Display for HistoryError {
 
 impl std::error::Error for HistoryError {}
 
-fn parse_workbook(source: &[u8]) -> Result<Workbook, HistoryError> {
-    let document = parse(source);
+fn parse_workbook(source: &[u8], options: &ParseOptions) -> Result<Workbook, HistoryError> {
+    let document = parse_with_options(source, options);
     if document.has_errors() {
         return Err(HistoryError {
             kind: HistoryErrorKind::InvalidSource,
@@ -518,13 +552,13 @@ fn parse_workbook(source: &[u8]) -> Result<Workbook, HistoryError> {
 /// execution. Public callers cannot mutate these private fields, but this
 /// check keeps the safety property local even if a future crate-internal API
 /// reconstructs an intent from storage.
-fn validate_intent(intent: &EditIntent) -> Result<(), HistoryError> {
+fn validate_intent(intent: &EditIntent, options: &ParseOptions) -> Result<(), HistoryError> {
     if intent.source != SourceFingerprint::of(&intent.base_source) {
         return Err(HistoryError::conflict(
             "the edit intent fingerprint does not match its retained source snapshot",
         ));
     }
-    let workbook = parse_workbook(&intent.base_source)?;
+    let workbook = parse_workbook(&intent.base_source, options)?;
     let expected = intent
         .transaction
         .operations
@@ -731,7 +765,11 @@ fn name_identifier_available(workbook: &Workbook, new: &NameId) -> bool {
 /// failure. Parsing is read-only and happens before the history entry moves,
 /// so a malformed external replacement cannot conceal its diagnostics or
 /// alter undo/redo state.
-fn history_inverse_error(error: InverseEditError, current_source: &[u8]) -> HistoryError {
+fn history_inverse_error(
+    error: InverseEditError,
+    current_source: &[u8],
+    options: &ParseOptions,
+) -> HistoryError {
     let kind = match error.kind {
         InverseEditErrorKind::PatchPrecondition => HistoryErrorKind::PatchPrecondition,
         InverseEditErrorKind::Patch | InverseEditErrorKind::InvalidResult => HistoryErrorKind::Edit,
@@ -748,7 +786,7 @@ fn history_inverse_error(error: InverseEditError, current_source: &[u8]) -> Hist
     if error.kind != InverseEditErrorKind::PatchPrecondition {
         return result;
     }
-    if let Err(validation) = parse_workbook(current_source) {
+    if let Err(validation) = parse_workbook(current_source, options) {
         result.message = format!(
             "{}; changed source also failed validation: {}",
             result.message, validation.message

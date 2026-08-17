@@ -16,7 +16,7 @@ use marksheet_model::{
     HorizontalAlignment, NameId, NameTarget, NumberFormat, Range, RowRange, SheetId, SheetItem,
     StyleId, StyleProperties, Table, TableId, TableRegion, Value, VerticalAlignment, Workbook,
 };
-use marksheet_syntax::{ParsedDocument, SourceMap, parse};
+use marksheet_syntax::{ParseOptions, ParsedDocument, SourceMap, parse_with_options};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -186,7 +186,21 @@ impl EditTransaction {
     /// Returns a structured error and no patches when a precondition, semantic
     /// target, source-location requirement, or final validation fails.
     pub fn execute(&self, source: &[u8]) -> Result<EditResult, EditError> {
-        execute(source, self)
+        self.execute_with_parse_options(source, &ParseOptions::default())
+    }
+
+    /// Executes with the exact host extension capabilities used for both the
+    /// base document and the edited result.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same structured, atomic failures as [`Self::execute`].
+    pub fn execute_with_parse_options(
+        &self,
+        source: &[u8],
+        options: &ParseOptions,
+    ) -> Result<EditResult, EditError> {
+        execute_with_parse_options(source, self, options)
     }
 }
 
@@ -317,15 +331,32 @@ impl std::error::Error for EditError {}
 /// Returns [`EditError`] without a partial patch plan if a source precondition,
 /// operation precondition, patch invariant, or final validation fails.
 pub fn execute(source: &[u8], transaction: &EditTransaction) -> Result<EditResult, EditError> {
+    execute_with_parse_options(source, transaction, &ParseOptions::default())
+}
+
+/// Executes a transaction with host-controlled parser capabilities.
+///
+/// The same `options` value validates the initial snapshot and the patched
+/// result, so extension availability cannot change inside the atomic edit.
+///
+/// # Errors
+///
+/// Returns [`EditError`] without a partial patch plan under the same
+/// conditions as [`execute`].
+pub fn execute_with_parse_options(
+    source: &[u8],
+    transaction: &EditTransaction,
+    options: &ParseOptions,
+) -> Result<EditResult, EditError> {
     let before = SourceFingerprint::of(source);
-    if let Some(expected) = &transaction.expectations.source
-        && !expected.matches(source, before)
-    {
-        return Err(EditError::new(
-            EditErrorKind::Conflict,
-            None,
-            "source bytes no longer match the transaction precondition",
-        ));
+    if let Some(expected) = &transaction.expectations.source {
+        if !expected.matches(source, before) {
+            return Err(EditError::new(
+                EditErrorKind::Conflict,
+                None,
+                "source bytes no longer match the transaction precondition",
+            ));
+        }
     }
     if transaction.operations.len() > 1
         && transaction
@@ -339,7 +370,7 @@ pub fn execute(source: &[u8], transaction: &EditTransaction) -> Result<EditResul
             "MoveBlock cannot be combined with another same-base operation",
         ));
     }
-    let base = ValidDocument::parse(source, EditErrorKind::InvalidBase)?;
+    let base = ValidDocument::parse(source, EditErrorKind::InvalidBase, options)?;
     let defined_styles = resolve_style_definitions(&base, &transaction.operations)?;
     let mut patches = Vec::new();
     for (index, operation) in transaction.operations.iter().enumerate() {
@@ -360,7 +391,7 @@ pub fn execute(source: &[u8], transaction: &EditTransaction) -> Result<EditResul
     let (edited, inverse) = patch_set
         .apply_with_inverse(source)
         .map_err(|error| patch_error(&error))?;
-    let validated = ValidDocument::parse(&edited, EditErrorKind::InvalidResult)?;
+    let validated = ValidDocument::parse(&edited, EditErrorKind::InvalidResult, options)?;
     let inverse_transaction = InverseTransaction::from_patch_set(inverse.clone());
 
     Ok(EditResult {
@@ -385,8 +416,12 @@ struct ValidDocument {
 }
 
 impl ValidDocument {
-    fn parse(source: &[u8], error_kind: EditErrorKind) -> Result<Self, EditError> {
-        let document = parse(source);
+    fn parse(
+        source: &[u8],
+        error_kind: EditErrorKind,
+        options: &ParseOptions,
+    ) -> Result<Self, EditError> {
+        let document = parse_with_options(source, options);
         if document.has_errors() {
             return Err(EditError::invalid_document(
                 error_kind,
@@ -1064,14 +1099,14 @@ fn validate_style_properties(properties: &StyleProperties, index: usize) -> Resu
             "style decimals must be between 0 and 15",
         ));
     }
-    if let Some(currency) = &properties.currency
-        && (currency.len() != 3 || !currency.bytes().all(|byte| byte.is_ascii_uppercase()))
-    {
-        return Err(operation_error(
-            index,
-            EditErrorKind::InvalidStyle,
-            "style currency must be a three-letter uppercase ISO 4217 code",
-        ));
+    if let Some(currency) = &properties.currency {
+        if currency.len() != 3 || !currency.bytes().all(|byte| byte.is_ascii_uppercase()) {
+            return Err(operation_error(
+                index,
+                EditErrorKind::InvalidStyle,
+                "style currency must be a three-letter uppercase ISO 4217 code",
+            ));
+        }
     }
     if properties.number == Some(NumberFormat::Currency) && properties.currency.is_none() {
         return Err(operation_error(
@@ -1521,14 +1556,14 @@ fn validate_apply_target(
             "style application table is not owned by the target sheet",
         ));
     }
-    if let TableRegion::Column { header } = region
-        && !table_index.headers.contains_key(header)
-    {
-        return Err(operation_error(
-            index,
-            EditErrorKind::TargetNotFound,
-            "style application table header does not exist",
-        ));
+    if let TableRegion::Column { header } = region {
+        if !table_index.headers.contains_key(header) {
+            return Err(operation_error(
+                index,
+                EditErrorKind::TargetNotFound,
+                "style application table header does not exist",
+            ));
+        }
     }
     Ok(())
 }

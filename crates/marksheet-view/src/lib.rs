@@ -85,7 +85,39 @@ impl VisibleRegionRequest {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorkbookSummary {
     pub sheets: Vec<SheetSummary>,
+    /// Whether this projection can make complete core calculation and
+    /// rendering claims for the parsed source.
+    pub completeness: ViewCompleteness,
     pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Explicit capability status for a recovered workbook projection.
+///
+/// A parser can recover a semantic workbook from invalid source. In that case
+/// renderers may still present the authored core content, but must not mistake
+/// that recovery for a complete result or use calculated values derived from
+/// an invalid document.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ViewCompleteness {
+    /// `false` means calculated values were not prepared and must not be
+    /// inferred from the projection.
+    pub calculation_complete: bool,
+    /// `false` means the renderer only received a recoverable core projection.
+    pub rendering_complete: bool,
+}
+
+impl ViewCompleteness {
+    /// Complete status for a trusted semantic workbook or an error-free parse.
+    pub const COMPLETE: Self = Self {
+        calculation_complete: true,
+        rendering_complete: true,
+    };
+
+    /// Recovered status for a parsed document containing an error diagnostic.
+    pub const RECOVERED_INCOMPLETE: Self = Self {
+        calculation_complete: false,
+        rendering_complete: false,
+    };
 }
 
 /// Renderer-friendly facts about one declared sheet.
@@ -106,6 +138,8 @@ pub struct SheetSummary {
 pub struct VisibleRegion {
     pub sheet: SheetSummary,
     pub range: Range,
+    /// Completeness of this projection's source document.
+    pub completeness: ViewCompleteness,
     /// Sparse cells sorted by coordinate.
     pub cells: Vec<PresentedCell>,
     /// Sparse `@apply` intersections in source order. Renderers apply these
@@ -402,6 +436,7 @@ pub struct WorkbookView {
     sparse_indexes: BTreeMap<SheetId, SheetSparseIndex>,
     style_indexes: BTreeMap<SheetId, Vec<IndexedStyleApplication>>,
     geometry_indexes: BTreeMap<SheetId, SheetGeometryIndex>,
+    completeness: ViewCompleteness,
     diagnostics: Vec<Diagnostic>,
     limits: ViewLimits,
     calculation: Option<PreparedCalculation>,
@@ -418,7 +453,25 @@ impl WorkbookView {
         workbook: Workbook,
         source_map: Option<SourceMap>,
         diagnostics: Vec<Diagnostic>,
+        limits: ViewLimits,
+    ) -> Result<Self, ViewError> {
+        Self::build(
+            workbook,
+            source_map,
+            diagnostics,
+            limits,
+            ViewCompleteness::COMPLETE,
+            true,
+        )
+    }
+
+    fn build(
+        workbook: Workbook,
+        source_map: Option<SourceMap>,
+        diagnostics: Vec<Diagnostic>,
         mut limits: ViewLimits,
+        completeness: ViewCompleteness,
+        prepare_calculation: bool,
     ) -> Result<Self, ViewError> {
         // A viewport calculation must not quietly bypass this crate's bounds.
         limits.calculation.work.max_output_cells = limits.max_viewport_cells;
@@ -453,10 +506,15 @@ impl WorkbookView {
             .iter()
             .map(|sheet| (sheet.id.clone(), SheetGeometryIndex::from_sheet(sheet)))
             .collect();
-        let engine = ReferenceCalcEngine;
-        let calculation_report = engine.prepare(&workbook, limits.calculation.clone());
         let mut all_diagnostics = diagnostics;
-        all_diagnostics.extend(calculation_report.diagnostics);
+        let calculation = if prepare_calculation {
+            let engine = ReferenceCalcEngine;
+            let calculation_report = engine.prepare(&workbook, limits.calculation.clone());
+            all_diagnostics.extend(calculation_report.diagnostics);
+            calculation_report.calculation
+        } else {
+            None
+        };
         Ok(Self {
             workbook,
             source_map,
@@ -464,13 +522,18 @@ impl WorkbookView {
             sparse_indexes,
             style_indexes,
             geometry_indexes,
+            completeness,
             diagnostics: all_diagnostics,
             limits,
-            calculation: calculation_report.calculation,
+            calculation,
         })
     }
 
     /// Creates a view from a parsed document, preserving parser diagnostics and source spans.
+    ///
+    /// Error-bearing documents remain available as sparse recoverable views,
+    /// but calculation is not prepared and their completeness flags are both
+    /// `false`. Warnings do not make an otherwise valid document incomplete.
     ///
     /// # Errors
     ///
@@ -481,11 +544,18 @@ impl WorkbookView {
             .workbook
             .clone()
             .ok_or(ViewError::InvalidDocument)?;
-        Self::new(
+        let has_errors = document.has_errors();
+        Self::build(
             workbook,
             Some(document.source_map.clone()),
             document.diagnostics.clone(),
             limits,
+            if has_errors {
+                ViewCompleteness::RECOVERED_INCOMPLETE
+            } else {
+                ViewCompleteness::COMPLETE
+            },
+            !has_errors,
         )
     }
 
@@ -503,6 +573,7 @@ impl WorkbookView {
                         .map(|prepared| sheet_summary(sheet, prepared))
                 })
                 .collect(),
+            completeness: self.completeness,
             diagnostics: self.diagnostics.clone(),
         }
     }
@@ -618,6 +689,7 @@ impl WorkbookView {
         Ok(VisibleRegion {
             sheet: sheet_summary(sheet, prepared_sheet),
             range: request.range,
+            completeness: self.completeness,
             cells: presented_cells,
             style_regions,
             columns,
@@ -1042,6 +1114,74 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn required_unavailable_extension_is_viewable_but_incomplete_and_uncalculated() {
+        let source = b"#!marksheet 0.1\n@require actuarial_functions@1\n@sheet s \"Recovered\"\n@block A1 csv\nValue,Double\n5,=A2*2\n@end\n";
+        let document = parse(source);
+        assert!(document.has_errors());
+        assert!(
+            document
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code.as_str() == "MS3101")
+        );
+
+        let mut view = WorkbookView::from_document(&document, ViewLimits::default()).unwrap();
+        assert_eq!(
+            view.summary().completeness,
+            ViewCompleteness::RECOVERED_INCOMPLETE
+        );
+        let region = view
+            .visible_region(&VisibleRegionRequest::new(
+                "s".parse().unwrap(),
+                Range::parse("A1:B2").unwrap(),
+            ))
+            .unwrap();
+
+        assert_eq!(region.completeness, ViewCompleteness::RECOVERED_INCOMPLETE);
+        assert_eq!(
+            region.cells.len(),
+            4,
+            "recovered core cells remain viewable"
+        );
+        assert!(
+            region.cells.iter().all(|cell| cell.calculated.is_none()),
+            "an invalid parsed document must not expose calculated values"
+        );
+    }
+
+    #[test]
+    fn optional_unavailable_extension_warning_remains_complete_and_calculable() {
+        let source = b"#!marksheet 0.1\n@use actuarial_functions@1\n@sheet s \"Optional\"\n@block A1 csv\nValue,Double\n5,=A2*2\n@end\n";
+        let document = parse(source);
+        assert!(!document.has_errors());
+        assert!(
+            document
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code.as_str() == "MS3102")
+        );
+
+        let mut view = WorkbookView::from_document(&document, ViewLimits::default()).unwrap();
+        assert_eq!(view.summary().completeness, ViewCompleteness::COMPLETE);
+        let region = view
+            .visible_region(&VisibleRegionRequest::new(
+                "s".parse().unwrap(),
+                Range::parse("A1:B2").unwrap(),
+            ))
+            .unwrap();
+
+        assert_eq!(region.completeness, ViewCompleteness::COMPLETE);
+        assert!(matches!(
+            region
+                .cells
+                .iter()
+                .find(|cell| cell.coordinate == coordinate("B2"))
+                .and_then(|cell| cell.calculated.as_ref()),
+            Some(CalcValue::Number(value)) if (*value - 10.0).abs() < f64::EPSILON
+        ));
     }
 
     #[test]

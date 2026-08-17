@@ -1,6 +1,6 @@
 # Marksheet Wasm binding
 
-`marksheet-wasm` is the completed Milestone 4, deliberately batched Web Worker
+`marksheet-wasm` is the deliberately batched Web Worker
 boundary. It accepts one versioned JSON request at a time and returns one JSON
 response under the stable `marksheet-worker@1` protocol. It does not offer
 per-cell getters or expose a dense workbook extent. The checked-in
@@ -10,7 +10,8 @@ worker host.
 This package is intentionally an independent Cargo workspace until the parent
 workspace publishes it as a release artifact. It path-depends on the Marksheet
 core crates, including the sparse, pure-Rust, renderer-neutral
-`marksheet-view` layer. That layer projects only a requested bounded region and
+`marksheet-view` layer and the statically linked trusted extension host. The
+view layer projects only a requested bounded region and
 keeps authored values, virtual fills, calculation, source links, resolved
 styles, and row/column geometry separate.
 
@@ -37,7 +38,10 @@ bash bindings/wasm/check-size.sh
 `protocol.d.ts` is a checked-in Rust protocol artifact. Run
 `cargo run --manifest-path bindings/wasm/Cargo.toml --bin generate_protocol`
 to emit it, or `bash bindings/wasm/check-web-abi.sh` to fail on protocol or
-Wasm ABI declaration drift.
+Wasm ABI declaration drift. The ABI check also loads the generated binary in
+Node and exercises extension snapshots, exact-major matching, calculation
+gating, opaque-payload privacy, and extension-aware edit reparsing through the
+real Wasm boundary.
 
 The Rust conformance tests exercise the browser-session fixture contract on the
 native worker/session API. The small Node test suite covers worker-client
@@ -99,6 +103,24 @@ Formula diagnostics retain their exact source links. A document with
 error-level formula diagnostics can still be projected for inspection, but the
 worker marks it non-editable and refuses semantic transactions until the errors
 are resolved.
+
+The worker installs only the statically linked `assertions@1` capability.
+Every open, replacement, and edit reparse passes that exact capability to the
+syntax layer; another major is never treated as compatible. The trusted host
+runs assertions against calculated workbook semantics and merges its structured
+diagnostics into the bounded response without duplicating parser availability
+diagnostics. `MS3201`, `MS3202`, and `MS3203` are validation findings rather
+than source-invalidity findings, so the core workbook remains calculable,
+renderable, and editable to repair them.
+
+Snapshots expose typed declaration, instance, support, and completeness
+summaries, but never extension payload bytes. An unavailable optional
+capability remains a warning with complete core calculation and rendering. An
+undeclared opaque instance produces `MS3103` and remains complete. An
+unavailable required exact capability produces a recoverable snapshot with
+both completeness flags false: range calculation is refused, and sparse
+presentation contains authored core values only while explicitly reporting
+incomplete rendering and calculation.
 
 The binding's reusable local-save guard follows an exact read/compare/write
 sequence: it compares the current bytes with the opening snapshot before it

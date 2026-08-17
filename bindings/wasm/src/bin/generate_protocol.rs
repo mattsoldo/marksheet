@@ -27,13 +27,14 @@ use marksheet_model::{
 };
 use marksheet_view::{
     AxisGeometry, CellSource, ColumnPresentation, PresentedCell, ResolvedStyle, RowPresentation,
-    SheetSummary as ViewSheetSummary, StyleLayer, StyledRegion, VisibleRegion,
+    SheetSummary as ViewSheetSummary, StyleLayer, StyledRegion, ViewCompleteness, VisibleRegion,
 };
 use marksheet_wasm::{
-    NameSummary, PROTOCOL_VERSION, PatchSummary, RequestEnvelope, ResolvedNameTarget,
-    ResponseEnvelope, SheetSummary, WorkbookSnapshot, WorkerEditExpectations,
-    WorkerEditTransaction, WorkerError, WorkerErrorCode, WorkerRequest, WorkerResponse,
-    WorkerSourceExpectation,
+    ExtensionAvailabilitySummary, ExtensionDeclarationSummary, ExtensionInstanceOutcomeSummary,
+    ExtensionInstanceSummary, ExtensionScopeSummary, ExtensionSupportSummary, NameSummary,
+    PROTOCOL_VERSION, PatchSummary, RequestEnvelope, ResolvedNameTarget, ResponseEnvelope,
+    SheetSummary, WorkbookSnapshot, WorkerEditExpectations, WorkerEditTransaction, WorkerError,
+    WorkerErrorCode, WorkerRequest, WorkerResponse, WorkerSourceExpectation,
 };
 use serde::Serialize;
 
@@ -312,8 +313,10 @@ fn render_schema(
     field: Option<&str>,
     allow_reference: bool,
 ) -> String {
-    if allow_reference && let Some(reference) = reference_for(schema, current, definitions, field) {
-        return reference.to_owned();
+    if allow_reference {
+        if let Some(reference) = reference_for(schema, current, definitions, field) {
+            return reference.to_owned();
+        }
     }
     match schema {
         Schema::Null => "null".to_owned(),
@@ -373,38 +376,43 @@ fn reference_for<'a>(
         return Some(matches[0].name);
     }
     if matches.len() > 1 {
-        if field.is_some_and(|field| field.contains("span") || field == "primary")
-            && let Some(definition) = matches
+        if field.is_some_and(|field| field.contains("span") || field == "primary") {
+            if let Some(definition) = matches
                 .iter()
                 .find(|definition| definition.name == "ByteSpan")
-        {
-            return Some(definition.name);
+            {
+                return Some(definition.name);
+            }
         }
-        if matches!(field, Some("columns" | "rows"))
-            && let Some(definition) = matches
+        if matches!(field, Some("columns" | "rows")) {
+            if let Some(definition) = matches
                 .iter()
                 .find(|definition| definition.name == "AxisRange")
-        {
-            return Some(definition.name);
+            {
+                return Some(definition.name);
+            }
         }
         return Some(matches[0].name);
     }
     if matches!(current, "Value" | "ScalarValue")
         && field == Some("value")
         && matches!(schema, Schema::LiteralString(_))
-        && let Some(definition) = definitions.iter().find(|definition| {
-            definition.name == "CellError" && schema_is_represented_by(&definition.schema, schema)
-        })
     {
-        return Some(definition.name);
+        if let Some(definition) = definitions.iter().find(|definition| {
+            definition.name == "CellError" && schema_is_represented_by(&definition.schema, schema)
+        }) {
+            return Some(definition.name);
+        }
     }
-    if let Some(preferred) = preferred_reference(current, field)
-        && let Some(definition) = definitions
+    if let Some(preferred) = preferred_reference(current, field) {
+        if let Some(definition) = definitions
             .iter()
             .find(|definition| definition.name == preferred)
-        && schema_is_represented_by(&definition.schema, schema)
-    {
-        return Some(definition.name);
+        {
+            if schema_is_represented_by(&definition.schema, schema) {
+                return Some(definition.name);
+            }
+        }
     }
     None
 }
@@ -430,12 +438,19 @@ fn preferred_reference(current: &str, field: Option<&str>) -> Option<&'static st
         ("WorkerRequest", Some("transaction")) => Some("EditTransaction"),
         ("WorkbookSnapshot", Some("sheets")) => Some("SheetSummary"),
         ("WorkbookSnapshot", Some("names")) => Some("NameSummary"),
+        ("WorkbookSnapshot", Some("extension_declarations")) => Some("ExtensionDeclarationSummary"),
+        ("WorkbookSnapshot", Some("extension_instances")) => Some("ExtensionInstanceSummary"),
+        ("WorkbookSnapshot", Some("extension_support")) => Some("ExtensionSupportSummary"),
+        ("ExtensionDeclarationSummary", Some("availability")) => Some("ExtensionAvailability"),
+        ("ExtensionInstanceSummary", Some("scope")) => Some("ExtensionScope"),
+        ("ExtensionInstanceSummary", Some("outcome")) => Some("ExtensionInstanceOutcome"),
         ("ResolvedStyle", Some("layers")) => Some("StyleLayer"),
         ("PresentedCell", Some("source")) => Some("CellSource"),
         ("PresentedCell" | "StyledRegion", Some("style")) => Some("ResolvedStyle"),
         ("PresentedCell", Some("column" | "row"))
         | ("ColumnPresentation" | "RowPresentation", Some("geometry")) => Some("AxisGeometry"),
         ("VisibleRegion", Some("sheet")) => Some("ViewSheetSummary"),
+        ("VisibleRegion", Some("completeness")) => Some("ViewCompleteness"),
         ("VisibleRegion", Some("cells")) => Some("PresentedCell"),
         ("VisibleRegion", Some("style_regions")) => Some("StyledRegion"),
         ("VisibleRegion", Some("columns")) => Some("ColumnPresentation"),
@@ -1168,6 +1183,111 @@ fn style_layer_samples() -> Vec<StyleLayer> {
     ]
 }
 
+fn extension_availability_samples() -> Vec<ExtensionAvailabilitySummary> {
+    let samples = vec![
+        ExtensionAvailabilitySummary::Available,
+        ExtensionAvailabilitySummary::UnavailableOptional,
+        ExtensionAvailabilitySummary::UnavailableRequired,
+    ];
+    let tags = samples
+        .iter()
+        .map(|availability| match availability {
+            ExtensionAvailabilitySummary::Available => "available",
+            ExtensionAvailabilitySummary::UnavailableOptional => "unavailable_optional",
+            ExtensionAvailabilitySummary::UnavailableRequired => "unavailable_required",
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        tags.len(),
+        3,
+        "ExtensionAvailability samples must cover every variant"
+    );
+    samples
+}
+
+fn extension_scope_samples() -> Vec<ExtensionScopeSummary> {
+    let samples = vec![
+        ExtensionScopeSummary::Workbook,
+        ExtensionScopeSummary::Sheet {
+            sheet: "sales".to_owned(),
+        },
+    ];
+    let tags = samples
+        .iter()
+        .map(|scope| match scope {
+            ExtensionScopeSummary::Workbook => "workbook",
+            ExtensionScopeSummary::Sheet { .. } => "sheet",
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        tags.len(),
+        2,
+        "ExtensionScope samples must cover every variant"
+    );
+    samples
+}
+
+fn extension_instance_outcome_samples() -> Vec<ExtensionInstanceOutcomeSummary> {
+    let samples = vec![
+        ExtensionInstanceOutcomeSummary::Processed,
+        ExtensionInstanceOutcomeSummary::SkippedUnavailable,
+        ExtensionInstanceOutcomeSummary::SkippedUndeclared,
+        ExtensionInstanceOutcomeSummary::RejectedDuplicate,
+        ExtensionInstanceOutcomeSummary::RejectedByLimit,
+    ];
+    let tags = samples
+        .iter()
+        .map(|outcome| match outcome {
+            ExtensionInstanceOutcomeSummary::Processed => "processed",
+            ExtensionInstanceOutcomeSummary::SkippedUnavailable => "skipped_unavailable",
+            ExtensionInstanceOutcomeSummary::SkippedUndeclared => "skipped_undeclared",
+            ExtensionInstanceOutcomeSummary::RejectedDuplicate => "rejected_duplicate",
+            ExtensionInstanceOutcomeSummary::RejectedByLimit => "rejected_by_limit",
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        tags.len(),
+        5,
+        "ExtensionInstanceOutcome samples must cover every variant"
+    );
+    samples
+}
+
+fn extension_declaration_samples() -> Vec<ExtensionDeclarationSummary> {
+    extension_availability_samples()
+        .into_iter()
+        .enumerate()
+        .map(|(index, availability)| ExtensionDeclarationSummary {
+            capability: format!("capability_{index}@1"),
+            required: index != 1,
+            availability,
+            source_span: (index != 1).then_some(span()),
+        })
+        .collect()
+}
+
+fn extension_instance_samples() -> Vec<ExtensionInstanceSummary> {
+    extension_instance_outcome_samples()
+        .into_iter()
+        .enumerate()
+        .map(|(index, outcome)| ExtensionInstanceSummary {
+            capability: format!("capability_{index}@1"),
+            name: format!("instance-{index}"),
+            scope: if index % 2 == 0 {
+                ExtensionScopeSummary::Workbook
+            } else {
+                ExtensionScopeSummary::Sheet {
+                    sheet: "sales".to_owned(),
+                }
+            },
+            declared: index != 2,
+            supported: index == 0,
+            outcome,
+            source_span: (index != 1).then_some(span()),
+        })
+        .collect()
+}
+
 fn view_region() -> VisibleRegion {
     VisibleRegion {
         sheet: ViewSheetSummary {
@@ -1179,6 +1299,7 @@ fn view_region() -> VisibleRegion {
             footprint_count: 1,
         },
         range: range(),
+        completeness: ViewCompleteness::COMPLETE,
         cells: vec![PresentedCell {
             coordinate: coordinate(),
             source: CellSource::Authored {
@@ -1245,6 +1366,16 @@ fn workbook_snapshot() -> WorkbookSnapshot {
             source_span: Some(span()),
         }],
         name_count: 1,
+        extension_declarations: extension_declaration_samples(),
+        extension_instances: extension_instance_samples(),
+        extension_support: ExtensionSupportSummary {
+            supported_capabilities: vec!["assertions@1".to_owned()],
+            capabilities_complete: true,
+            calculation_complete: true,
+            rendering_complete: true,
+            validation_complete: true,
+            valid: true,
+        },
     }
 }
 
@@ -1442,6 +1573,21 @@ fn registry() -> Registry {
         source_span: None,
     });
     registry.add("NameSummary", &name_samples);
+    registry.add("ExtensionAvailability", &extension_availability_samples());
+    registry.add("ExtensionScope", &extension_scope_samples());
+    registry.add(
+        "ExtensionInstanceOutcome",
+        &extension_instance_outcome_samples(),
+    );
+    registry.add(
+        "ExtensionDeclarationSummary",
+        &extension_declaration_samples(),
+    );
+    registry.add("ExtensionInstanceSummary", &extension_instance_samples());
+    registry.add(
+        "ExtensionSupportSummary",
+        std::slice::from_ref(&snapshot.extension_support),
+    );
     registry.add("WorkbookSnapshot", &[snapshot]);
 
     let region = view_region();
@@ -1459,6 +1605,13 @@ fn registry() -> Registry {
         footprint_count: 0,
     });
     registry.add("ViewSheetSummary", &view_sheet_samples);
+    registry.add(
+        "ViewCompleteness",
+        &[
+            ViewCompleteness::COMPLETE,
+            ViewCompleteness::RECOVERED_INCOMPLETE,
+        ],
+    );
     registry.add("CellSource", &cell_source_samples());
     let mut presented_cells = region.cells.clone();
     presented_cells.push(PresentedCell {

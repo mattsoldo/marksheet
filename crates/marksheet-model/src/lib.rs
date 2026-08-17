@@ -1299,7 +1299,8 @@ pub struct ExtensionId {
 impl ExtensionId {
     /// # Errors
     ///
-    /// Returns an error for an invalid identifier, missing separator, or zero/non-numeric major version.
+    /// Returns an error for an invalid identifier, missing separator, or a
+    /// major version that is not a canonical positive decimal integer.
     pub fn parse(value: &str) -> Result<Self, ExtensionIdError> {
         let (id, major) = value
             .rsplit_once('@')
@@ -1307,14 +1308,17 @@ impl ExtensionId {
                 value: value.to_owned(),
             })?;
         let id = Identifier::parse(id).map_err(ExtensionIdError::Identifier)?;
-        let major = major.parse().map_err(|_| ExtensionIdError::Invalid {
-            value: value.to_owned(),
-        })?;
-        if major == 0 {
+        let major_bytes = major.as_bytes();
+        if !matches!(major_bytes.first(), Some(b'1'..=b'9'))
+            || major_bytes[1..].iter().any(|byte| !byte.is_ascii_digit())
+        {
             return Err(ExtensionIdError::Invalid {
                 value: value.to_owned(),
             });
         }
+        let major = major.parse().map_err(|_| ExtensionIdError::Invalid {
+            value: value.to_owned(),
+        })?;
         Ok(Self { id, major })
     }
 }
@@ -1500,6 +1504,32 @@ mod tests {
     #[test]
     fn default_workbook_has_no_explicit_book_origin() {
         assert_eq!(Workbook::default().book_origin, None);
+    }
+
+    #[test]
+    fn extension_ids_require_canonical_positive_major_versions() {
+        for (source, expected_major) in [
+            ("assertions@1", 1),
+            ("archive@10", 10),
+            ("maximum@18446744073709551615", u64::MAX),
+        ] {
+            let extension = ExtensionId::parse(source).expect("canonical extension id");
+            assert_eq!(extension.major, expected_major, "{source}");
+        }
+
+        for source in [
+            "assertions@",
+            "assertions@0",
+            "assertions@00",
+            "assertions@01",
+            "assertions@+1",
+            "assertions@-1",
+            "assertions@ 1",
+            "assertions@1 ",
+            "assertions@18446744073709551616",
+        ] {
+            assert!(ExtensionId::parse(source).is_err(), "{source}");
+        }
     }
 
     #[test]

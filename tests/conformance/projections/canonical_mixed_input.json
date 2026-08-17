@@ -1,0 +1,177 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 78,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          34
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          35
+        ]
+      },
+      {
+        "content_span": [
+          35,
+          48
+        ],
+        "ending": "lf",
+        "span": [
+          35,
+          49
+        ]
+      },
+      {
+        "content_span": [
+          49,
+          60
+        ],
+        "ending": "lf",
+        "span": [
+          49,
+          61
+        ]
+      },
+      {
+        "content_span": [
+          61,
+          72
+        ],
+        "ending": "lf",
+        "span": [
+          61,
+          73
+        ]
+      },
+      {
+        "content_span": [
+          73,
+          77
+        ],
+        "ending": "lf",
+        "span": [
+          73,
+          78
+        ]
+      }
+    ],
+    "sha256": "e4490284670068cf4085eb693a8fa7a27ae404e6da39d4b821c2800089257859"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [],
+    "extensions": [],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "main",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              49,
+              73
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "text",
+                    "span": [
+                      49,
+                      53
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "text"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "number",
+                    "span": [
+                      54,
+                      60
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "number"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "\"plain\"",
+                    "span": [
+                      61,
+                      68
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "plain"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "001",
+                    "span": [
+                      69,
+                      72
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "001"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              35,
+              48
+            ]
+          }
+        ],
+        "label": "Main",
+        "span": [
+          16,
+          34
+        ]
+      }
+    ],
+    "styles": []
+  }
+}

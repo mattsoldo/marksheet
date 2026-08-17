@@ -16,3 +16,8 @@ cargo build --manifest-path "$binding_dir/Cargo.toml" --target wasm32-unknown-un
 wasm-bindgen --target web --out-dir "$temp_dir" \
   "$binding_dir/target/wasm32-unknown-unknown/debug/marksheet_wasm.wasm"
 diff -u "$binding_dir/marksheet_wasm.d.ts" "$temp_dir/marksheet_wasm.d.ts"
+
+mkdir "$temp_dir/node"
+wasm-bindgen --target nodejs --out-dir "$temp_dir/node" \
+  "$binding_dir/target/wasm32-unknown-unknown/debug/marksheet_wasm.wasm"
+node "$binding_dir/check-extension-abi.mjs" "$temp_dir/node/marksheet_wasm.js"

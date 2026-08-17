@@ -1,0 +1,10 @@
+{
+  "protocol": "marksheet-conversion-fixture@1",
+  "request": {"source": {"format": "csv", "version": "rfc4180-marksheet-scalars@1", "path": "sources/import.csv"}, "destination": "marksheet", "import_target": {"sheet": "imported", "label": "Imported", "range": "A1:B2"}},
+  "expect": {
+    "fidelity": "lossless",
+    "artifact": "generated/import-range.ms",
+    "outcomes": [{"feature": "scalar_cells", "outcome": "exact"}, {"feature": "csv_target", "outcome": "exact", "location": {"sheet": "imported", "range": "A1:B2"}}],
+    "diagnostics": []
+  }
+}

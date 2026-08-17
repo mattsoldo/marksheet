@@ -52,6 +52,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "marksheet-extensions"
+version = "0.1.0"
+dependencies = [
+ "marksheet-calc",
+ "marksheet-model",
+ "serde_json",
+]
+
+[[package]]
 name = "marksheet-model"
 version = "0.1.0"
 dependencies = [
@@ -85,6 +94,7 @@ version = "0.1.0"
 dependencies = [
  "marksheet-calc",
  "marksheet-edit",
+ "marksheet-extensions",
  "marksheet-model",
  "marksheet-syntax",
  "marksheet-view",
