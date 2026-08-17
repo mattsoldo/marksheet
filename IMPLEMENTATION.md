@@ -554,6 +554,19 @@ The XLSX converter should initially target:
 Macros, external links, unsupported formula functions, advanced conditional
 formatting, pivots, and charts must appear in the conversion report.
 
+A defined name whose target Marksheet cannot express — a whole-column or
+whole-row range, a multi-area target, a reference to an unknown sheet or table,
+or any other non-finite A1 shape — is an omission of that one name, not a
+package-level failure: the rest of the workbook still imports, and the omitted
+name gets its own `named_ranges` omission entry. Because the portable evaluator
+would resolve a reference to a name that no longer exists as `#NAME?`, and an
+unresolved name reference cannot be written back to XLSX, a formula that reaches
+an omitted name is replaced with `#NAME?` — a cell formula becomes the typed
+error value and a fill becomes `=#NAME?` — with a `portable_formulas` replaced
+outcome per affected cell, table column, or fill range. Package-level defects
+such as malformed XML, duplicate case-insensitive names, or a name that collides
+with a table identifier remain conversion failures.
+
 CSV export requires the caller to select one sheet and range or one named table.
 There is no honest default that flattens an arbitrary workbook into one CSV.
 
