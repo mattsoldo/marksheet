@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   applyStyleTransaction,
   defineStyleTransaction,
+  escapeAuthoredText,
+  parseCellValue,
   setCellTransaction,
   setColumnWidthTransaction,
   setNameTargetTransaction,
@@ -51,5 +53,28 @@ describe("semantic transaction construction", () => {
       kind: "set_row_height",
       rows: { start: 3, end: 3 },
     });
+  });
+});
+
+describe("escapeAuthoredText", () => {
+  it.each([
+    ["", "'"],
+    ["hello", "hello"],
+    ["2024-01-01", "2024-01-01"],
+    ["42", "'42"],
+    ["-3.5", "'-3.5"],
+    ["true", "'true"],
+    ["false", "'false"],
+    ["=SUM(A1)", "'=SUM(A1)"],
+    ["'", "''"],
+    ["'quoted", "''quoted"],
+  ])("escapes %j as %j", (text, expected) => {
+    expect(escapeAuthoredText(text)).toBe(expected);
+  });
+
+  it("round-trips every escaped text value through parseCellValue unchanged", () => {
+    for (const text of ["", "hello", "2024-01-01", "42", "-3.5", "true", "false", "=SUM(A1)", "'", "'quoted"]) {
+      expect(parseCellValue(escapeAuthoredText(text))).toEqual({ kind: "text", value: text });
+    }
   });
 });

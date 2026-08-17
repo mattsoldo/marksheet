@@ -11,6 +11,20 @@ export function parseCellValue(source: string): AuthoredValue {
   return { kind: "text", value: source.startsWith("'") ? source.slice(1) : source };
 }
 
+/**
+ * Inverse of {@link parseCellValue} for authored text: escapes `text` with a
+ * leading apostrophe whenever it would otherwise be reparsed as something
+ * other than that same literal text (a number, a boolean, a formula, or text
+ * that already starts with the escape marker itself). Feeding the result
+ * back through `parseCellValue` always reproduces `text` unchanged, which is
+ * what lets the formula bar display an authored value and recommit it as a
+ * no-op edit.
+ */
+export function escapeAuthoredText(text: string): string {
+  const reparsed = parseCellValue(text);
+  return reparsed.kind === "text" && reparsed.value === text ? text : `'${text}`;
+}
+
 export function setCellTransaction(
   sheet: string,
   coordinate: Coordinate,

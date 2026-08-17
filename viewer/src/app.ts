@@ -22,6 +22,7 @@ import {
 import {
   applyStyleTransaction,
   defineStyleTransaction,
+  escapeAuthoredText,
   setCellTransaction,
   setColumnWidthTransaction,
   setNameTargetTransaction,
@@ -848,7 +849,7 @@ function sourceText(cell?: PresentedCell): string {
 
 function authoredText(value: AuthoredValue): string {
   if (value.kind === "blank") return "";
-  if (value.kind === "text" && value.value === "") return "'";
+  if (value.kind === "text") return escapeAuthoredText(value.value);
   if (value.kind === "boolean") return value.value ? "true" : "false";
   return String(value.value);
 }
