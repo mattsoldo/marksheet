@@ -205,14 +205,14 @@ fn import_xlsx_inner(
         &mut report,
     );
     let styles_part_name = styles_part.unwrap_or("xl/styles.xml");
-    let style_definitions = if let Some(part) = styles_part {
+    let (style_definitions, default_font) = if let Some(part) = styles_part {
         consumed_parts.insert(part.to_owned());
         let parsed = parse_styles(package.xml_part(part, limits)?, part, limits)?;
         record_consumed_part_omissions(part, parsed.unsupported, &mut report);
         record_dropped_number_formats(part, &parsed.dropped_number_formats, &mut report);
-        parsed.definitions
+        (parsed.definitions, parsed.default_font)
     } else {
-        vec![StyleProperties::default()]
+        (vec![StyleProperties::default()], StyleProperties::default())
     };
     if style_definitions.len() > limits.max_styles {
         return Err(resource(
@@ -222,11 +222,30 @@ fn import_xlsx_inner(
     }
     // OOXML formats every record that names no other cell format with
     // `cellXfs[0]`, and this importer already reads it when interpreting cell
-    // values. Marksheet has no workbook-wide default style, so a non-default
-    // entry is materialized on each imported record rather than dropped.
+    // values. Marksheet has no workbook-wide default style, so an entry that
+    // formats records beyond the workbook's default font is materialized on
+    // each imported record rather than dropped. `cellXfs[0]` that merely
+    // restates the default font -- which every mainstream writer emits -- is
+    // the document's base appearance, not per-record styling; materializing it
+    // would put an explicit style on every cell of every ordinary workbook.
     let default_format_is_significant = style_definitions
         .first()
-        .is_some_and(|properties| *properties != StyleProperties::default());
+        .is_some_and(|properties| *properties != default_font);
+    if !default_format_is_significant && default_font != StyleProperties::default() {
+        report.approximate(
+            ConversionEvent::new(
+                ConversionFeature::Style,
+                "the workbook default font is not represented; Marksheet text renders in the host default",
+            )
+            .at(xlsx_location(styles_part_name, Some("fonts[0]"))),
+        );
+    }
+    // Style identifiers number the styles this import declares, densely from
+    // zero, rather than echoing raw cellXfs ordinals. The exporter emits an
+    // explicit default format before the declared styles, so ordinal-derived
+    // identifiers would shift by one on every export/re-import and the same
+    // workbook would never reach a byte-stable round trip.
+    let style_index_offset = usize::from(!default_format_is_significant);
     if default_format_is_significant {
         report.approximate(
             ConversionEvent::new(
@@ -309,6 +328,7 @@ fn import_xlsx_inner(
         let context = WorksheetParseContext {
             shared_strings: &shared_strings,
             styles: &style_definitions,
+            default_format_is_significant,
             sheet_id: &sheet_ids[sheet_index],
             formula_names,
             date_1904: workbook_info.date_1904,
@@ -622,7 +642,7 @@ fn import_xlsx_inner(
         }
         for (coordinate, imported) in &worksheet.cells {
             if imported.style > 0 || default_format_is_significant {
-                let style_id = style_id(imported.style)?;
+                let style_id = style_id(imported.style - style_index_offset)?;
                 items.push(SheetItem::Apply(Apply {
                     target: ApplyTarget::Range(Range::single(*coordinate)),
                     styles: vec![style_id],
@@ -631,7 +651,7 @@ fn import_xlsx_inner(
             }
         }
         for (coordinate, style) in &worksheet.style_only {
-            let style_id = style_id(*style)?;
+            let style_id = style_id(*style - style_index_offset)?;
             items.push(SheetItem::Apply(Apply {
                 target: ApplyTarget::Range(Range::single(*coordinate)),
                 styles: vec![style_id],
@@ -659,8 +679,8 @@ fn import_xlsx_inner(
 
     let styles = style_definitions
         .into_iter()
+        .skip(style_index_offset)
         .enumerate()
-        .skip(usize::from(!default_format_is_significant))
         .map(|(index, properties)| {
             Ok(Style {
                 id: style_id(index)?,
@@ -1366,6 +1386,9 @@ struct ParsedStyles {
     definitions: Vec<StyleProperties>,
     unsupported: BTreeSet<String>,
     dropped_number_formats: Vec<DroppedNumberFormat>,
+    /// What a record formatted with the workbook default font and nothing
+    /// else looks like: the properties `fonts[0]` alone implies.
+    default_font: StyleProperties,
 }
 
 fn parse_styles(
@@ -1613,6 +1636,7 @@ fn parse_styles(
         definitions: xfs,
         unsupported,
         dropped_number_formats,
+        default_font: fonts.first().cloned().unwrap_or_default(),
     })
 }
 
@@ -1965,6 +1989,7 @@ fn number_format_loss(style: &StyleProperties, id: u32, custom: Option<&String>)
 struct WorksheetParseContext<'a> {
     shared_strings: &'a [String],
     styles: &'a [StyleProperties],
+    default_format_is_significant: bool,
     sheet_id: &'a SheetId,
     formula_names: FormulaNames<'a>,
     date_1904: bool,
@@ -2142,6 +2167,7 @@ fn parse_worksheet(
                             coordinate,
                             style,
                             context.styles,
+                            context.default_format_is_significant,
                             part,
                             context.limits,
                         )?;
@@ -2292,6 +2318,7 @@ fn parse_worksheet(
                             coordinate,
                             builder.style,
                             context.styles,
+                            context.default_format_is_significant,
                             part,
                             context.limits,
                         )?;
@@ -4002,19 +4029,16 @@ fn insert_style_only(
     coordinate: Coordinate,
     style: usize,
     styles: &[StyleProperties],
+    default_format_is_significant: bool,
     part: &str,
     limits: ConversionLimits,
 ) -> Result<(), ConvertError> {
     if style >= styles.len() {
         return Err(invalid(part, "cell style index is out of bounds"));
     }
-    if style == 0
-        && styles
-            .first()
-            .is_some_and(|properties| *properties == StyleProperties::default())
-    {
-        // An empty OOXML record that inherits an unstyled `cellXfs[0]` has no
-        // Marksheet semantic effect. A non-default default format does.
+    if style == 0 && !default_format_is_significant {
+        // An empty OOXML record that inherits an insignificant `cellXfs[0]`
+        // has no Marksheet semantic effect. A significant default format does.
         return Ok(());
     }
     let record_count = worksheet
@@ -4878,6 +4902,95 @@ mod tests {
     }
 
     #[test]
+    fn style_identifiers_are_stable_across_an_export_import_round_trip() {
+        // The ordinary Excel shape: a default font at cellXfs[0] and one real
+        // style. Identifiers must number the styles the import declares, not
+        // echo raw cellXfs ordinals, because the exporter emits an explicit
+        // default format first and ordinal-derived names would shift by one on
+        // every pass, so the same workbook would never round-trip byte-stably.
+        let style_id_ = StyleId::parse("emphasis").unwrap();
+        let source = Workbook {
+            styles: vec![Style {
+                id: style_id_.clone(),
+                properties: StyleProperties {
+                    bold: Some(true),
+                    ..StyleProperties::default()
+                },
+                origin: None,
+            }],
+            sheets: vec![Sheet {
+                id: SheetId::parse("data").unwrap(),
+                label: "Data".to_owned(),
+                items: vec![
+                    SheetItem::Block(
+                        Block::new(
+                            Coordinate::parse("A1").unwrap(),
+                            vec![vec![Cell::new(Value::Number(1.0))]],
+                        )
+                        .unwrap(),
+                    ),
+                    SheetItem::Apply(Apply {
+                        target: ApplyTarget::Range(Range::parse("A1").unwrap()),
+                        styles: vec![style_id_],
+                        origin: None,
+                    }),
+                ],
+                origin: None,
+            }],
+            ..Workbook::default()
+        };
+        let first = export_xlsx(&source, ConversionLimits::default()).unwrap();
+        let a = import_xlsx(&first.value, ConversionLimits::default()).unwrap();
+        let second = export_xlsx(&a.value, ConversionLimits::default()).unwrap();
+        let b = import_xlsx(&second.value, ConversionLimits::default()).unwrap();
+        assert_eq!(
+            a.value
+                .styles
+                .iter()
+                .map(|s| s.id.clone())
+                .collect::<Vec<_>>(),
+            b.value
+                .styles
+                .iter()
+                .map(|s| s.id.clone())
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(a.value.sheets, b.value.sheets);
+    }
+
+    #[test]
+    fn a_plain_default_font_is_reported_once_not_applied_per_cell() {
+        // Every mainstream writer emits cellXfs[0] restating the default font
+        // (Calibri 11). That is the document's base appearance, not per-record
+        // styling: it must not become an explicit style on every cell, and the
+        // unrepresented default font is reported once at the part.
+        let exported = export_xlsx(&basic_workbook(), ConversionLimits::default()).unwrap();
+        let styles = package_text(&exported.value, "xl/styles.xml").replacen(
+            "<font>",
+            "<font><sz val=\"11\"/>",
+            1,
+        );
+        let bytes = rewrite_package(&exported.value, &[("xl/styles.xml", &styles)], &[]);
+        let imported = import_xlsx(&bytes, ConversionLimits::default()).unwrap();
+        assert!(
+            imported.value.sheets[0]
+                .items
+                .iter()
+                .all(|item| !matches!(item, SheetItem::Apply(_))),
+            "{:?}",
+            imported.value.sheets[0].items
+        );
+        assert!(imported.report.outcomes().iter().any(|outcome| {
+            outcome.feature == "core_styles"
+                && outcome.outcome == crate::FeatureOutcome::Approximated
+                && outcome.locations.contains(&ConversionLocation::Xlsx {
+                    part: "xl/styles.xml".to_owned(),
+                    reference: Some("fonts[0]".to_owned()),
+                })
+        }));
+    }
+
+    #[test]
     fn exported_workbook_imports_with_scalar_semantics() {
         let source = Workbook {
             sheets: vec![Sheet {
@@ -5247,6 +5360,7 @@ mod tests {
         let context = WorksheetParseContext {
             shared_strings: &[],
             styles: &styles,
+            default_format_is_significant: false,
             sheet_id: &sheet_id,
             formula_names: FormulaNames {
                 sheets: &labels,
@@ -5731,6 +5845,7 @@ mod tests {
         let context = WorksheetParseContext {
             shared_strings: &[],
             styles: &styles,
+            default_format_is_significant: false,
             sheet_id: &sheet_id,
             formula_names: FormulaNames {
                 sheets: &labels,
@@ -6059,6 +6174,7 @@ mod tests {
         let context = WorksheetParseContext {
             shared_strings: &[],
             styles: &styles,
+            default_format_is_significant: false,
             sheet_id: &sheet_id,
             formula_names: FormulaNames {
                 sheets: &labels,
