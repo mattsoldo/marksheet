@@ -84,9 +84,13 @@ After admission, the default worker limits a visible rectangle to 250,000
 cells, a calculation rectangle to 100,000 cells, and sparse projected cells
 and intersecting style regions to 100,000 each. Calculation preparation is
 bounded at 100,000 output cells and 1,000,000 graph, dirty, and evaluated
-cells. At most 1,024 style applications and 1,000 resolved style layers per
-cell are accepted; responses retain at most 1,000 diagnostics (reporting the
-omitted count) and serialize at most 32 MiB. Coordinates and request revisions
+cells. At most 1,024 style applications are examined while projecting one
+visible rectangle, and at most 1,000 resolved style layers per cell are
+accepted. A sheet may declare more style applications than that: only the
+ones whose rows or columns reach the requested rectangle are examined, so a
+viewport away from them still projects. Responses retain at most 1,000
+diagnostics (reporting the omitted count) and serialize at most 32 MiB.
+Coordinates and request revisions
 crossing the JSON boundary must not exceed 9,007,199,254,740,991, JavaScript's
 maximum safe integer. Browser source expectations carry authoritative exact
 bytes only: the binding derives the core FNV metadata locally, so an arbitrary

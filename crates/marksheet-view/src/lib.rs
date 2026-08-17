@@ -42,7 +42,15 @@ pub struct ViewLimits {
     pub max_style_regions: usize,
     /// Maximum ordered style applications resolved for one presented cell.
     pub max_style_layers_per_cell: usize,
-    /// Maximum pre-indexed `@apply` directives examined per viewport.
+    /// Maximum pre-indexed `@apply` directives examined while projecting one
+    /// viewport.
+    ///
+    /// Each sheet keeps a per-axis interval index over its `@apply` targets,
+    /// so a request only examines the applications whose row or column band
+    /// reaches the requested range. Directives elsewhere on the sheet are
+    /// pruned without being examined and do not count against this limit: a
+    /// sheet may hold far more applications than this, and only a viewport
+    /// that would actually have to look at more than this many is refused.
     pub max_style_applications: usize,
     /// Bounds used when indexing fills and calculating viewport values.
     pub calculation: CalcLimits,
@@ -273,7 +281,7 @@ impl fmt::Display for ViewError {
                 limit,
             } => write!(
                 formatter,
-                "viewport must examine {applications} style applications; limit is {limit}"
+                "viewport must examine at least {applications} style applications; limit is {limit}"
             ),
             Self::CoordinateOverflow => formatter.write_str("viewport coordinate overflow"),
         }
@@ -286,6 +294,196 @@ struct IndexedStyleApplication {
     range: Range,
     style: ResolvedStyle,
     source_order: u64,
+}
+
+/// One `@apply` target's inclusive extent on a single sheet axis.
+#[derive(Clone, Copy, Debug)]
+struct AxisInterval {
+    start: u64,
+    end: u64,
+    /// Position of the owning application within its sheet's source order.
+    application: usize,
+}
+
+/// A bounded band query against an [`AxisIntervalIndex`].
+#[derive(Clone, Copy, Debug)]
+struct AxisIntervalQuery {
+    start: u64,
+    end: u64,
+    /// Maximum intervals the caller is willing to have examined.
+    limit: usize,
+}
+
+/// An interval index over one axis of a sheet's `@apply` targets.
+///
+/// Intervals are held sorted by start with a max-end tournament tree above
+/// them. A subtree is skipped whole when its smallest start is past the
+/// queried band or its largest end is before it, so a query descends only
+/// where an overlapping interval can exist. Enumerating the applications near
+/// a viewport therefore costs work proportional to the overlapping intervals
+/// plus the tree depth, never to the number of `@apply` directives authored
+/// on the sheet. The index itself stays a small constant factor of the
+/// applications the view already retains, so no build-time bound is traded
+/// away for the per-viewport one.
+#[derive(Clone, Debug, Default)]
+struct AxisIntervalIndex {
+    /// Sorted by `start`, then by source order for a stable layout.
+    intervals: Vec<AxisInterval>,
+    /// `max_end[node]` is the largest interval end within that node's subtree.
+    max_end: Vec<u64>,
+}
+
+impl AxisIntervalIndex {
+    fn new(mut intervals: Vec<AxisInterval>) -> Self {
+        intervals.sort_unstable_by_key(|interval| (interval.start, interval.application));
+        let nodes = intervals.len().saturating_mul(4);
+        let mut index = Self {
+            intervals,
+            max_end: vec![0; nodes],
+        };
+        if let Some(last) = index.intervals.len().checked_sub(1) {
+            index.fill(0, 0, last);
+        }
+        index
+    }
+
+    /// Populates `max_end` for the subtree covering `intervals[low..=high]`.
+    fn fill(&mut self, node: usize, low: usize, high: usize) -> u64 {
+        let value = if low == high {
+            self.intervals[low].end
+        } else {
+            let middle = low + (high - low) / 2;
+            let left = self.fill(node * 2 + 1, low, middle);
+            let right = self.fill(node * 2 + 2, middle + 1, high);
+            left.max(right)
+        };
+        self.max_end[node] = value;
+        value
+    }
+
+    /// Collects the source-order positions of every interval overlapping the
+    /// queried band, in index order.
+    ///
+    /// # Errors
+    ///
+    /// Returns the number of intervals examined, `limit + 1`, as soon as the
+    /// band is found to overlap more intervals than the query allows.
+    fn overlapping(&self, query: AxisIntervalQuery) -> Result<Vec<usize>, usize> {
+        let mut found = Vec::new();
+        let Some(last) = self.intervals.len().checked_sub(1) else {
+            return Ok(found);
+        };
+        if self.collect(0, 0, last, query, &mut found) {
+            Ok(found)
+        } else {
+            Err(found.len())
+        }
+    }
+
+    /// Walks the subtree covering `intervals[low..=high]`, returning `false`
+    /// once more than `query.limit` intervals have been examined.
+    fn collect(
+        &self,
+        node: usize,
+        low: usize,
+        high: usize,
+        query: AxisIntervalQuery,
+        found: &mut Vec<usize>,
+    ) -> bool {
+        // Sorted starts make `intervals[low].start` the smallest start in this
+        // subtree, and the tournament tree makes `max_end[node]` its largest
+        // end. Either bound failing rules out every interval below this node.
+        if self.intervals[low].start > query.end || self.max_end[node] < query.start {
+            return true;
+        }
+        if low == high {
+            found.push(self.intervals[low].application);
+            return found.len() <= query.limit;
+        }
+        let middle = low + (high - low) / 2;
+        self.collect(node * 2 + 1, low, middle, query, found)
+            && self.collect(node * 2 + 2, middle + 1, high, query, found)
+    }
+}
+
+/// One sheet's `@apply` applications in source order, with an interval index
+/// over each axis of their targets.
+#[derive(Clone, Debug, Default)]
+struct SheetStyleIndex {
+    applications: Vec<IndexedStyleApplication>,
+    rows: AxisIntervalIndex,
+    columns: AxisIntervalIndex,
+}
+
+impl SheetStyleIndex {
+    fn new(applications: Vec<IndexedStyleApplication>) -> Self {
+        let rows = AxisIntervalIndex::new(
+            applications
+                .iter()
+                .enumerate()
+                .map(|(application, indexed)| AxisInterval {
+                    start: indexed.range.start.row,
+                    end: indexed.range.end.row,
+                    application,
+                })
+                .collect(),
+        );
+        let columns = AxisIntervalIndex::new(
+            applications
+                .iter()
+                .enumerate()
+                .map(|(application, indexed)| AxisInterval {
+                    start: indexed.range.start.column,
+                    end: indexed.range.end.column,
+                    application,
+                })
+                .collect(),
+        );
+        Self {
+            applications,
+            rows,
+            columns,
+        }
+    }
+
+    /// Returns the applications overlapping `range` in source order, having
+    /// examined at most `limit` of them.
+    ///
+    /// # Errors
+    ///
+    /// Returns the number examined when neither axis can narrow the range to
+    /// `limit` applications or fewer.
+    fn overlapping(
+        &self,
+        range: Range,
+        limit: usize,
+    ) -> Result<Vec<&IndexedStyleApplication>, usize> {
+        // Either axis alone yields a superset of the overlapping applications.
+        // Rows are tried first because a viewport typically scrolls along
+        // them; a viewport that shares its rows with too many applications can
+        // still be cheap on the column axis, so that is the fallback before
+        // the request is refused.
+        let mut positions = match self.rows.overlapping(AxisIntervalQuery {
+            start: range.start.row,
+            end: range.end.row,
+            limit,
+        }) {
+            Ok(positions) => positions,
+            Err(_) => self.columns.overlapping(AxisIntervalQuery {
+                start: range.start.column,
+                end: range.end.column,
+                limit,
+            })?,
+        };
+        // Style precedence is source order, which the per-axis index layout
+        // does not preserve.
+        positions.sort_unstable();
+        Ok(positions
+            .into_iter()
+            .filter_map(|position| self.applications.get(position))
+            .filter(|application| application.range.overlaps(range))
+            .collect())
+    }
 }
 
 /// A compact, source-order-resolved interval map for one sheet axis.
@@ -434,7 +632,7 @@ pub struct WorkbookView {
     source_map: Option<SourceMap>,
     prepared: PreparedWorkbook,
     sparse_indexes: BTreeMap<SheetId, SheetSparseIndex>,
-    style_indexes: BTreeMap<SheetId, Vec<IndexedStyleApplication>>,
+    style_indexes: BTreeMap<SheetId, SheetStyleIndex>,
     geometry_indexes: BTreeMap<SheetId, SheetGeometryIndex>,
     completeness: ViewCompleteness,
     diagnostics: Vec<Diagnostic>,
@@ -498,7 +696,7 @@ impl WorkbookView {
                 &definitions,
                 limits.max_style_layers_per_cell,
             )?;
-            style_indexes.insert(sheet.id.clone(), applications);
+            style_indexes.insert(sheet.id.clone(), SheetStyleIndex::new(applications));
         }
         let geometry_indexes = workbook
             .sheets
@@ -672,31 +870,26 @@ impl WorkbookView {
     /// Resolves the `@apply` intervals overlapping `request`, bounding both
     /// the work examined and the results returned.
     ///
-    /// Every request linearly scans the sheet's pre-indexed applications to
-    /// find the ones overlapping this viewport, so that scan is exactly the
-    /// work [`ViewLimits::max_style_applications`] bounds. It is checked
-    /// before doing that scan, matching `visible_region`'s "before
-    /// allocating output" contract.
+    /// The sheet's interval index reports only the applications whose row or
+    /// column band reaches the requested range, so
+    /// [`ViewLimits::max_style_applications`] bounds the applications this one
+    /// request examines. A viewport away from the styled area of an
+    /// application-heavy sheet examines nothing and is projected normally.
+    /// Both limits are checked before any output is allocated.
     fn resolve_style_regions(
         &self,
         request: &VisibleRegionRequest,
     ) -> Result<(Vec<IndexedStyleApplication>, Vec<StyledRegion>), ViewError> {
-        let style_applications = self
+        let style_index = self
             .style_indexes
             .get(&request.sheet)
             .ok_or_else(|| ViewError::UnknownSheet(request.sheet.clone()))?;
-        if style_applications.len() > self.limits.max_style_applications {
-            return Err(ViewError::StyleApplicationLimitExceeded {
-                applications: style_applications.len(),
+        let intersecting_styles = style_index
+            .overlapping(request.range, self.limits.max_style_applications)
+            .map_err(|applications| ViewError::StyleApplicationLimitExceeded {
+                applications,
                 limit: self.limits.max_style_applications,
-            });
-        }
-        let intersecting_styles = style_applications
-            .iter()
-            .filter(|application| application.range.overlaps(request.range))
-            .take(self.limits.max_style_regions.saturating_add(1))
-            .cloned()
-            .collect::<Vec<_>>();
+            })?;
         if intersecting_styles.len() > self.limits.max_style_regions {
             return Err(ViewError::StyleRegionLimitExceeded {
                 regions: intersecting_styles.len(),
@@ -716,6 +909,7 @@ impl WorkbookView {
                     })
             })
             .collect::<Vec<_>>();
+        let intersecting_styles = intersecting_styles.into_iter().cloned().collect::<Vec<_>>();
         Ok((intersecting_styles, style_regions))
     }
 
@@ -844,14 +1038,14 @@ fn rows_for(geometry: &AxisGeometryIndex, range: Range) -> Result<Vec<RowPresent
     Ok(rows)
 }
 
-/// Indexes every `@apply` directive authored on `sheet`.
+/// Indexes every `@apply` directive authored on `sheet`, in source order.
 ///
 /// This runs once at build time and is not itself bounded by
-/// [`ViewLimits::max_style_applications`]: that limit is documented as a
-/// per-viewport bound on work examined while projecting a requested region,
-/// so a sheet with many `@apply` directives must still open successfully.
-/// The limit is enforced later, in [`WorkbookView::visible_region`], against
-/// the applications a specific request would need to scan.
+/// [`ViewLimits::max_style_applications`]: that limit is a per-viewport bound
+/// on the work examined while projecting a requested region, so a sheet with
+/// many `@apply` directives must still open successfully. The limit is
+/// enforced later, in [`WorkbookView::visible_region`], against the
+/// applications the [`SheetStyleIndex`] reports as near that request.
 fn index_style_applications(
     sheet: &Sheet,
     prepared: &PreparedSheet,
@@ -1290,28 +1484,36 @@ mod tests {
         assert_eq!(format!("{view:?}"), before);
     }
 
+    /// Builds a sheet whose rows 1..=1025 each carry an `@apply A:C` band,
+    /// exceeding the default `max_style_applications`.
+    fn oversized_style_document() -> ParsedDocument {
+        use std::fmt::Write as _;
+
+        let mut source =
+            String::from("#!marksheet 0.1\n@style note italic=true\n@sheet s \"Styled\"\n");
+        for row in 1..=1025u32 {
+            let _ = writeln!(source, "@apply A{row}:C{row} note");
+        }
+        let document = parse(source.as_bytes());
+        assert!(!document.has_errors(), "{:?}", document.diagnostics);
+        document
+    }
+
     #[test]
     fn thousand_and_twenty_five_style_applications_open_successfully() {
         // Regression test: a valid workbook with more @apply directives on one
         // sheet than the default max_style_applications must still open, since
         // the limit bounds per-viewport projection work, not build-time
         // indexing. Reproduces the 1025-application case from the finding.
-        use std::fmt::Write as _;
-
-        let mut source =
-            String::from("#!marksheet 0.1\n@style note italic=true\n@sheet s \"Styled\"\n");
-        for row in 1..=1025u32 {
-            let _ = writeln!(source, "@apply A{row} note");
-        }
-        let document = parse(source.as_bytes());
-        assert!(!document.has_errors());
+        let document = oversized_style_document();
         let result = WorkbookView::from_document(&document, ViewLimits::default());
         assert!(result.is_ok());
 
-        // Requesting a viewport whose projection must examine all 1025
-        // pre-indexed applications exceeds the default limit and fails,
-        // atomically, with the documented error.
+        // Requesting a viewport that really does reach all 1025 pre-indexed
+        // applications exceeds the default limit and fails, atomically, with
+        // the documented error.
         let mut view = result.unwrap();
+        let before = format!("{view:?}");
         let region = view.visible_region(&VisibleRegionRequest {
             sheet: "s".parse().unwrap(),
             range: Range::parse("A1:A1025").unwrap(),
@@ -1324,5 +1526,156 @@ mod tests {
                 limit: 1_024
             })
         ));
+        // The rejected request must not have mutated any cached view state.
+        assert_eq!(format!("{view:?}"), before);
+    }
+
+    #[test]
+    fn viewports_away_from_the_styled_area_project_on_an_oversized_sheet() {
+        // The limit is per viewport, so exceeding it on one request must not
+        // make the sheet unviewable: requests that do not reach the excess
+        // applications still project normally.
+        let document = oversized_style_document();
+        let mut view = WorkbookView::from_document(&document, ViewLimits::default()).unwrap();
+        let mut project = |range: &str| {
+            view.visible_region(&VisibleRegionRequest {
+                sheet: "s".parse().unwrap(),
+                range: Range::parse(range).unwrap(),
+                calculate: false,
+            })
+        };
+
+        // Far on both axes: the row index prunes every application.
+        let far = project("ZZ9000:ZZ9000").unwrap();
+        assert!(far.style_regions.is_empty());
+        // Distant rows, styled column: still pruned by the row index.
+        let below = project("A9000:C9100").unwrap();
+        assert!(below.style_regions.is_empty());
+        // Every application shares this row band, so the row index cannot
+        // narrow the request; the column index prunes them instead.
+        let beside = project("ZZ1:ZZ1025").unwrap();
+        assert!(beside.style_regions.is_empty());
+        // A viewport that genuinely overlaps a few applications resolves them.
+        let overlapping = project("B2:C3").unwrap();
+        assert_eq!(
+            overlapping
+                .style_regions
+                .iter()
+                .map(|region| region.range)
+                .collect::<Vec<_>>(),
+            vec![
+                Range::parse("B2:C2").unwrap(),
+                Range::parse("B3:C3").unwrap()
+            ]
+        );
+    }
+
+    #[test]
+    fn style_index_still_finds_a_sheet_spanning_application_from_far_away() {
+        // Pruning must never lose a wide application: a directive covering the
+        // whole sheet reaches every viewport, however distant.
+        use std::fmt::Write as _;
+
+        let mut source =
+            String::from("#!marksheet 0.1\n@style note italic=true\n@sheet s \"Styled\"\n");
+        for row in 1..=1024u32 {
+            let _ = writeln!(source, "@apply A{row} note");
+        }
+        source.push_str("@apply A1:XFD1048576 note\n");
+        let document = parse(source.as_bytes());
+        assert!(!document.has_errors(), "{:?}", document.diagnostics);
+        let mut view = WorkbookView::from_document(&document, ViewLimits::default()).unwrap();
+        let region = view
+            .visible_region(&VisibleRegionRequest {
+                sheet: "s".parse().unwrap(),
+                range: Range::parse("ZZ9000:ZZ9000").unwrap(),
+                calculate: false,
+            })
+            .unwrap();
+        assert_eq!(
+            region
+                .style_regions
+                .iter()
+                .map(|region| region.range)
+                .collect::<Vec<_>>(),
+            vec![Range::parse("ZZ9000").unwrap()]
+        );
+    }
+
+    #[test]
+    fn style_index_reports_applications_in_source_order() {
+        // The per-axis index is ordered by interval start, but style
+        // precedence is source order: the later @apply must win even when it
+        // starts on an earlier row.
+        let source = b"#!marksheet 0.1\n@style low bold=false\n@style high bold=true\n@sheet s \"Styled\"\n@block B2 csv\nx\n@end\n@apply B2 low\n@apply A1:B2 high\n";
+        let document = parse(source);
+        assert!(!document.has_errors(), "{:?}", document.diagnostics);
+        let mut view = WorkbookView::from_document(&document, ViewLimits::default()).unwrap();
+        let region = view
+            .visible_region(&VisibleRegionRequest {
+                sheet: "s".parse().unwrap(),
+                range: Range::parse("A1:B2").unwrap(),
+                calculate: false,
+            })
+            .unwrap();
+        assert_eq!(
+            region
+                .style_regions
+                .iter()
+                .map(|region| region.source_order)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        let cell = region
+            .cells
+            .iter()
+            .find(|cell| cell.coordinate == coordinate("B2"))
+            .unwrap();
+        assert_eq!(cell.style.properties.bold, Some(true));
+    }
+
+    #[test]
+    fn axis_interval_index_examines_only_intervals_near_the_band() {
+        // One interval spans the whole axis while a thousand short ones sit at
+        // its start. A band far from the short intervals must be answerable
+        // within a limit far below their count.
+        let mut intervals = (0..1_000)
+            .map(|application| AxisInterval {
+                start: 1,
+                end: 2,
+                application,
+            })
+            .collect::<Vec<_>>();
+        intervals.push(AxisInterval {
+            start: 1,
+            end: 1_000_000,
+            application: 1_000,
+        });
+        let index = AxisIntervalIndex::new(intervals);
+
+        assert_eq!(
+            index.overlapping(AxisIntervalQuery {
+                start: 900_000,
+                end: 900_001,
+                limit: 1,
+            }),
+            Ok(vec![1_000])
+        );
+        assert_eq!(
+            index.overlapping(AxisIntervalQuery {
+                start: 2_000_000,
+                end: 2_000_001,
+                limit: 1,
+            }),
+            Ok(Vec::new())
+        );
+        assert_eq!(
+            index.overlapping(AxisIntervalQuery {
+                start: 1,
+                end: 1,
+                limit: 8,
+            }),
+            Err(9)
+        );
     }
 }
