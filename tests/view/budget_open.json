@@ -1,0 +1,40 @@
+{
+  "protocol": "marksheet-view-conformance@1",
+  "source": "../../examples/budget.ms",
+  "operations": [
+    {
+      "op": "open",
+      "expect": {
+        "revision": 1,
+        "sheet_tabs": [
+          {"id": "inputs", "label": "Inputs"},
+          {"id": "summary", "label": "Summary"}
+        ],
+        "unsupported_required_extensions": []
+      }
+    },
+    {
+      "op": "visible_region",
+      "sheet": "summary",
+      "range": "A1:B4",
+      "expect_layers": ["authored", "virtual", "calculated", "presentation", "geometry", "source_links"],
+      "expect_cells": {
+        "B2": {"authored": {"kind": "formula", "source": "=SUM(costs[Subtotal])"}, "calculated": {"kind": "number", "value": 2060}, "style": {"number": "currency", "currency": "USD", "decimals": 2, "align": "right"}, "source_link": "csv_field"},
+        "B3": {"authored": {"kind": "formula", "source": "=AVERAGE(cost_values)"}, "calculated": {"kind": "number", "value": 686.6666666666666}, "style": {"number": "currency", "currency": "USD", "decimals": 2, "align": "right"}, "source_link": "csv_field"},
+        "B4": {"authored": {"kind": "formula", "source": "=B2*(1-tax_rate)"}, "calculated": {"kind": "number", "value": 1648}, "style": {"number": "currency", "currency": "USD", "decimals": 2, "align": "right"}, "source_link": "csv_field"}
+      }
+    },
+    {
+      "op": "edit_and_save",
+      "edit": {"kind": "set_cell", "sheet": "inputs", "coordinate": "G2", "value": {"kind": "number", "value": 0.25}},
+      "expect": {
+        "outcome": "saved",
+        "new_revision": 2,
+        "changed_authored_coordinates": [{"sheet": "inputs", "coordinate": "G2"}],
+        "after_source": "budget_edit.after.ms",
+        "focused_source_replacement": {"old": "0.2", "new": "0.25", "count": 1},
+        "recalculated": {"sheet": "summary", "coordinate": "B4", "kind": "number", "value": 1545}
+      }
+    }
+  ]
+}

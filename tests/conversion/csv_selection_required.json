@@ -1,0 +1,9 @@
+{
+  "protocol": "marksheet-conversion-fixture@1",
+  "request": {"source": {"format": "marksheet", "version": "0.1", "path": "sources/core.ms"}, "destination": "csv"},
+  "expect": {
+    "fidelity": "unsupported",
+    "outcomes": [{"feature": "csv_selection", "outcome": "unsupported"}],
+    "diagnostics": [{"code": "MS4103", "severity": "error"}]
+  }
+}

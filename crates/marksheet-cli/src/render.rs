@@ -554,10 +554,10 @@ fn write_location(
     span: ByteSpan,
 ) -> io::Result<()> {
     write!(writer, "{}", path.display())?;
-    if let Some(line_index) = line_index
-        && let Ok(position) = line_index.line_column(span.start)
-    {
-        return write!(writer, ":{}:{}", position.line, position.column);
+    if let Some(line_index) = line_index {
+        if let Ok(position) = line_index.line_column(span.start) {
+            return write!(writer, ":{}:{}", position.line, position.column);
+        }
     }
     write!(writer, ":byte {}..{}", span.start, span.end)
 }

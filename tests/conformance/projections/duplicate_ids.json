@@ -1,0 +1,238 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [
+    {
+      "code": "MS1301",
+      "severity": "error",
+      "span": [
+        39,
+        63
+      ]
+    }
+  ],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 151,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          38
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          39
+        ]
+      },
+      {
+        "content_span": [
+          39,
+          63
+        ],
+        "ending": "lf",
+        "span": [
+          39,
+          64
+        ]
+      },
+      {
+        "content_span": [
+          64,
+          82
+        ],
+        "ending": "lf",
+        "span": [
+          64,
+          83
+        ]
+      },
+      {
+        "content_span": [
+          83,
+          102
+        ],
+        "ending": "lf",
+        "span": [
+          83,
+          103
+        ]
+      },
+      {
+        "content_span": [
+          103,
+          107
+        ],
+        "ending": "lf",
+        "span": [
+          103,
+          108
+        ]
+      },
+      {
+        "content_span": [
+          108,
+          111
+        ],
+        "ending": "lf",
+        "span": [
+          108,
+          112
+        ]
+      },
+      {
+        "content_span": [
+          112,
+          116
+        ],
+        "ending": "lf",
+        "span": [
+          112,
+          117
+        ]
+      },
+      {
+        "content_span": [
+          117,
+          136
+        ],
+        "ending": "lf",
+        "span": [
+          117,
+          137
+        ]
+      },
+      {
+        "content_span": [
+          137,
+          141
+        ],
+        "ending": "lf",
+        "span": [
+          137,
+          142
+        ]
+      },
+      {
+        "content_span": [
+          142,
+          145
+        ],
+        "ending": "lf",
+        "span": [
+          142,
+          146
+        ]
+      },
+      {
+        "content_span": [
+          146,
+          150
+        ],
+        "ending": "lf",
+        "span": [
+          146,
+          151
+        ]
+      }
+    ],
+    "sha256": "c76a56eae56dfb12df9c311e0d7221901d015de3b05bdf169211ceb6ab2782c7"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [],
+    "extensions": [],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "main",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              103,
+              112
+            ],
+            "id": "items",
+            "kind": "table",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "Name",
+                    "span": [
+                      103,
+                      107
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Name"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "one",
+                    "span": [
+                      108,
+                      111
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "one"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              83,
+              102
+            ]
+          }
+        ],
+        "label": "Main",
+        "span": [
+          64,
+          82
+        ]
+      }
+    ],
+    "styles": [
+      {
+        "id": "money",
+        "properties": {
+          "bold": true
+        },
+        "span": [
+          16,
+          38
+        ]
+      }
+    ]
+  }
+}

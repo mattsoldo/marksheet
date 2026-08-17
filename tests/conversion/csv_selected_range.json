@@ -1,0 +1,13 @@
+{
+  "protocol": "marksheet-conversion-fixture@1",
+  "request": {"source": {"format": "marksheet", "version": "0.1", "path": "sources/core.ms"}, "destination": "csv", "selection": {"sheet": "summary", "range": "A1:B3"}},
+  "expect": {
+    "fidelity": "lossy",
+    "artifact": "generated/summary.csv",
+    "outcomes": [
+      {"feature": "selected_range", "outcome": "exact", "location": {"sheet": "summary", "range": "A1:B3"}},
+      {"feature": "workbook_features_outside_selection", "outcome": "omitted"}
+    ],
+    "diagnostics": [{"code": "MS4102", "severity": "warning", "location": {"sheet": "summary", "range": "A1:B3"}}]
+  }
+}

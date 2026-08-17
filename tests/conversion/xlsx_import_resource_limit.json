@@ -1,0 +1,9 @@
+{
+  "protocol": "marksheet-conversion-fixture@1",
+  "request": {"source": {"format": "xlsx", "version": "office-open-xml@1", "fixture": "sources/import_limit.xlsx.json"}, "destination": "marksheet", "limits": {"max_uncompressed_bytes": 1048576}},
+  "expect": {
+    "fidelity": "unsupported",
+    "outcomes": [{"feature": "resource_limit.uncompressed_bytes", "outcome": "unsupported", "location": {"source": "xl/sharedStrings.xml"}}],
+    "diagnostics": [{"code": "MS4101", "severity": "error", "location": {"source": "xl/sharedStrings.xml"}}]
+  }
+}

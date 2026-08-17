@@ -1,0 +1,13 @@
+{
+  "protocol": "marksheet-view-conformance@1",
+  "source": "external_change.base.ms",
+  "operations": [
+    {"op": "open_local", "expect": {"revision": 1, "base_snapshot": "external_change.base.ms"}},
+    {"op": "simulate_external_replace", "current_source": "external_change.current.ms"},
+    {
+      "op": "edit_and_save",
+      "edit": {"kind": "set_cell", "sheet": "main", "coordinate": "A1", "value": {"kind": "text", "value": "inside"}},
+      "expect": {"outcome": "conflict", "writes": 0, "active_source": "external_change.current.ms", "diagnostic_kind": "conflict", "unsupported_assertions": ["writes"]}
+    }
+  ]
+}

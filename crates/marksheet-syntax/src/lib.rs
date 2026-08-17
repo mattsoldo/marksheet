@@ -8,6 +8,7 @@ mod diagnostic;
 mod format;
 mod lower;
 mod scanner;
+mod serialize;
 mod source_map;
 
 pub mod cst;
@@ -17,6 +18,7 @@ use marksheet_model::{Diagnostic, Severity, Workbook};
 pub use cst::Cst;
 pub use format::canonicalize;
 pub use lower::ParseOptions;
+pub use serialize::serialize_workbook;
 pub use source_map::{
     ApplyLocation, CellLocation, CsvBlockLocation, DirectiveLocation, ExtensionLocation,
     FillLocation, NameLocation, SheetLocation, SourceMap, StyleLocation, TriviaKind,
@@ -447,6 +449,26 @@ mod tests {
             span_bytes(source, extension.span),
             &source[usize::try_from(offset(source, b"@extension charts")).unwrap()..]
         );
+    }
+
+    #[test]
+    fn noncanonical_extension_majors_are_semantic_errors() {
+        for source in [
+            b"#!marksheet 0.1\n@use assertions@01\n@sheet s \"Sheet\"\n".as_slice(),
+            b"#!marksheet 0.1\n@sheet s \"Sheet\"\n@extension assertions@01 \"checks\"\n@end\n"
+                .as_slice(),
+        ] {
+            let document = parse(source);
+            assert_eq!(
+                document
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.code.as_str())
+                    .collect::<Vec<_>>(),
+                ["MS1201"]
+            );
+            assert!(document.has_errors());
+        }
     }
 
     fn span_bytes(source: &[u8], span: ByteSpan) -> &[u8] {

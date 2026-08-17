@@ -1,3 +1,5 @@
 target/
+bindings/wasm/pkg/
 node_modules/
+.claude/
 .DS_Store

@@ -1,0 +1,15 @@
+{
+  "protocol": "marksheet-view-conformance@1",
+  "source": "diagnostic_source.ms",
+  "operations": [
+    {
+      "op": "open",
+      "expect": {
+        "valid_editable_workbook": false,
+        "diagnostics": [
+          {"code": "MS2202", "primary_source_excerpt": "=SUM(", "related_cells": [{"sheet": "calc", "coordinate": "A1"}], "source_navigation": "available"}
+        ]
+      }
+    }
+  ]
+}

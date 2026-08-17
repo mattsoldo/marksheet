@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "protocol": "marksheet-conversion-conformance@1",
+  "cases": [
+    {"id": "xlsx_exact_core", "kind": "marksheet_to_xlsx", "fixture": "xlsx_exact_core.json"},
+    {"id": "xlsx_lossy_advanced", "kind": "marksheet_to_xlsx", "fixture": "xlsx_lossy_advanced.json"},
+    {"id": "xlsx_import_unsupported", "kind": "xlsx_to_marksheet", "fixture": "xlsx_import_unsupported.json"},
+    {"id": "xlsx_import_resource_limit", "kind": "xlsx_to_marksheet", "fixture": "xlsx_import_resource_limit.json"},
+    {"id": "csv_selected_table", "kind": "marksheet_to_csv", "fixture": "csv_selected_table.json"},
+    {"id": "csv_selected_range", "kind": "marksheet_to_csv", "fixture": "csv_selected_range.json"},
+    {"id": "csv_selection_required", "kind": "marksheet_to_csv", "fixture": "csv_selection_required.json"},
+    {"id": "csv_import_target", "kind": "csv_to_marksheet", "fixture": "csv_import_target.json"},
+    {"id": "csv_import_range_target", "kind": "csv_to_marksheet", "fixture": "csv_import_range_target.json"},
+    {"id": "csv_import_target_required", "kind": "csv_to_marksheet", "fixture": "csv_import_target_required.json"}
+  ]
+}

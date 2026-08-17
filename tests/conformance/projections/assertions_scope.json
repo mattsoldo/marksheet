@@ -1,0 +1,415 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [
+    {
+      "code": "MS3102",
+      "severity": "warning",
+      "span": [
+        16,
+        33
+      ]
+    }
+  ],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 262,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          33
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          34
+        ]
+      },
+      {
+        "content_span": [
+          34,
+          74
+        ],
+        "ending": "lf",
+        "span": [
+          34,
+          75
+        ]
+      },
+      {
+        "content_span": [
+          75,
+          95
+        ],
+        "ending": "lf",
+        "span": [
+          75,
+          96
+        ]
+      },
+      {
+        "content_span": [
+          96,
+          100
+        ],
+        "ending": "lf",
+        "span": [
+          96,
+          101
+        ]
+      },
+      {
+        "content_span": [
+          101,
+          101
+        ],
+        "ending": "lf",
+        "span": [
+          101,
+          102
+        ]
+      },
+      {
+        "content_span": [
+          102,
+          124
+        ],
+        "ending": "lf",
+        "span": [
+          102,
+          125
+        ]
+      },
+      {
+        "content_span": [
+          125,
+          138
+        ],
+        "ending": "lf",
+        "span": [
+          125,
+          139
+        ]
+      },
+      {
+        "content_span": [
+          139,
+          144
+        ],
+        "ending": "lf",
+        "span": [
+          139,
+          145
+        ]
+      },
+      {
+        "content_span": [
+          145,
+          146
+        ],
+        "ending": "lf",
+        "span": [
+          145,
+          147
+        ]
+      },
+      {
+        "content_span": [
+          147,
+          151
+        ],
+        "ending": "lf",
+        "span": [
+          147,
+          152
+        ]
+      },
+      {
+        "content_span": [
+          152,
+          189
+        ],
+        "ending": "lf",
+        "span": [
+          152,
+          190
+        ]
+      },
+      {
+        "content_span": [
+          190,
+          203
+        ],
+        "ending": "lf",
+        "span": [
+          190,
+          204
+        ]
+      },
+      {
+        "content_span": [
+          204,
+          208
+        ],
+        "ending": "lf",
+        "span": [
+          204,
+          209
+        ]
+      },
+      {
+        "content_span": [
+          209,
+          209
+        ],
+        "ending": "lf",
+        "span": [
+          209,
+          210
+        ]
+      },
+      {
+        "content_span": [
+          210,
+          234
+        ],
+        "ending": "lf",
+        "span": [
+          210,
+          235
+        ]
+      },
+      {
+        "content_span": [
+          235,
+          248
+        ],
+        "ending": "lf",
+        "span": [
+          235,
+          249
+        ]
+      },
+      {
+        "content_span": [
+          249,
+          254
+        ],
+        "ending": "lf",
+        "span": [
+          249,
+          255
+        ]
+      },
+      {
+        "content_span": [
+          255,
+          256
+        ],
+        "ending": "lf",
+        "span": [
+          255,
+          257
+        ]
+      },
+      {
+        "content_span": [
+          257,
+          261
+        ],
+        "ending": "lf",
+        "span": [
+          257,
+          262
+        ]
+      }
+    ],
+    "sha256": "7ef7e5549705e828c33b0b25b09f32b8df9d052381ee4b45cdcc1fb022ff6649"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [
+      {
+        "id": "assertions@1",
+        "required": false,
+        "span": [
+          16,
+          33
+        ]
+      }
+    ],
+    "extensions": [
+      {
+        "id": "assertions@1",
+        "name": "workbook_check",
+        "payload": {
+          "byte_length": 21,
+          "sha256": "2f735d52cbd78ba9aa76d026c345f8f8539a282ac7a1713628cd371ac875c405",
+          "span": [
+            75,
+            96
+          ]
+        },
+        "scope": "workbook",
+        "span": [
+          34,
+          74
+        ]
+      },
+      {
+        "id": "assertions@1",
+        "name": "sheet_check",
+        "payload": {
+          "byte_length": 14,
+          "sha256": "ae2f2429b0cb19741c83d2aec9e8dfe9f99a54015130582bc0dd59f53c6f29b4",
+          "span": [
+            190,
+            204
+          ]
+        },
+        "scope": "inputs",
+        "span": [
+          152,
+          189
+        ]
+      }
+    ],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "inputs",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              139,
+              147
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "Value",
+                    "span": [
+                      139,
+                      144
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Value"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "5",
+                    "span": [
+                      145,
+                      146
+                    ]
+                  },
+                  "value": {
+                    "kind": "number",
+                    "value": "5"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              125,
+              138
+            ]
+          }
+        ],
+        "label": "Inputs",
+        "span": [
+          102,
+          124
+        ]
+      },
+      {
+        "id": "summary",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              249,
+              257
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "Value",
+                    "span": [
+                      249,
+                      254
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Value"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "7",
+                    "span": [
+                      255,
+                      256
+                    ]
+                  },
+                  "value": {
+                    "kind": "number",
+                    "value": "7"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              235,
+              248
+            ]
+          }
+        ],
+        "label": "Summary",
+        "span": [
+          210,
+          234
+        ]
+      }
+    ],
+    "styles": []
+  }
+}

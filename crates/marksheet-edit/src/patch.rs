@@ -431,15 +431,16 @@ fn coalesce_inverse_patches(mut patches: Vec<SourcePatch>) -> Vec<SourcePatch> {
 
     let mut coalesced: Vec<SourcePatch> = Vec::with_capacity(patches.len());
     for patch in patches {
-        if let Some(previous) = coalesced.last_mut()
-            && previous.span.is_empty()
-            && patch.span.is_empty()
-            && previous.span.start == patch.span.start
-        {
-            previous.replacement.extend_from_slice(&patch.replacement);
-        } else {
-            coalesced.push(patch);
+        if let Some(previous) = coalesced.last_mut() {
+            if previous.span.is_empty()
+                && patch.span.is_empty()
+                && previous.span.start == patch.span.start
+            {
+                previous.replacement.extend_from_slice(&patch.replacement);
+                continue;
+            }
         }
+        coalesced.push(patch);
     }
     coalesced
 }

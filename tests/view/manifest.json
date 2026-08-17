@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "protocol": "marksheet-view-conformance@1",
+  "cases": [
+    {"id": "budget_open", "kind": "workbook_view", "fixture": "budget_open.json"},
+    {"id": "layers_geometry", "kind": "layer_projection", "fixture": "layers_geometry.json"},
+    {"id": "distant_sparse", "kind": "sparse_viewport", "fixture": "distant_sparse.json"},
+    {"id": "worker_revision", "kind": "worker_protocol", "fixture": "worker_revision.json"},
+    {"id": "diagnostic_source", "kind": "diagnostic_source", "fixture": "diagnostic_source.json"},
+    {"id": "external_change", "kind": "external_change", "fixture": "external_change.json"}
+  ]
+}

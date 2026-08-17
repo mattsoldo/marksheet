@@ -1,0 +1,210 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [
+    {
+      "code": "MS2102",
+      "severity": "error",
+      "span": [
+        62,
+        85
+      ]
+    },
+    {
+      "code": "MS2102",
+      "severity": "error",
+      "span": [
+        86,
+        108
+      ]
+    }
+  ],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 109,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          34
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          35
+        ]
+      },
+      {
+        "content_span": [
+          35,
+          48
+        ],
+        "ending": "lf",
+        "span": [
+          35,
+          49
+        ]
+      },
+      {
+        "content_span": [
+          49,
+          54
+        ],
+        "ending": "lf",
+        "span": [
+          49,
+          55
+        ]
+      },
+      {
+        "content_span": [
+          55,
+          56
+        ],
+        "ending": "lf",
+        "span": [
+          55,
+          57
+        ]
+      },
+      {
+        "content_span": [
+          57,
+          61
+        ],
+        "ending": "lf",
+        "span": [
+          57,
+          62
+        ]
+      },
+      {
+        "content_span": [
+          62,
+          85
+        ],
+        "ending": "lf",
+        "span": [
+          62,
+          86
+        ]
+      },
+      {
+        "content_span": [
+          86,
+          108
+        ],
+        "ending": "lf",
+        "span": [
+          86,
+          109
+        ]
+      }
+    ],
+    "sha256": "a58f2698d8c6a59a183e19156547f4ee5bf80881f0ba5659679c389aa0a40309"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [],
+    "extensions": [],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "main",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              49,
+              57
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "Value",
+                    "span": [
+                      49,
+                      54
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Value"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "1",
+                    "span": [
+                      55,
+                      56
+                    ]
+                  },
+                  "value": {
+                    "kind": "number",
+                    "value": "1"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              35,
+              48
+            ]
+          },
+          {
+            "kind": "apply",
+            "span": [
+              62,
+              85
+            ],
+            "styles": [
+              "unknown_style"
+            ],
+            "target": "A1"
+          },
+          {
+            "formula": "=1",
+            "kind": "fill",
+            "span": [
+              86,
+              108
+            ],
+            "target": "absent[Value]"
+          }
+        ],
+        "label": "Main",
+        "span": [
+          16,
+          34
+        ]
+      }
+    ],
+    "styles": []
+  }
+}

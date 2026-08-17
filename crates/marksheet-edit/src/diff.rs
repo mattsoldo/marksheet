@@ -997,16 +997,18 @@ fn coalesce_style_rectangles(effects: &mut Vec<SemanticStyleEffect>) {
     effects.sort_by_key(|effect| (effect.range.start.row, effect.range.start.column));
     let mut horizontal: Vec<SemanticStyleEffect> = Vec::new();
     for effect in effects.drain(..) {
-        if let Some(previous) = horizontal.last_mut()
-            && previous.properties == effect.properties
-            && previous.range.start.row == effect.range.start.row
-            && previous.range.end.row == effect.range.end.row
-            && u128::from(previous.range.end.column) + 1 == u128::from(effect.range.start.column)
-        {
-            previous.range.end.column = effect.range.end.column;
-        } else {
-            horizontal.push(effect);
+        if let Some(previous) = horizontal.last_mut() {
+            if previous.properties == effect.properties
+                && previous.range.start.row == effect.range.start.row
+                && previous.range.end.row == effect.range.end.row
+                && u128::from(previous.range.end.column) + 1
+                    == u128::from(effect.range.start.column)
+            {
+                previous.range.end.column = effect.range.end.column;
+                continue;
+            }
         }
+        horizontal.push(effect);
     }
 
     let mut active: BTreeMap<(u64, u64, String), usize> = BTreeMap::new();
@@ -1017,15 +1019,16 @@ fn coalesce_style_rectangles(effects: &mut Vec<SemanticStyleEffect>) {
             effect.range.end.column,
             format!("{:?}", effect.properties),
         );
-        if let Some(previous_index) = active.get(&key).copied()
-            && u128::from(vertical[previous_index].range.end.row) + 1
+        if let Some(previous_index) = active.get(&key).copied() {
+            if u128::from(vertical[previous_index].range.end.row) + 1
                 == u128::from(effect.range.start.row)
-        {
-            vertical[previous_index].range.end.row = effect.range.end.row;
-        } else {
-            active.insert(key, vertical.len());
-            vertical.push(effect);
+            {
+                vertical[previous_index].range.end.row = effect.range.end.row;
+                continue;
+            }
         }
+        active.insert(key, vertical.len());
+        vertical.push(effect);
     }
     vertical.sort_by_key(|effect| (effect.range.start.row, effect.range.start.column));
     *effects = vertical;

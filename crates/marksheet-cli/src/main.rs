@@ -1,5 +1,5 @@
-//! Command-line interface for validating and canonically formatting Marksheet
-//! workbooks.
+//! Command-line interface for validating, formatting, calculating, comparing,
+//! and converting Marksheet workbooks.
 //!
 //! The command layer deliberately stays thin: parsing and serialization remain
 //! in `marksheet-syntax`, so native clients and future bindings observe the
@@ -16,7 +16,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[command(
     name = "marksheet",
     version,
-    about = "Validate and format Marksheet workbooks"
+    about = "Validate, calculate, compare, and convert Marksheet workbooks"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -68,6 +68,35 @@ enum Command {
         /// Candidate Marksheet workbook.
         new: PathBuf,
     },
+    /// Convert between Marksheet, XLSX, and explicitly selected CSV.
+    ///
+    /// The destination artifact is written atomically. A
+    /// `marksheet-conversion@1` report is emitted as JSON on standard output.
+    Convert {
+        /// Destination format.
+        #[arg(long, value_enum)]
+        to: ConversionTarget,
+        /// Destination artifact (defaults to a sibling with the target extension).
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Source sheet for CSV export, or target sheet identifier for CSV import.
+        #[arg(long)]
+        sheet: Option<marksheet_model::SheetId>,
+        /// Target sheet label for CSV import.
+        #[arg(long)]
+        label: Option<String>,
+        /// Explicit source or target rectangle for CSV conversion.
+        #[arg(long)]
+        range: Option<marksheet_model::Range>,
+        /// Source table for CSV export, or target table identifier for CSV import.
+        #[arg(long)]
+        table: Option<marksheet_model::TableId>,
+        /// Target table anchor for CSV import.
+        #[arg(long)]
+        anchor: Option<marksheet_model::Coordinate>,
+        /// Source workbook or CSV file.
+        path: PathBuf,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -92,6 +121,13 @@ enum DiffOutputFormat {
     Json,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum ConversionTarget {
+    Marksheet,
+    Xlsx,
+    Csv,
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
@@ -104,6 +140,27 @@ fn main() -> ExitCode {
             path,
         } => commands::calculate(&path, sheet, range, format),
         Command::Diff { format, old, new } => commands::diff(&old, &new, format),
+        Command::Convert {
+            to,
+            output,
+            sheet,
+            label,
+            range,
+            table,
+            anchor,
+            path,
+        } => commands::convert(
+            &path,
+            &commands::ConvertOptions {
+                target: to,
+                output: output.as_deref(),
+                sheet,
+                label,
+                range,
+                table,
+                anchor,
+            },
+        ),
     };
 
     match result {

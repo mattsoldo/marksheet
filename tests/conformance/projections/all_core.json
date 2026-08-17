@@ -1,0 +1,1476 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [
+    {
+      "code": "MS3102",
+      "severity": "warning",
+      "span": [
+        339,
+        353
+      ]
+    }
+  ],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 1238,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          83
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          84
+        ]
+      },
+      {
+        "content_span": [
+          84,
+          135
+        ],
+        "ending": "lf",
+        "span": [
+          84,
+          136
+        ]
+      },
+      {
+        "content_span": [
+          136,
+          202
+        ],
+        "ending": "lf",
+        "span": [
+          136,
+          203
+        ]
+      },
+      {
+        "content_span": [
+          203,
+          270
+        ],
+        "ending": "lf",
+        "span": [
+          203,
+          271
+        ]
+      },
+      {
+        "content_span": [
+          271,
+          306
+        ],
+        "ending": "lf",
+        "span": [
+          271,
+          307
+        ]
+      },
+      {
+        "content_span": [
+          307,
+          338
+        ],
+        "ending": "lf",
+        "span": [
+          307,
+          339
+        ]
+      },
+      {
+        "content_span": [
+          339,
+          353
+        ],
+        "ending": "lf",
+        "span": [
+          339,
+          354
+        ]
+      },
+      {
+        "content_span": [
+          354,
+          394
+        ],
+        "ending": "lf",
+        "span": [
+          354,
+          395
+        ]
+      },
+      {
+        "content_span": [
+          395,
+          408
+        ],
+        "ending": "lf",
+        "span": [
+          395,
+          409
+        ]
+      },
+      {
+        "content_span": [
+          409,
+          424
+        ],
+        "ending": "lf",
+        "span": [
+          409,
+          425
+        ]
+      },
+      {
+        "content_span": [
+          425,
+          429
+        ],
+        "ending": "lf",
+        "span": [
+          425,
+          430
+        ]
+      },
+      {
+        "content_span": [
+          430,
+          430
+        ],
+        "ending": "lf",
+        "span": [
+          430,
+          431
+        ]
+      },
+      {
+        "content_span": [
+          431,
+          453
+        ],
+        "ending": "lf",
+        "span": [
+          431,
+          454
+        ]
+      },
+      {
+        "content_span": [
+          454,
+          454
+        ],
+        "ending": "lf",
+        "span": [
+          454,
+          455
+        ]
+      },
+      {
+        "content_span": [
+          455,
+          478
+        ],
+        "ending": "lf",
+        "span": [
+          455,
+          479
+        ]
+      },
+      {
+        "content_span": [
+          479,
+          503
+        ],
+        "ending": "lf",
+        "span": [
+          479,
+          504
+        ]
+      },
+      {
+        "content_span": [
+          504,
+          518
+        ],
+        "ending": "lf",
+        "span": [
+          504,
+          519
+        ]
+      },
+      {
+        "content_span": [
+          519,
+          530
+        ],
+        "ending": "lf",
+        "span": [
+          519,
+          531
+        ]
+      },
+      {
+        "content_span": [
+          531,
+          535
+        ],
+        "ending": "lf",
+        "span": [
+          531,
+          536
+        ]
+      },
+      {
+        "content_span": [
+          536,
+          579
+        ],
+        "ending": "lf",
+        "span": [
+          536,
+          580
+        ]
+      },
+      {
+        "content_span": [
+          580,
+          613
+        ],
+        "ending": "lf",
+        "span": [
+          580,
+          614
+        ]
+      },
+      {
+        "content_span": [
+          614,
+          642
+        ],
+        "ending": "lf",
+        "span": [
+          614,
+          643
+        ]
+      },
+      {
+        "content_span": [
+          643,
+          677
+        ],
+        "ending": "lf",
+        "span": [
+          643,
+          678
+        ]
+      },
+      {
+        "content_span": [
+          678,
+          696
+        ],
+        "ending": "lf",
+        "span": [
+          678,
+          697
+        ]
+      },
+      {
+        "content_span": [
+          697,
+          719
+        ],
+        "ending": "lf",
+        "span": [
+          697,
+          720
+        ]
+      },
+      {
+        "content_span": [
+          720,
+          736
+        ],
+        "ending": "lf",
+        "span": [
+          720,
+          737
+        ]
+      },
+      {
+        "content_span": [
+          737,
+          755
+        ],
+        "ending": "lf",
+        "span": [
+          737,
+          756
+        ]
+      },
+      {
+        "content_span": [
+          756,
+          756
+        ],
+        "ending": "lf",
+        "span": [
+          756,
+          757
+        ]
+      },
+      {
+        "content_span": [
+          757,
+          771
+        ],
+        "ending": "lf",
+        "span": [
+          757,
+          772
+        ]
+      },
+      {
+        "content_span": [
+          772,
+          837
+        ],
+        "ending": "lf",
+        "span": [
+          772,
+          838
+        ]
+      },
+      {
+        "content_span": [
+          838,
+          918
+        ],
+        "ending": "lf",
+        "span": [
+          838,
+          919
+        ]
+      },
+      {
+        "content_span": [
+          919,
+          1015
+        ],
+        "ending": "lf",
+        "span": [
+          919,
+          1016
+        ]
+      },
+      {
+        "content_span": [
+          1016,
+          1020
+        ],
+        "ending": "lf",
+        "span": [
+          1016,
+          1021
+        ]
+      },
+      {
+        "content_span": [
+          1021,
+          1021
+        ],
+        "ending": "lf",
+        "span": [
+          1021,
+          1022
+        ]
+      },
+      {
+        "content_span": [
+          1022,
+          1059
+        ],
+        "ending": "lf",
+        "span": [
+          1022,
+          1060
+        ]
+      },
+      {
+        "content_span": [
+          1060,
+          1076
+        ],
+        "ending": "lf",
+        "span": [
+          1060,
+          1077
+        ]
+      },
+      {
+        "content_span": [
+          1077,
+          1081
+        ],
+        "ending": "lf",
+        "span": [
+          1077,
+          1082
+        ]
+      },
+      {
+        "content_span": [
+          1082,
+          1082
+        ],
+        "ending": "lf",
+        "span": [
+          1082,
+          1083
+        ]
+      },
+      {
+        "content_span": [
+          1083,
+          1107
+        ],
+        "ending": "lf",
+        "span": [
+          1083,
+          1108
+        ]
+      },
+      {
+        "content_span": [
+          1108,
+          1108
+        ],
+        "ending": "lf",
+        "span": [
+          1108,
+          1109
+        ]
+      },
+      {
+        "content_span": [
+          1109,
+          1122
+        ],
+        "ending": "lf",
+        "span": [
+          1109,
+          1123
+        ]
+      },
+      {
+        "content_span": [
+          1123,
+          1135
+        ],
+        "ending": "lf",
+        "span": [
+          1123,
+          1136
+        ]
+      },
+      {
+        "content_span": [
+          1136,
+          1164
+        ],
+        "ending": "lf",
+        "span": [
+          1136,
+          1165
+        ]
+      },
+      {
+        "content_span": [
+          1165,
+          1194
+        ],
+        "ending": "lf",
+        "span": [
+          1165,
+          1195
+        ]
+      },
+      {
+        "content_span": [
+          1195,
+          1212
+        ],
+        "ending": "lf",
+        "span": [
+          1195,
+          1213
+        ]
+      },
+      {
+        "content_span": [
+          1213,
+          1217
+        ],
+        "ending": "lf",
+        "span": [
+          1213,
+          1218
+        ]
+      },
+      {
+        "content_span": [
+          1218,
+          1237
+        ],
+        "ending": "lf",
+        "span": [
+          1218,
+          1238
+        ]
+      }
+    ],
+    "sha256": "76044185ceba42d41c119a884da014a22e482c4b88a4c10b66cebaa5a6f0dfa1"
+  },
+  "workbook": {
+    "book": {
+      "properties": {
+        "formula-profile": "portable-a1@1",
+        "locale": "en-US",
+        "timezone": "UTC"
+      },
+      "span": [
+        16,
+        83
+      ]
+    },
+    "capabilities": [
+      {
+        "id": "archive@1",
+        "required": false,
+        "span": [
+          339,
+          353
+        ]
+      }
+    ],
+    "extensions": [
+      {
+        "id": "archive@1",
+        "name": "workbook_metadata",
+        "payload": {
+          "byte_length": 30,
+          "sha256": "9cadc63a49efb89083e8fbe0ff07685e95ccebc21348d5899954916cfd84e1ae",
+          "span": [
+            395,
+            425
+          ]
+        },
+        "scope": "workbook",
+        "span": [
+          354,
+          394
+        ]
+      },
+      {
+        "id": "archive@1",
+        "name": "sheet_metadata",
+        "payload": {
+          "byte_length": 17,
+          "sha256": "7a3193abafd415ffbe56c55bab335b3dc4b8a7c49017f199664b9e699837c639",
+          "span": [
+            1060,
+            1077
+          ]
+        },
+        "scope": "inputs",
+        "span": [
+          1022,
+          1059
+        ]
+      }
+    ],
+    "names": [
+      {
+        "id": "unit_values",
+        "span": [
+          271,
+          306
+        ],
+        "target": "inventory[Unit]"
+      },
+      {
+        "id": "summary_cell",
+        "span": [
+          307,
+          338
+        ],
+        "target": "summary!B2"
+      }
+    ],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "inputs",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              479,
+              531
+            ],
+            "id": "inventory",
+            "kind": "table",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "Item",
+                    "span": [
+                      479,
+                      483
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Item"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "Unit",
+                    "span": [
+                      484,
+                      488
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Unit"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "Quantity",
+                    "span": [
+                      489,
+                      497
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Quantity"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "Total",
+                    "span": [
+                      498,
+                      503
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Total"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "Widget",
+                    "span": [
+                      504,
+                      510
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Widget"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "12.5",
+                    "span": [
+                      511,
+                      515
+                    ]
+                  },
+                  "value": {
+                    "kind": "number",
+                    "value": "12.5"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "4",
+                    "span": [
+                      516,
+                      517
+                    ]
+                  },
+                  "value": {
+                    "kind": "number",
+                    "value": "4"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "",
+                    "span": [
+                      518,
+                      518
+                    ]
+                  },
+                  "value": {
+                    "kind": "blank"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "Gadget",
+                    "span": [
+                      519,
+                      525
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Gadget"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "2",
+                    "span": [
+                      526,
+                      527
+                    ]
+                  },
+                  "value": {
+                    "kind": "number",
+                    "value": "2"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "3",
+                    "span": [
+                      528,
+                      529
+                    ]
+                  },
+                  "value": {
+                    "kind": "number",
+                    "value": "3"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "",
+                    "span": [
+                      530,
+                      530
+                    ]
+                  },
+                  "value": {
+                    "kind": "blank"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              455,
+              478
+            ]
+          },
+          {
+            "formula": "=[@Unit]*[@Quantity]",
+            "kind": "fill",
+            "span": [
+              536,
+              579
+            ],
+            "target": "inventory[Total]"
+          },
+          {
+            "kind": "apply",
+            "span": [
+              580,
+              613
+            ],
+            "styles": [
+              "header"
+            ],
+            "target": "inventory[#Headers]"
+          },
+          {
+            "kind": "apply",
+            "span": [
+              614,
+              642
+            ],
+            "styles": [
+              "money"
+            ],
+            "target": "inventory[Unit]"
+          },
+          {
+            "kind": "apply",
+            "span": [
+              643,
+              677
+            ],
+            "styles": [
+              "money",
+              "note"
+            ],
+            "target": "inventory[Total]"
+          },
+          {
+            "kind": "column",
+            "range": {
+              "end": 1,
+              "start": 1
+            },
+            "span": [
+              678,
+              696
+            ],
+            "value": "18"
+          },
+          {
+            "kind": "column",
+            "range": {
+              "end": 4,
+              "start": 2
+            },
+            "span": [
+              697,
+              719
+            ],
+            "value": "12.5"
+          },
+          {
+            "kind": "row",
+            "range": {
+              "end": 1,
+              "start": 1
+            },
+            "span": [
+              720,
+              736
+            ],
+            "value": "24"
+          },
+          {
+            "kind": "row",
+            "range": {
+              "end": 3,
+              "start": 2
+            },
+            "span": [
+              737,
+              755
+            ],
+            "value": "18"
+          },
+          {
+            "anchor": {
+              "column": 1,
+              "row": 10
+            },
+            "body_span": [
+              772,
+              1016
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "blank",
+                    "span": [
+                      772,
+                      777
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "blank"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "forced_text",
+                    "span": [
+                      778,
+                      789
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "forced_text"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "formula",
+                    "span": [
+                      790,
+                      797
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "formula"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "error",
+                    "span": [
+                      798,
+                      803
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "error"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "boolean",
+                    "span": [
+                      804,
+                      811
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "boolean"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "number",
+                    "span": [
+                      812,
+                      818
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "number"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "date",
+                    "span": [
+                      819,
+                      823
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "date"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "datetime",
+                    "span": [
+                      824,
+                      832
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "datetime"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "text",
+                    "span": [
+                      833,
+                      837
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "text"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "",
+                    "span": [
+                      838,
+                      838
+                    ]
+                  },
+                  "value": {
+                    "kind": "blank"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "'00123",
+                    "span": [
+                      839,
+                      845
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "00123"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "=A1+B1",
+                    "span": [
+                      846,
+                      852
+                    ]
+                  },
+                  "value": {
+                    "kind": "formula",
+                    "value": "=A1+B1"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "#DIV/0!",
+                    "span": [
+                      853,
+                      860
+                    ]
+                  },
+                  "value": {
+                    "kind": "error",
+                    "value": "#DIV/0!"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "true",
+                    "span": [
+                      861,
+                      865
+                    ]
+                  },
+                  "value": {
+                    "kind": "boolean",
+                    "value": true
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "-12.50e+2",
+                    "span": [
+                      866,
+                      875
+                    ]
+                  },
+                  "value": {
+                    "kind": "number",
+                    "value": "-12.50e+2"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "2026-08-16",
+                    "span": [
+                      876,
+                      886
+                    ]
+                  },
+                  "value": {
+                    "kind": "date",
+                    "value": "2026-08-16"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "2026-08-16T10:30:00-04:00",
+                    "span": [
+                      887,
+                      912
+                    ]
+                  },
+                  "value": {
+                    "kind": "datetime",
+                    "value": "2026-08-16T10:30:00-04:00"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "hello",
+                    "span": [
+                      913,
+                      918
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "hello"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "",
+                    "span": [
+                      919,
+                      919
+                    ]
+                  },
+                  "value": {
+                    "kind": "blank"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "'=literal",
+                    "span": [
+                      920,
+                      929
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "=literal"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "\"=SUM(A1,B1)\"",
+                    "span": [
+                      930,
+                      943
+                    ]
+                  },
+                  "value": {
+                    "kind": "formula",
+                    "value": "=SUM(A1,B1)"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "#N/A",
+                    "span": [
+                      944,
+                      948
+                    ]
+                  },
+                  "value": {
+                    "kind": "error",
+                    "value": "#N/A"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "false",
+                    "span": [
+                      949,
+                      954
+                    ]
+                  },
+                  "value": {
+                    "kind": "boolean",
+                    "value": false
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "0",
+                    "span": [
+                      955,
+                      956
+                    ]
+                  },
+                  "value": {
+                    "kind": "number",
+                    "value": "0"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "2026-08-17",
+                    "span": [
+                      957,
+                      967
+                    ]
+                  },
+                  "value": {
+                    "kind": "date",
+                    "value": "2026-08-17"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "2026-08-16T14:30:00Z",
+                    "span": [
+                      968,
+                      988
+                    ]
+                  },
+                  "value": {
+                    "kind": "datetime",
+                    "value": "2026-08-16T14:30:00Z"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "\"comma, quote \"\" and text\"",
+                    "span": [
+                      989,
+                      1015
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "comma, quote \" and text"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              757,
+              771
+            ]
+          }
+        ],
+        "label": "Inputs",
+        "span": [
+          431,
+          453
+        ]
+      },
+      {
+        "id": "summary",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              1123,
+              1213
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "Metric",
+                    "span": [
+                      1123,
+                      1129
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Metric"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "Value",
+                    "span": [
+                      1130,
+                      1135
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Value"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "Total",
+                    "span": [
+                      1136,
+                      1141
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Total"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "=SUM(inventory[Total])",
+                    "span": [
+                      1142,
+                      1164
+                    ]
+                  },
+                  "value": {
+                    "kind": "formula",
+                    "value": "=SUM(inventory[Total])"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "Average",
+                    "span": [
+                      1165,
+                      1172
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Average"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "=AVERAGE(unit_values)",
+                    "span": [
+                      1173,
+                      1194
+                    ]
+                  },
+                  "value": {
+                    "kind": "formula",
+                    "value": "=AVERAGE(unit_values)"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "Linked",
+                    "span": [
+                      1195,
+                      1201
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Linked"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "=inputs!A1",
+                    "span": [
+                      1202,
+                      1212
+                    ]
+                  },
+                  "value": {
+                    "kind": "formula",
+                    "value": "=inputs!A1"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              1109,
+              1122
+            ]
+          },
+          {
+            "kind": "apply",
+            "span": [
+              1218,
+              1237
+            ],
+            "styles": [
+              "header"
+            ],
+            "target": "A1:B1"
+          }
+        ],
+        "label": "Summary",
+        "span": [
+          1083,
+          1107
+        ]
+      }
+    ],
+    "styles": [
+      {
+        "id": "header",
+        "properties": {
+          "align": "center",
+          "bold": true,
+          "fill": "#E8EEF7"
+        },
+        "span": [
+          84,
+          135
+        ]
+      },
+      {
+        "id": "money",
+        "properties": {
+          "align": "right",
+          "currency": "USD",
+          "decimals": 2.0,
+          "number": "currency"
+        },
+        "span": [
+          136,
+          202
+        ]
+      },
+      {
+        "id": "note",
+        "properties": {
+          "font-size": 10.0,
+          "italic": true,
+          "text-color": "#666666",
+          "wrap": true
+        },
+        "span": [
+          203,
+          270
+        ]
+      }
+    ]
+  }
+}

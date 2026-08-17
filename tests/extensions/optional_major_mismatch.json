@@ -1,0 +1,15 @@
+{
+  "protocol": "marksheet-extension-fixture@1",
+  "registry": ["assertions@1"],
+  "source": "optional_major_mismatch.ms",
+  "expect": {
+    "capabilities_complete": true,
+    "calculation_complete": true,
+    "rendering_complete": true,
+    "validation_complete": true,
+    "valid": true,
+    "diagnostics": [{"code": "MS3102", "severity": "warning", "line": 2}],
+    "opaque_instances": [],
+    "instance_outcomes": []
+  }
+}
