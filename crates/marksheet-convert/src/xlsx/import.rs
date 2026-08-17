@@ -131,7 +131,7 @@ fn import_xlsx_inner(
     limits: ConversionLimits,
 ) -> Result<Conversion<Workbook>, ConvertError> {
     let package = Package::open(bytes, limits)?;
-    let mut workbook_info = parse_workbook(package.part("xl/workbook.xml")?, limits)?;
+    let mut workbook_info = parse_workbook(package.xml_part("xl/workbook.xml", limits)?, limits)?;
     if workbook_info.sheets.is_empty() {
         return Err(invalid("xl/workbook.xml", "workbook contains no sheets"));
     }
@@ -180,7 +180,8 @@ fn import_xlsx_inner(
     );
     let style_definitions = if let Some(part) = styles_part {
         consumed_parts.insert(part.to_owned());
-        let (definitions, unsupported) = parse_styles(package.part(part)?, part, limits)?;
+        let (definitions, unsupported) =
+            parse_styles(package.xml_part(part, limits)?, part, limits)?;
         record_consumed_part_omissions(part, unsupported, &mut report);
         definitions
     } else {
@@ -194,7 +195,8 @@ fn import_xlsx_inner(
     }
     let shared_strings = if let Some(part) = shared_part {
         consumed_parts.insert(part.to_owned());
-        let (strings, unsupported) = parse_shared_strings(package.part(part)?, part, limits)?;
+        let (strings, unsupported) =
+            parse_shared_strings(package.xml_part(part, limits)?, part, limits)?;
         record_consumed_part_omissions(part, unsupported, &mut report);
         strings
     } else {
@@ -236,8 +238,12 @@ fn import_xlsx_inner(
             date_1904: workbook_info.date_1904,
             limits,
         };
-        let mut worksheet =
-            parse_worksheet(package.part(sheet_part)?, sheet_part, &context, &mut report)?;
+        let mut worksheet = parse_worksheet(
+            package.xml_part(sheet_part, limits)?,
+            sheet_part,
+            &context,
+            &mut report,
+        )?;
         total_formulas = total_formulas
             .checked_add(worksheet.formula_count)
             .ok_or_else(|| resource(sheet_part, "workbook formula count overflow"))?;
@@ -285,7 +291,7 @@ fn import_xlsx_inner(
                 ));
             }
             let table = parse_table(
-                package.part(&relationship.target)?,
+                package.xml_part(&relationship.target, limits)?,
                 &relationship.target,
                 limits,
             )?;
@@ -3332,6 +3338,46 @@ mod tests {
         content
     }
 
+    /// Renames the single worksheet part to `part` and repoints the content
+    /// type override and the workbook relationship at the new name, so the
+    /// worksheet is reachable only through its relationship role.
+    fn disguise_worksheet_part(bytes: &[u8], part: &str, worksheet: &str) -> Vec<u8> {
+        let target = part.strip_prefix("xl/").unwrap();
+        let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let mut parts = Vec::new();
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            let name = entry.name().to_owned();
+            let mut content = Vec::new();
+            entry.read_to_end(&mut content).unwrap();
+            let (name, content) = match name.as_str() {
+                "xl/worksheets/sheet1.xml" => (part.to_owned(), worksheet.as_bytes().to_vec()),
+                "[Content_Types].xml" => {
+                    let text = String::from_utf8(content)
+                        .unwrap()
+                        .replace("/xl/worksheets/sheet1.xml", &format!("/{part}"));
+                    (name, text.into_bytes())
+                }
+                "xl/_rels/workbook.xml.rels" => {
+                    let text = String::from_utf8(content).unwrap().replace(
+                        "Target=\"worksheets/sheet1.xml\"",
+                        &format!("Target=\"{target}\""),
+                    );
+                    (name, text.into_bytes())
+                }
+                _ => (name, content),
+            };
+            parts.push((name, content));
+        }
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::DEFAULT.compression_method(CompressionMethod::Stored);
+        for (name, content) in parts {
+            writer.start_file(name, options).unwrap();
+            writer.write_all(&content).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
     fn basic_workbook() -> Workbook {
         Workbook {
             sheets: vec![Sheet {
@@ -3878,6 +3924,34 @@ mod tests {
         assert_ne!(changed, table_xml);
         let bytes = rewrite_package(&exported.value, &[("xl/tables/table1.xml", &changed)], &[]);
         assert!(import_xlsx(&bytes, ConversionLimits::default()).is_err());
+    }
+
+    #[test]
+    fn xml_hardening_follows_the_part_role_not_the_part_name() {
+        let exported = export_xlsx(&basic_workbook(), ConversionLimits::default()).unwrap();
+        let limits = ConversionLimits::default();
+        let part = "xl/worksheets/sheet1.dat";
+
+        let mut doctype = String::from("<!DOCTYPE worksheet [<!ENTITY payload \"value\">]>");
+        doctype.push_str(&"<nest>".repeat(5_000));
+        doctype.push_str(&"</nest>".repeat(5_000));
+        let bytes = disguise_worksheet_part(&exported.value, part, &doctype);
+        assert_eq!(
+            import_xlsx(&bytes, limits).unwrap_err().error.code,
+            ConvertErrorCode::UnsupportedPackage
+        );
+
+        let mut deep = "<nest>".repeat(5_000);
+        deep.push_str(&"</nest>".repeat(5_000));
+        let bytes = disguise_worksheet_part(&exported.value, part, &deep);
+        assert_eq!(
+            import_xlsx(&bytes, limits).unwrap_err().error.code,
+            ConvertErrorCode::ResourceLimit
+        );
+
+        let worksheet = package_text(&exported.value, "xl/worksheets/sheet1.xml");
+        let bytes = disguise_worksheet_part(&exported.value, part, &worksheet);
+        assert_eq!(import_xlsx(&bytes, limits).unwrap().value.sheets.len(), 1);
     }
 
     #[test]
