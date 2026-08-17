@@ -225,22 +225,30 @@ pub(crate) fn format(path: &Path, check: bool) -> Result<ExitCode, commands::Cli
             "formatted source cannot fit in the bounded exact-patch response",
         );
     }
-    let formatted_diagnostics = match validate_format_candidate(&source, &formatted, &diagnostics) {
-        Ok(diagnostics) => diagnostics,
-        Err(diagnostics) => {
-            return print_format_regression(&source, &formatted, check, &diagnostics);
-        }
+    let Ok(formatted_diagnostics) = validate_format_candidate(&source, &formatted, &diagnostics)
+    else {
+        return print_format_regression(&source, &formatted, check, &diagnostics);
     };
     if check {
-        return print_format_check(&source, &formatted, &formatted_diagnostics);
+        let proposed_valid = !formatted_diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error);
+        return print_format_check(&source, &formatted, &diagnostics, proposed_valid);
     }
-    apply_format(path, &source, &formatted, &formatted_diagnostics)
+    apply_format(
+        path,
+        &source,
+        &formatted,
+        &diagnostics,
+        &formatted_diagnostics,
+    )
 }
 
 fn print_format_check(
     source: &[u8],
     formatted: &[u8],
     diagnostics: &[Diagnostic],
+    proposed_valid: bool,
 ) -> Result<ExitCode, commands::CliError> {
     let would_change = source != formatted;
     let output = FormatOutput {
@@ -250,20 +258,15 @@ fn print_format_check(
         check_only: true,
         changed: false,
         would_change,
-        valid: !diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.severity == Severity::Error),
+        valid: proposed_valid,
         before: SourceVersion::new(source),
         after: SourceVersion::new(source),
         proposed: would_change.then(|| SourceVersion::new(formatted)),
         patches: Vec::new(),
-        proposal_patches: replacement_patch(source, formatted),
-        diagnostics_source: if would_change {
-            FormatDiagnosticsSource::Proposed
-        } else {
-            FormatDiagnosticsSource::Before
-        },
-        diagnostics: json_diagnostics(if would_change { formatted } else { source }, diagnostics),
+        // Check mode does not produce the candidate bytes, and the @1
+        // envelope has no candidate-source binding. Report the verified
+        // candidate verdict while keeping positions scoped to the input.
+        diagnostics: json_diagnostics(source, diagnostics),
         error: None,
     };
     print_json(&output)?;
@@ -278,7 +281,8 @@ fn apply_format(
     path: &Path,
     source: &[u8],
     formatted: &[u8],
-    diagnostics: &[Diagnostic],
+    source_diagnostics: &[Diagnostic],
+    formatted_diagnostics: &[Diagnostic],
 ) -> Result<ExitCode, commands::CliError> {
     let would_change = source != formatted;
     if would_change && !commands::replace_atomically_if_current(path, formatted, source)? {
@@ -298,9 +302,7 @@ fn apply_format(
             after,
             proposed: Some(SourceVersion::new(formatted)),
             patches: Vec::new(),
-            proposal_patches: replacement_patch(source, formatted),
-            diagnostics_source: FormatDiagnosticsSource::Proposed,
-            diagnostics: json_diagnostics(formatted, diagnostics),
+            diagnostics: json_diagnostics(source, source_diagnostics),
             error: Some(AutomationError {
                 kind: "conflict",
                 message: "source bytes changed after formatting was planned",
@@ -317,7 +319,7 @@ fn apply_format(
         check_only: false,
         changed: would_change,
         would_change,
-        valid: !diagnostics
+        valid: !formatted_diagnostics
             .iter()
             .any(|diagnostic| diagnostic.severity == Severity::Error),
         before: SourceVersion::new(source),
@@ -332,12 +334,10 @@ fn apply_format(
         } else {
             Vec::new()
         },
-        proposal_patches: Vec::new(),
-        diagnostics_source: FormatDiagnosticsSource::After,
         // `formatted` is the source these diagnostics were derived from, and
         // when nothing changed it is byte-identical to `source`, so spans and
         // line index always describe the same bytes.
-        diagnostics: json_diagnostics(formatted, diagnostics),
+        diagnostics: json_diagnostics(formatted, formatted_diagnostics),
         error: None,
     };
     print_json(&output)?;
@@ -417,9 +417,10 @@ fn print_format_regression(
         before,
         proposed: Some(SourceVersion::new(formatted)),
         patches: Vec::new(),
-        proposal_patches: replacement_patch(source, formatted),
-        diagnostics_source: FormatDiagnosticsSource::Proposed,
-        diagnostics: json_diagnostics(formatted, diagnostics),
+        // The @1 envelope fingerprints but cannot reconstruct or explicitly
+        // bind the uncommitted proposal. Never expose candidate-relative
+        // positions that clients would naturally map onto the unchanged file.
+        diagnostics: json_diagnostics(source, diagnostics),
         error: Some(AutomationError {
             kind: "invalid_result",
             message: "canonical formatting would produce an invalid workbook; no write performed",
@@ -900,8 +901,6 @@ fn print_format_failure(
         after: version,
         proposed: None,
         patches: Vec::new(),
-        proposal_patches: Vec::new(),
-        diagnostics_source: FormatDiagnosticsSource::Before,
         diagnostics: json_diagnostics(source, diagnostics),
         error: Some(AutomationError { kind, message }),
     };
@@ -923,8 +922,6 @@ fn print_format_resource_failure(path: &Path, check: bool) -> Result<ExitCode, c
         after: version,
         proposed: None,
         patches: Vec::new(),
-        proposal_patches: Vec::new(),
-        diagnostics_source: FormatDiagnosticsSource::Before,
         diagnostics: Vec::new(),
         error: Some(AutomationError {
             kind: "resource_limit",
@@ -1302,8 +1299,6 @@ struct FormatOutput<'a> {
     after: SourceVersion,
     proposed: Option<SourceVersion>,
     patches: Vec<JsonPatch>,
-    proposal_patches: Vec<JsonPatch>,
-    diagnostics_source: FormatDiagnosticsSource,
     diagnostics: Vec<render::JsonDiagnostic>,
     error: Option<AutomationError<'a>>,
 }
@@ -1383,26 +1378,6 @@ struct JsonPatch {
     replacement: String,
 }
 
-#[derive(Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum FormatDiagnosticsSource {
-    Before,
-    After,
-    Proposed,
-}
-
-fn replacement_patch(source: &[u8], replacement: &[u8]) -> Vec<JsonPatch> {
-    if source == replacement {
-        Vec::new()
-    } else {
-        vec![JsonPatch {
-            start: 0,
-            end: u64::try_from(source.len()).expect("automation source limit fits u64"),
-            replacement: String::from_utf8_lossy(replacement).into_owned(),
-        }]
-    }
-}
-
 #[derive(Clone, Serialize)]
 struct SourceVersion {
     byte_length: u64,
@@ -1453,17 +1428,5 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.severity == Severity::Error)
         );
-    }
-
-    #[test]
-    fn proposal_patch_reconstructs_the_diagnostic_source() {
-        let source = b"before";
-        let proposed = b"proposed";
-        let patches = replacement_patch(source, proposed);
-
-        assert_eq!(patches.len(), 1);
-        assert_eq!(patches[0].start, 0);
-        assert_eq!(patches[0].end, source.len() as u64);
-        assert_eq!(patches[0].replacement.as_bytes(), proposed);
     }
 }
