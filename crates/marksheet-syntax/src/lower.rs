@@ -12,6 +12,7 @@ use marksheet_model::{
 
 use crate::cst::{CsvBlock, CsvKind, Directive, ExtensionBlock, Node, Span};
 use crate::diagnostic::{Diagnostic, error, warning};
+use crate::tokens::{split_target_and_rest, split_tokens};
 
 #[derive(Clone, Debug, Default)]
 pub struct ParseOptions {
@@ -1095,45 +1096,18 @@ struct Token {
 }
 
 fn lex_tokens(source: &str, span: Span) -> Result<Vec<Token>, &'static str> {
-    let bytes = source.as_bytes();
-    let mut cursor = span.start;
     let mut tokens = Vec::new();
-    while cursor < span.end {
-        while cursor < span.end && bytes[cursor] == b' ' {
-            cursor += 1;
-        }
-        if cursor == span.end {
-            break;
-        }
-        let start = cursor;
-        let mut in_string = false;
-        let mut escaped = false;
-        let mut brackets = 0_u32;
-        while cursor < span.end {
-            match bytes[cursor] {
-                b'"' if !escaped => in_string = !in_string,
-                b'\\' if in_string => escaped = !escaped,
-                b'[' if !in_string => brackets += 1,
-                b']' if !in_string && brackets > 0 => brackets -= 1,
-                b' ' if !in_string && brackets == 0 => break,
-                _ => escaped = false,
-            }
-            cursor += 1;
-        }
-        if in_string {
-            return Err("unterminated JSON string");
-        }
-        let raw = &source[start..cursor];
-        let quoted = raw.starts_with('"');
+    for raw in split_tokens(&source[span.range()])? {
+        let quoted = raw.text.starts_with('"');
         let text = if quoted {
-            serde_json::from_str(raw).map_err(|_| "invalid JSON string")?
+            serde_json::from_str(raw.text).map_err(|_| "invalid JSON string")?
         } else {
-            raw.to_owned()
+            raw.text.to_owned()
         };
         tokens.push(Token {
             text,
-            raw: raw.to_owned(),
-            span: Span::new(start, cursor),
+            raw: raw.text.to_owned(),
+            span: Span::new(span.start + raw.start, span.start + raw.end()),
             quoted,
         });
     }
@@ -1208,28 +1182,6 @@ fn parse_bracket_target(value: &str) -> Option<(&str, String)> {
         header.push(']');
     }
     Some((id, header))
-}
-
-/// Finds the separator after a target while allowing spaces inside a
-/// structured-reference header and `]]` escapes.
-fn split_target_and_rest(value: &str) -> Option<(&str, &str)> {
-    let bytes = value.as_bytes();
-    let mut index = 0;
-    let mut in_brackets = false;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'[' => in_brackets = true,
-            b']' if in_brackets && bytes.get(index + 1) == Some(&b']') => index += 1,
-            b']' => in_brackets = false,
-            b' ' if !in_brackets => {
-                let rest = value[index..].trim_start();
-                return (!rest.is_empty()).then_some((&value[..index], rest));
-            }
-            _ => {}
-        }
-        index += 1;
-    }
-    None
 }
 
 fn parse_fill_target(value: &str) -> Option<FillTarget> {
