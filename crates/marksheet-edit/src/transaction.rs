@@ -5,7 +5,7 @@
 //! before any result is returned.  This keeps semantic edits, source patches,
 //! and undo data on the same transactional boundary.
 
-use std::{fmt, str};
+use std::{fmt, str, sync::Arc};
 
 use marksheet_calc::{
     formula::{A1Move, FormulaPatch, FormulaRewrite, FormulaRewriteError, rewrite_formula_text},
@@ -220,6 +220,13 @@ pub struct EditResult {
     pub inverse_transaction: InverseTransaction,
     /// Exact inverse patches retained for fixture and API compatibility.
     pub inverse: PatchSet,
+    /// Exact resulting source bytes, owned by the caller.
+    ///
+    /// This is a distinct buffer from the shared post-edit snapshot that
+    /// `inverse` retains and that [`crate::history::EditSession`] adopts, so an edit
+    /// materializes its result twice: once retained for undo and reused by
+    /// every later patch set bound to that document version, and once handed
+    /// over here. Dropping this field leaves the single retained snapshot.
     pub source: Vec<u8>,
     pub workbook: Workbook,
     pub diagnostics: Vec<Diagnostic>,
@@ -348,6 +355,57 @@ pub fn execute_with_parse_options(
     transaction: &EditTransaction,
     options: &ParseOptions,
 ) -> Result<EditResult, EditError> {
+    let before = check_transaction(source, transaction)?;
+    let document = parse_with_options(source, options);
+    let workbook = base_workbook(&document, EditErrorKind::InvalidBase)?;
+    plan_and_apply(
+        ParsedBase {
+            source: Arc::new(source.to_vec()),
+            document,
+            workbook,
+        },
+        transaction,
+        before,
+        options,
+    )
+}
+
+/// A transaction base that the caller has already parsed.
+///
+/// The history layer parses the current source to capture semantic
+/// preconditions before it plans an edit. Handing that parse back leaves one
+/// parse of the base bytes on the edit path instead of two.
+pub(crate) struct ParsedBase {
+    pub(crate) source: Arc<Vec<u8>>,
+    pub(crate) document: ParsedDocument,
+    pub(crate) workbook: Workbook,
+}
+
+/// Executes a transaction against a base the caller already parsed.
+///
+/// The caller must have produced `base` with the same `options` that validate
+/// the patched result here, so extension availability cannot change inside the
+/// atomic edit.
+///
+/// # Errors
+///
+/// Returns the same errors as [`execute`], except that a base parse failure is
+/// reported by the caller that performed the parse.
+pub(crate) fn execute_parsed(
+    base: ParsedBase,
+    transaction: &EditTransaction,
+    options: &ParseOptions,
+) -> Result<EditResult, EditError> {
+    let before = check_transaction(&base.source, transaction)?;
+    plan_and_apply(base, transaction, before, options)
+}
+
+/// Checks the preconditions that do not need a parsed base, and returns the
+/// fingerprint of the source they were checked against.
+fn check_transaction(
+    source: &[u8],
+    transaction: &EditTransaction,
+) -> Result<SourceFingerprint, EditError> {
     let before = SourceFingerprint::of(source);
     if let Some(expected) = &transaction.expectations.source {
         if !expected.matches(source, before) {
@@ -370,12 +428,26 @@ pub fn execute_with_parse_options(
             "MoveBlock cannot be combined with another same-base operation",
         ));
     }
-    let base = ValidDocument::parse(source, EditErrorKind::InvalidBase, options)?;
+    Ok(before)
+}
+
+fn plan_and_apply(
+    base: ParsedBase,
+    transaction: &EditTransaction,
+    before: SourceFingerprint,
+    options: &ParseOptions,
+) -> Result<EditResult, EditError> {
+    let ParsedBase {
+        source,
+        document,
+        workbook,
+    } = base;
+    let base = ValidDocument::validate(document, workbook, EditErrorKind::InvalidBase)?;
     let defined_styles = resolve_style_definitions(&base, &transaction.operations)?;
     let mut patches = Vec::new();
     for (index, operation) in transaction.operations.iter().enumerate() {
         plan_operation(
-            source,
+            &source,
             &base,
             operation,
             index,
@@ -385,14 +457,16 @@ pub fn execute_with_parse_options(
     }
     patches = normalize_combined_patches(patches)?;
     patches.sort_by_key(patch_order);
-    remove_unchanged_patches(source, &mut patches)?;
+    remove_unchanged_patches(&source, &mut patches)?;
 
-    let patch_set = PatchSet::for_source(source, patches).map_err(|error| patch_error(&error))?;
+    let patch_set = PatchSet::for_shared_source(Arc::clone(&source), patches)
+        .map_err(|error| patch_error(&error))?;
     let (edited, inverse) = patch_set
-        .apply_with_inverse(source)
+        .apply_with_inverse(&source)
         .map_err(|error| patch_error(&error))?;
     let validated = ValidDocument::parse(&edited, EditErrorKind::InvalidResult, options)?;
     let inverse_transaction = InverseTransaction::from_patch_set(inverse.clone());
+    let after = SourceFingerprint::of(&edited);
 
     Ok(EditResult {
         operations: transaction.operations.clone(),
@@ -400,11 +474,11 @@ pub fn execute_with_parse_options(
         patches: patch_set,
         inverse_transaction,
         inverse,
-        source: edited.clone(),
+        source: edited,
         workbook: validated.workbook,
         diagnostics: validated.diagnostics,
         before,
-        after: SourceFingerprint::of(&edited),
+        after,
     })
 }
 
@@ -422,20 +496,16 @@ impl ValidDocument {
         options: &ParseOptions,
     ) -> Result<Self, EditError> {
         let document = parse_with_options(source, options);
-        if document.has_errors() {
-            return Err(EditError::invalid_document(
-                error_kind,
-                "transaction source is not a valid Marksheet document",
-                document.diagnostics,
-            ));
-        }
-        let Some(workbook) = document.workbook.clone() else {
-            return Err(EditError::invalid_document(
-                error_kind,
-                "transaction source did not produce a complete workbook",
-                document.diagnostics,
-            ));
-        };
+        let workbook = base_workbook(&document, error_kind)?;
+        Self::validate(document, workbook, error_kind)
+    }
+
+    /// Prepares and compiles an already-parsed document and its workbook.
+    fn validate(
+        document: ParsedDocument,
+        workbook: Workbook,
+        error_kind: EditErrorKind,
+    ) -> Result<Self, EditError> {
         let prepared =
             PreparedWorkbook::build(&workbook, PrepareLimits::default()).map_err(|error| {
                 EditError::invalid_document(
@@ -481,6 +551,28 @@ impl ValidDocument {
             diagnostics,
         })
     }
+}
+
+/// Extracts the semantic workbook a parsed document must have produced before
+/// a transaction may be planned against it.
+fn base_workbook(
+    document: &ParsedDocument,
+    error_kind: EditErrorKind,
+) -> Result<Workbook, EditError> {
+    if document.has_errors() {
+        return Err(EditError::invalid_document(
+            error_kind,
+            "transaction source is not a valid Marksheet document",
+            document.diagnostics.clone(),
+        ));
+    }
+    document.workbook.clone().ok_or_else(|| {
+        EditError::invalid_document(
+            error_kind,
+            "transaction source did not produce a complete workbook",
+            document.diagnostics.clone(),
+        )
+    })
 }
 
 fn plan_operation(
