@@ -11,6 +11,10 @@ optional declaration reports `MS3102`, an absent required declaration reports
 instance reports `MS3103` while remaining preserved. `opaque_crlf.json` embeds
 an original CRLF source byte sequence: lossless output is byte-identical;
 canonical output uses LF while preserving all other payload bytes.
+`opaque_payload_carriage_return.json` pins the other half of SPEC section 18
+item 12: a payload holding both a lone `CR` and a `CRLF` parses with no
+diagnostics, saves losslessly byte-for-byte, and canonicalizes with the `CRLF`
+folded to `LF` and the lone `CR` retained as opaque data.
 
 Each non-registry fixture records every public completeness flag, validity,
 ordered diagnostics, and ordered per-instance outcomes. Registry construction

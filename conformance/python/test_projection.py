@@ -15,6 +15,7 @@ from marksheet_projection import (
     MAX_CSV_ROWS,
     MAX_DIAGNOSTICS,
     MAX_INPUT_BYTES,
+    MAX_PHYSICAL_LINES,
     MAX_TOKEN_BYTES,
     dump_projection,
     project_bytes,
@@ -109,11 +110,22 @@ class ExistingCorpusTests(unittest.TestCase):
 class ByteLevelTests(unittest.TestCase):
     def test_bom_invalid_utf8_and_bare_cr_are_diagnosed(self) -> None:
         bom = project_bytes(b"\xef\xbb\xbf#!marksheet 0.1\n@sheet s \"S\"\n")
-        self.assertIn("MS1001", codes(bom))
+        self.assertIn("MS1002", codes(bom))
         invalid_utf8 = project_bytes(b"#!marksheet 0.1\n@sheet s \"\xff\"\n")
-        self.assertIn("MS1001", codes(invalid_utf8))
+        self.assertEqual(codes(invalid_utf8), ["MS1003"])
+        # Invalid UTF-8 withholds the semantic model rather than projecting a
+        # partially decoded workbook, matching the reference parser.
+        self.assertEqual(invalid_utf8["workbook"]["sheets"], [])
         bare_cr = project_bytes(b"#!marksheet 0.1\r@sheet s \"S\"\n")
         self.assertIn("MS1101", codes(bare_cr))
+
+    def test_invalid_utf8_after_the_line_cap_keeps_its_own_span(self) -> None:
+        prefix = b"x\n" * MAX_PHYSICAL_LINES
+        projection = project_bytes(prefix + b"bad\xff\n")
+        diagnostic = next(
+            item for item in projection["diagnostics"] if item["code"] == "MS1003"
+        )
+        self.assertEqual(diagnostic["span"], [len(prefix), len(prefix) + 4])
 
     def test_csv_quoted_end_and_multiline_do_not_terminate_the_block(self) -> None:
         data = (

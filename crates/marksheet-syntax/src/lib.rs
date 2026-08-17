@@ -151,7 +151,7 @@ mod tests {
         let document = parse(source);
         assert!(!document.has_errors());
         let once = canonicalize(&document).unwrap();
-        assert!(!once.windows(2).any(|window| window == b"\r\n"));
+        assert!(!once.contains(&b'\r'));
         let twice = canonicalize(&parse(&once)).unwrap();
         assert_eq!(once, twice);
     }
@@ -162,6 +162,83 @@ mod tests {
         let document = parse(source);
         assert_eq!(document.source_bytes(), source);
         assert!(document.has_errors());
+    }
+
+    #[test]
+    fn lone_carriage_return_line_endings_are_rejected_without_losing_bytes() {
+        let source = b"#!marksheet 0.1\r@sheet s \"Sheet\"\r";
+        let document = parse(source);
+        let codes: Vec<_> = document
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect();
+        assert_eq!(codes, ["MS1004", "MS1004"]);
+        assert_eq!(document.source_bytes(), source);
+        assert!(
+            canonicalize(&document).is_err(),
+            "CR-only line endings must not be rewritten implicitly"
+        );
+    }
+
+    #[test]
+    fn a_bare_carriage_return_inside_a_quoted_csv_field_is_rejected() {
+        let source =
+            b"#!marksheet 0.1\n@sheet s \"Sheet\"\n@block A1 csv\n\"first\rsecond\"\n@end\n";
+        let document = parse(source);
+        let codes: Vec<_> = document
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect();
+        assert_eq!(codes, ["MS1102"]);
+        assert_eq!(document.source_bytes(), source);
+        assert!(canonicalize(&document).is_err());
+    }
+
+    /// SPEC section 17 requires an unknown payload byte to survive intact and
+    /// SPEC section 18 item 12 normalizes only CRLF inside a payload, so a lone
+    /// carriage return there is opaque data rather than a line-ending error.
+    #[test]
+    fn a_lone_carriage_return_inside_an_extension_payload_is_opaque_data() {
+        let source = b"#!marksheet 0.1\n@use vendor@1\n\n@sheet s \"Sheet\"\n@extension vendor@1 \"x\"\nline1\rline2\r\nline3\n@end\n";
+        let options = ParseOptions {
+            supported_extensions: vec!["vendor@1".to_owned()],
+        };
+        let document = parse_with_options(source, &options);
+        assert!(
+            document.diagnostics.is_empty(),
+            "{:?}",
+            document
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(document.source_bytes(), source);
+        let canonical = canonicalize(&document).expect("an opaque payload byte is not an error");
+        assert_eq!(
+            canonical,
+            b"#!marksheet 0.1\n@use vendor@1\n\n@sheet s \"Sheet\"\n@extension vendor@1 \"x\"\nline1\rline2\nline3\n@end\n"
+                .to_vec(),
+            "canonical output must normalize payload CRLF to LF and keep the lone CR"
+        );
+        assert_eq!(
+            canonicalize(&parse_with_options(&canonical, &options))
+                .expect("canonical output must canonicalize again"),
+            canonical,
+            "a preserved payload carriage return must keep canonicalization idempotent"
+        );
+    }
+
+    #[test]
+    fn a_missing_version_header_is_reported_exactly_once() {
+        let codes: Vec<_> = parse(b"")
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str().to_owned())
+            .collect();
+        assert_eq!(codes, ["MS1001", "MS1101"]);
     }
 
     #[test]

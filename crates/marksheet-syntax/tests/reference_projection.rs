@@ -975,10 +975,15 @@ fn reference_projection(source: &[u8], available_extensions: &[String]) -> JsonV
             supported_extensions: available_extensions.to_vec(),
         },
     );
-    let workbook = document
-        .workbook
-        .as_ref()
-        .expect("checked valid fixture must lower to a workbook");
+    // Source that is not valid UTF-8 has no semantic model in either
+    // implementation, so both project the empty workbook alongside the
+    // encoding diagnostic rather than inventing a partially decoded one.
+    assert!(
+        document.workbook.is_some() || std::str::from_utf8(source).is_err(),
+        "checked valid fixture must lower to a workbook"
+    );
+    let recovered = Workbook::default();
+    let workbook = document.workbook.as_ref().unwrap_or(&recovered);
     let diagnostics = diagnostics_projection(source, &document);
     let required_unavailable = diagnostics
         .iter()

@@ -293,6 +293,41 @@ fn json_format_reports_its_own_exact_guarded_patch() {
 }
 
 #[test]
+fn json_format_leaves_a1_shaped_identifiers_valid() {
+    let source = b"#!marksheet 0.1\n@style h2 bold=true\n@sheet q1 \"Q1\"\n@table data1 A1 csv\nItem,Total\nRent,5\n@end\n@apply data1[Total] h2\n";
+    let workbook = TempFile::write("automation-format-identifiers.ms", source);
+
+    let format = marksheet()
+        .args(["fmt", "--format", "json"])
+        .arg(workbook.path())
+        .output()
+        .expect("CLI executes");
+    let format: serde_json::Value =
+        serde_json::from_slice(&format.stdout).expect("valid format JSON");
+    assert_eq!(format["status"], "ok");
+    assert_eq!(format["valid"], true);
+
+    let formatted = fs::read(workbook.path()).expect("read formatted source");
+    let formatted = String::from_utf8(formatted).expect("formatted source is UTF-8");
+    assert!(formatted.contains("@sheet q1 \"Q1\"\n"), "{formatted}");
+    assert!(formatted.contains("@table data1 A1 csv\n"), "{formatted}");
+    assert!(
+        formatted.contains("@apply data1[Total] h2\n"),
+        "{formatted}"
+    );
+
+    // A formatting envelope that reports `ok` must leave a workbook `check`
+    // still accepts; the identifiers above are the case that silently became
+    // invalid upper-case spellings.
+    let check = marksheet()
+        .args(["check", "--format", "json"])
+        .arg(workbook.path())
+        .output()
+        .expect("CLI executes");
+    assert!(check.status.success(), "stdout: {}", text(&check.stdout));
+}
+
+#[test]
 fn committed_edit_reports_post_edit_extension_failures() {
     let source =
         fs::read(workspace_file("tests/extensions/assertions_success.ms")).expect("read fixture");

@@ -1,0 +1,18 @@
+{
+  "protocol": "marksheet-extension-fixture@1",
+  "registry": ["vendor_data@1"],
+  "source": "opaque_payload_carriage_return.inline",
+  "expect": {
+    "capabilities_complete": true,
+    "calculation_complete": true,
+    "rendering_complete": true,
+    "validation_complete": true,
+    "valid": true,
+    "diagnostics": [],
+    "opaque_instances": ["vendor_data@1:payload_cr"],
+    "instance_outcomes": [{"capability": "vendor_data@1", "name": "payload_cr", "scope": "sheet:inputs", "outcome": "processed"}]
+  },
+  "original_source_base64": "IyFtYXJrc2hlZXQgMC4xCkB1c2UgdmVuZG9yX2RhdGFAMQoKQHNoZWV0IGlucHV0cyAiSW5wdXRzIgpAZXh0ZW5zaW9uIHZlbmRvcl9kYXRhQDEgInBheWxvYWRfY3IiCmFscGhhDWJldGEKZ2FtbWENCmRlbHRhCkBlbmQK",
+  "lossless_output_base64": "IyFtYXJrc2hlZXQgMC4xCkB1c2UgdmVuZG9yX2RhdGFAMQoKQHNoZWV0IGlucHV0cyAiSW5wdXRzIgpAZXh0ZW5zaW9uIHZlbmRvcl9kYXRhQDEgInBheWxvYWRfY3IiCmFscGhhDWJldGEKZ2FtbWENCmRlbHRhCkBlbmQK",
+  "canonical_output_base64": "IyFtYXJrc2hlZXQgMC4xCkB1c2UgdmVuZG9yX2RhdGFAMQoKQHNoZWV0IGlucHV0cyAiSW5wdXRzIgpAZXh0ZW5zaW9uIHZlbmRvcl9kYXRhQDEgInBheWxvYWRfY3IiCmFscGhhDWJldGEKZ2FtbWEKZGVsdGEKQGVuZAo="
+}
