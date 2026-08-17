@@ -11,6 +11,7 @@
     {"id": "optional_major_mismatch", "kind": "availability", "fixture": "optional_major_mismatch.json"},
     {"id": "required_unavailable", "kind": "availability", "fixture": "required_unavailable.json"},
     {"id": "undeclared_opaque", "kind": "availability", "fixture": "undeclared_opaque.json"},
-    {"id": "opaque_crlf", "kind": "lossless", "fixture": "opaque_crlf.json"}
+    {"id": "opaque_crlf", "kind": "lossless", "fixture": "opaque_crlf.json"},
+    {"id": "opaque_payload_carriage_return", "kind": "lossless", "fixture": "opaque_payload_carriage_return.json"}
   ]
 }

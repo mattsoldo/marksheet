@@ -92,21 +92,21 @@ fn format_extension(output: &mut Vec<u8>, source: &[u8], extension: &ExtensionBl
     output.extend_from_slice(b"@end\n");
 }
 
+/// Rewrites CRLF to LF inside an opaque extension payload and copies every
+/// other byte verbatim.
+///
+/// SPEC section 18 item 12 normalizes only CRLF here; a lone carriage return is
+/// unknown payload data that SPEC section 17 requires a lossless editor to keep
+/// byte-for-byte, so canonical output must not rewrite it either.
 fn normalize_line_endings(output: &mut Vec<u8>, bytes: &[u8]) {
     let mut index = 0;
     while index < bytes.len() {
-        match bytes[index] {
-            b'\r' => {
-                output.push(b'\n');
-                index += 1;
-                if bytes.get(index) == Some(&b'\n') {
-                    index += 1;
-                }
-            }
-            byte => {
-                output.push(byte);
-                index += 1;
-            }
+        if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+            output.push(b'\n');
+            index += 2;
+        } else {
+            output.push(bytes[index]);
+            index += 1;
         }
     }
 }

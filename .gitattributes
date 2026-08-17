@@ -5,9 +5,6 @@ LICENSE text eol=lf
 
 # These fixtures intentionally retain carriage-return bytes for parser and
 # round-trip tests.
-tests/conformance/invalid/bare_carriage_return.ms binary
-tests/conformance/invalid/extension_payload_carriage_return.ms binary
-tests/conformance/invalid/quoted_bare_carriage_return.ms binary
 tests/conformance/valid/csv_edge_cases.ms binary
 tests/roundtrip/crlf_input.ms binary
 tests/edit/rename_sheet_id_crlf.before.ms binary

@@ -195,15 +195,18 @@ mod tests {
         assert!(canonicalize(&document).is_err());
     }
 
+    /// SPEC section 17 requires an unknown payload byte to survive intact and
+    /// SPEC section 18 item 12 normalizes only CRLF inside a payload, so a lone
+    /// carriage return there is opaque data rather than a line-ending error.
     #[test]
-    fn a_bare_carriage_return_inside_an_extension_payload_is_rejected() {
-        let source = b"#!marksheet 0.1\n@use vendor@1\n\n@sheet s \"Sheet\"\n@extension vendor@1 \"x\"\nline1\rline2\n@end\n";
-        let document = parse(source);
+    fn a_lone_carriage_return_inside_an_extension_payload_is_opaque_data() {
+        let source = b"#!marksheet 0.1\n@use vendor@1\n\n@sheet s \"Sheet\"\n@extension vendor@1 \"x\"\nline1\rline2\r\nline3\n@end\n";
+        let options = ParseOptions {
+            supported_extensions: vec!["vendor@1".to_owned()],
+        };
+        let document = parse_with_options(source, &options);
         assert!(
-            document
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.code.as_str() == "MS1004"),
+            document.diagnostics.is_empty(),
             "{:?}",
             document
                 .diagnostics
@@ -212,9 +215,18 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(document.source_bytes(), source);
-        assert!(
-            canonicalize(&document).is_err(),
-            "an opaque payload's carriage return must not be normalized implicitly"
+        let canonical = canonicalize(&document).expect("an opaque payload byte is not an error");
+        assert_eq!(
+            canonical,
+            b"#!marksheet 0.1\n@use vendor@1\n\n@sheet s \"Sheet\"\n@extension vendor@1 \"x\"\nline1\rline2\nline3\n@end\n"
+                .to_vec(),
+            "canonical output must normalize payload CRLF to LF and keep the lone CR"
+        );
+        assert_eq!(
+            canonicalize(&parse_with_options(&canonical, &options))
+                .expect("canonical output must canonicalize again"),
+            canonical,
+            "a preserved payload carriage return must keep canonicalization idempotent"
         );
     }
 

@@ -115,19 +115,6 @@ impl Scanner<'_> {
         }
     }
 
-    /// An opaque payload is still line-structured text whose CRLF endings the
-    /// formatter normalizes, so every line inside it needs the same check the
-    /// outer scanner applies. Without this, a lone carriage return in an
-    /// extension body would be silently rewritten to LF by canonical output.
-    fn diagnose_line_endings_within(&mut self, span: Span) {
-        let mut cursor = span.start;
-        while cursor < span.end {
-            let line = physical_line(self.source, cursor);
-            self.diagnose_line_ending(line);
-            cursor = line.span.end;
-        }
-    }
-
     fn scan_csv(&mut self, directive: Directive, kind: CsvKind) {
         let block_start = directive.line.span.start;
         let body_start = directive.line.span.end;
@@ -161,8 +148,11 @@ impl Scanner<'_> {
     fn scan_extension(&mut self, directive: Directive) {
         let extension_start = directive.line.span.start;
         let payload_start = directive.line.span.end;
+        // SPEC section 17 makes the payload opaque and SPEC section 18 item 12
+        // normalizes only CRLF inside it, so a lone carriage return between the
+        // directive and `@end` is payload data rather than a line ending the
+        // scanner may reject. Only the surrounding structural lines are checked.
         let (payload_end, terminator) = find_exact_terminator(self.source, payload_start);
-        self.diagnose_line_endings_within(Span::new(payload_start, payload_end));
         if terminator.is_none() {
             self.diagnostics.push(error(
                 "MS1101",
