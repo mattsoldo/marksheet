@@ -1,0 +1,145 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [
+    {
+      "code": "MS1201",
+      "severity": "error",
+      "span": [
+        16,
+        41
+      ]
+    }
+  ],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 82,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          41
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          42
+        ]
+      },
+      {
+        "content_span": [
+          42,
+          60
+        ],
+        "ending": "lf",
+        "span": [
+          42,
+          61
+        ]
+      },
+      {
+        "content_span": [
+          61,
+          74
+        ],
+        "ending": "lf",
+        "span": [
+          61,
+          75
+        ]
+      },
+      {
+        "content_span": [
+          75,
+          76
+        ],
+        "ending": "lf",
+        "span": [
+          75,
+          77
+        ]
+      },
+      {
+        "content_span": [
+          77,
+          81
+        ],
+        "ending": "lf",
+        "span": [
+          77,
+          82
+        ]
+      }
+    ],
+    "sha256": "de1fb0447a74e8893ddc7d1baf51083d44e1e706ecff7c0ca9f4063b7e797eb5"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [],
+    "extensions": [],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "main",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              75,
+              77
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "x",
+                    "span": [
+                      75,
+                      76
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "x"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              61,
+              74
+            ]
+          }
+        ],
+        "label": "Main",
+        "span": [
+          42,
+          60
+        ]
+      }
+    ],
+    "styles": []
+  }
+}

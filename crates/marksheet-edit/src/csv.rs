@@ -32,6 +32,10 @@ pub enum EncodeError {
     DateOutsidePortableRange,
     /// RFC 3339 source offsets have minute precision.
     DateTimeOffsetHasSeconds,
+    /// A quoted field carries a bare carriage return through to source, which
+    /// SPEC section 2 rejects as a line ending. The canonical serializer
+    /// already refuses such a value, so the editor must not write one either.
+    CarriageReturnInText,
 }
 
 impl fmt::Display for EncodeError {
@@ -43,6 +47,9 @@ impl fmt::Display for EncodeError {
             }
             Self::DateTimeOffsetHasSeconds => {
                 formatter.write_str("Marksheet datetime offsets must have minute precision")
+            }
+            Self::CarriageReturnInText => {
+                formatter.write_str("Marksheet text cannot contain a carriage return")
             }
         }
     }
@@ -84,6 +91,10 @@ pub fn encode_field(value: &Value, context: FieldContext) -> Result<Vec<u8>, Enc
 pub fn encode_scalar(value: &Value) -> Result<String, EncodeError> {
     match value {
         Value::Blank => Ok(String::new()),
+        // A carriage return has no source spelling: a quoted field would carry
+        // the raw byte, which SPEC section 2 rejects as a line ending. The
+        // canonical serializer reports the same value as `MS2201`.
+        Value::Text(text) if text.contains('\r') => Err(EncodeError::CarriageReturnInText),
         Value::Text(text) => Ok(encode_text(text)),
         Value::Number(number) => Ok(canonical_number(*number)?),
         Value::Boolean(boolean) => Ok(boolean.to_string()),
@@ -342,7 +353,6 @@ mod tests {
             ("a,b", b"\"a,b\"".as_slice()),
             ("a\"b", b"\"a\"\"b\"".as_slice()),
             ("a\nb", b"\"a\nb\"".as_slice()),
-            ("a\rb", b"\"a\rb\"".as_slice()),
         ];
         for (text, expected) in cases {
             let encoded =
@@ -350,6 +360,23 @@ mod tests {
             assert_eq!(encoded, expected);
             assert_round_trip(&Value::Text(text.to_owned()), FieldContext::SoleFieldRecord);
         }
+    }
+
+    /// A quoted field would carry the raw byte into source, where SPEC
+    /// section 2 rejects it as a line ending, so the value has no encoding
+    /// rather than a lossy one.
+    #[test]
+    fn text_holding_a_carriage_return_has_no_source_encoding() {
+        for context in [FieldContext::DelimitedRecord, FieldContext::SoleFieldRecord] {
+            assert_eq!(
+                encode_field(&Value::Text("a\rb".to_owned()), context),
+                Err(EncodeError::CarriageReturnInText)
+            );
+        }
+        assert_eq!(
+            encode_scalar(&Value::Text("a\r\nb".to_owned())),
+            Err(EncodeError::CarriageReturnInText)
+        );
     }
 
     #[test]
@@ -375,7 +402,7 @@ mod tests {
             "café — 東京 — 😀",
             "\u{0301}combining",
             "\u{feff}byte-order-mark-as-text",
-            "comma, quote\" CR\r LF\n",
+            "comma, quote\" LF\n",
         ] {
             assert_round_trip(&Value::Text(text.to_owned()), FieldContext::SoleFieldRecord);
         }

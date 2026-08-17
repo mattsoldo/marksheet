@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::eval::{
     CalcValue, EvaluationContext, EvaluationError, EvaluationLimits, EvaluationStats,
-    RectangularRange, ResolvedValue, evaluate,
+    RectangularRange, ResolveError, ResolvedValue, evaluate,
 };
 use crate::formula::{FORMULA_SYNTAX_DIAGNOSTIC, Reference};
 use crate::graph::{CellKey, DependencyGraph, EvaluationStep};
@@ -547,7 +547,12 @@ impl CalcEngine for ReferenceCalcEngine {
         let effective: BTreeMap<_, _> = changes
             .literal_overrides
             .into_iter()
-            .filter(|(cell, value)| calculation.values.get(cell) != Some(value))
+            .filter(|(cell, value)| {
+                !calculation
+                    .values
+                    .get(cell)
+                    .is_some_and(|existing| calc_values_observably_equal(existing, value))
+            })
             .collect();
         if effective.is_empty() {
             return Ok(DirtySet::default());
@@ -631,6 +636,19 @@ impl CalcEngine for ReferenceCalcEngine {
             revision: calculation.revision,
             stats: calc_stats(dirty, attempt.evaluated_cells, attempt.evaluation),
         }
+    }
+}
+
+/// Compares two calculated values the way an override no-op check must: a
+/// change is only a no-op if it cannot be observed. `PartialEq` on
+/// `CalcValue::Number` inherits IEEE 754 equality, under which `-0.0 == 0.0`,
+/// but the sign is observable downstream (for example `CONCAT` renders `-0`
+/// and `0` differently through `canonical_number`). Numbers are therefore
+/// compared bitwise; every other variant keeps ordinary equality.
+fn calc_values_observably_equal(left: &CalcValue, right: &CalcValue) -> bool {
+    match (left, right) {
+        (CalcValue::Number(left), CalcValue::Number(right)) => left.to_bits() == right.to_bits(),
+        _ => left == right,
     }
 }
 
@@ -868,8 +886,42 @@ struct ReferenceContext<'a> {
     overrides: &'a BTreeMap<CellKey, CalcValue>,
 }
 
+/// Bounds that cannot reject anything, used by the compatibility
+/// [`EvaluationContext::resolve`] entry point. `saturating_add` can never
+/// exceed [`usize::MAX`], so no area check can fire under these limits.
+const UNBOUNDED_LIMITS: EvaluationLimits = EvaluationLimits {
+    max_steps: usize::MAX,
+    max_range_cells: usize::MAX,
+    max_text_bytes: usize::MAX,
+};
+
 impl EvaluationContext for ReferenceContext<'_> {
-    fn resolve(&self, _reference: &Reference, span: ByteSpan) -> Result<ResolvedValue, CellError> {
+    /// The published, budget-free entry point. Kept behaviorally identical to
+    /// what it was before the eval-time range bound existed: it resolves under
+    /// [`UNBOUNDED_LIMITS`], so it can only ever produce a spreadsheet error.
+    /// The evaluator itself calls
+    /// [`EvaluationContext::resolve_within_limits`] below.
+    fn resolve(&self, reference: &Reference, span: ByteSpan) -> Result<ResolvedValue, CellError> {
+        match self.resolve_within_limits(
+            reference,
+            span,
+            &UNBOUNDED_LIMITS,
+            EvaluationStats::default(),
+        ) {
+            Ok(value) => Ok(value),
+            Err(ResolveError::Cell(error)) => Err(error),
+            // Unreachable: no cell count can exceed `usize::MAX`.
+            Err(ResolveError::Limit(_)) => Err(CellError::Reference),
+        }
+    }
+
+    fn resolve_within_limits(
+        &self,
+        _reference: &Reference,
+        span: ByteSpan,
+        limits: &EvaluationLimits,
+        stats: EvaluationStats,
+    ) -> Result<ResolvedValue, ResolveError> {
         let resolved = self
             .formula
             .reference_at(span)
@@ -880,7 +932,7 @@ impl EvaluationContext for ReferenceContext<'_> {
             | ResolvedReference::CurrentRow { cell, .. } => {
                 Ok(ResolvedValue::Scalar(self.scalar(cell)))
             }
-            ResolvedReference::Range { area } => self.area(area, None),
+            ResolvedReference::Range { area } => self.area(area, None, limits, stats),
             ResolvedReference::Name { name, area } => {
                 let empty_columns = self.prepared.names.get(name).and_then(|resolved| {
                     matches!(
@@ -889,9 +941,9 @@ impl EvaluationContext for ReferenceContext<'_> {
                     )
                     .then_some(1)
                 });
-                self.area(area, empty_columns)
+                self.area(area, empty_columns, limits, stats)
             }
-            ResolvedReference::TableColumn { area, .. } => self.area(area, Some(1)),
+            ResolvedReference::TableColumn { area, .. } => self.area(area, Some(1), limits, stats),
             ResolvedReference::TableRegion {
                 table,
                 region,
@@ -906,9 +958,9 @@ impl EvaluationContext for ReferenceContext<'_> {
                             .and_then(|table| table.footprint.width().ok())
                             .and_then(|width| usize::try_from(width).ok())
                     });
-                self.area(area, empty_columns)
+                self.area(area, empty_columns, limits, stats)
             }
-            ResolvedReference::Error { error } => Err(*error),
+            ResolvedReference::Error { error } => Err(ResolveError::Cell(*error)),
         }
     }
 }
@@ -930,11 +982,21 @@ impl ReferenceContext<'_> {
             .unwrap_or(CalcValue::Blank)
     }
 
+    /// Resolves a rectangular area to its calculated values.
+    ///
+    /// `limits.max_range_cells` is enforced against `stats.range_cells` plus
+    /// this area's own cell count *before* any cell is materialized, so a
+    /// single oversized range cannot be fully cloned into memory before the
+    /// eval-time limit gets a chance to reject it. This mirrors, and does not
+    /// replace, the evaluator's own per-cell accounting as a range's values
+    /// are subsequently consumed.
     fn area(
         &self,
         area: &ResolvedArea,
         empty_columns: Option<usize>,
-    ) -> Result<ResolvedValue, CellError> {
+        limits: &EvaluationLimits,
+        stats: EvaluationStats,
+    ) -> Result<ResolvedValue, ResolveError> {
         let Some(range) = area.range else {
             let columns = empty_columns.unwrap_or(1);
             let range =
@@ -946,13 +1008,25 @@ impl ReferenceContext<'_> {
         let columns = usize::try_from(range.width().map_err(|_| CellError::Reference)?)
             .map_err(|_| CellError::Reference)?;
         let capacity = rows.checked_mul(columns).ok_or(CellError::Reference)?;
+        let projected_range_cells = stats.range_cells.saturating_add(capacity);
+        if projected_range_cells > limits.max_range_cells {
+            return Err(ResolveError::Limit(
+                EvaluationError::RangeCellLimitExceeded {
+                    limit: limits.max_range_cells,
+                    stats: EvaluationStats {
+                        range_cells: projected_range_cells,
+                        ..stats
+                    },
+                },
+            ));
+        }
         let mut values = Vec::with_capacity(capacity);
         for_each_coordinate(range, |coordinate| {
             values.push(self.scalar(&CellKey::new(area.sheet.clone(), coordinate)));
         });
         RectangularRange::new(rows, columns, values)
             .map(ResolvedValue::Range)
-            .map_err(|_| CellError::Reference)
+            .map_err(|_| ResolveError::Cell(CellError::Reference))
     }
 }
 
@@ -1752,6 +1826,52 @@ mod tests {
     }
 
     #[test]
+    fn range_cell_limit_is_enforced_before_materializing_the_range() {
+        let workbook = workbook(vec![sheet(
+            "main",
+            vec![block(
+                "A1",
+                vec![
+                    vec![Value::Number(1.0)],
+                    vec![Value::Number(2.0)],
+                    vec![Value::Number(3.0)],
+                    vec![formula("=SUM(A1:A3)")],
+                ],
+            )],
+        )]);
+        let mut calculation = prepared(&workbook);
+        // Smaller than the 3-cell range A1:A3 that A4 references.
+        calculation.limits.evaluation.max_range_cells = 2;
+        let before = calculation.pending_dirty();
+
+        let result = calculate(&mut calculation, "main", "A4");
+        assert!(
+            result.cells.is_empty(),
+            "the oversized range must be denied outright, not partially evaluated"
+        );
+        assert_eq!(
+            result.stats.range_cells, 3,
+            "the whole range is accounted for atomically before any cell is consumed, \
+             not stopped partway through consumption at the configured limit"
+        );
+        assert_eq!(
+            result.diagnostics.last().unwrap().code.as_str(),
+            CALC_RESOURCE_LIMIT_DIAGNOSTIC
+        );
+        assert_eq!(
+            calculation.pending_dirty(),
+            before,
+            "a denied evaluation must not commit any partial state"
+        );
+
+        calculation.limits.evaluation.max_range_cells = 3;
+        assert_eq!(
+            values(&calculate(&mut calculation, "main", "A4")),
+            vec![CalcValue::Number(6.0)]
+        );
+    }
+
+    #[test]
     fn rejected_change_is_atomic() {
         let workbook = workbook(vec![sheet(
             "main",
@@ -1981,6 +2101,48 @@ mod tests {
             values(&calculate(&mut always_full, "main", "A1:F6"))
         );
         assert!(viewport_only.pending_dirty().is_empty());
+    }
+
+    #[test]
+    fn overriding_zero_with_negative_zero_takes_effect_in_both_directions() {
+        let workbook = workbook(vec![sheet(
+            "main",
+            vec![block(
+                "A1",
+                vec![vec![Value::Number(0.0), formula("=CONCAT(A1)")]],
+            )],
+        )]);
+        let mut calculation = prepared(&workbook);
+        assert_eq!(
+            calculate(&mut calculation, "main", "B1").cells[0].value,
+            CalcValue::Text("0".to_owned())
+        );
+
+        // A sign-only change is observable through CONCAT's canonical
+        // rendering, so it must not be filtered out as a no-op.
+        let dirty = ReferenceCalcEngine
+            .apply_changes(
+                &mut calculation,
+                ChangeSet::new().with(key("main", "A1"), CalcValue::Number(-0.0)),
+            )
+            .unwrap();
+        assert!(!dirty.is_empty(), "0 -> -0 must not be treated as a no-op");
+        assert_eq!(
+            calculate(&mut calculation, "main", "B1").cells[0].value,
+            CalcValue::Text("-0".to_owned())
+        );
+
+        let dirty = ReferenceCalcEngine
+            .apply_changes(
+                &mut calculation,
+                ChangeSet::new().with(key("main", "A1"), CalcValue::Number(0.0)),
+            )
+            .unwrap();
+        assert!(!dirty.is_empty(), "-0 -> 0 must not be treated as a no-op");
+        assert_eq!(
+            calculate(&mut calculation, "main", "B1").cells[0].value,
+            CalcValue::Text("0".to_owned())
+        );
     }
 
     #[test]

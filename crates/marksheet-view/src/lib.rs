@@ -42,7 +42,17 @@ pub struct ViewLimits {
     pub max_style_regions: usize,
     /// Maximum ordered style applications resolved for one presented cell.
     pub max_style_layers_per_cell: usize,
-    /// Maximum pre-indexed `@apply` directives examined per viewport.
+    /// Maximum pre-indexed `@apply` directives resolved while projecting one
+    /// viewport. The rectangle index derives a small traversal-work budget
+    /// from this value and its tree height, so adversarial non-overlaps cannot
+    /// force a scan proportional to every application on the sheet.
+    ///
+    /// Each sheet keeps a rectangle index over its `@apply` targets, so a
+    /// request resolves exactly the applications whose target rectangle
+    /// intersects the requested range on *both* axes. Directives that do not
+    /// reach the request are pruned and do not count against this limit: a
+    /// sheet may hold far more applications than this, and only a viewport
+    /// that genuinely overlaps more than this many is refused.
     pub max_style_applications: usize,
     /// Bounds used when indexing fills and calculating viewport values.
     pub calculation: CalcLimits,
@@ -238,6 +248,7 @@ pub enum ViewError {
     StyleRegionLimitExceeded { regions: usize, limit: usize },
     StyleLayerLimitExceeded { layers: usize, limit: usize },
     StyleApplicationLimitExceeded { applications: usize, limit: usize },
+    StyleApplicationWorkLimitExceeded { examined: usize, limit: usize },
     CoordinateOverflow,
 }
 
@@ -273,7 +284,11 @@ impl fmt::Display for ViewError {
                 limit,
             } => write!(
                 formatter,
-                "sheet has {applications} style applications; viewport limit is {limit}"
+                "viewport overlaps at least {applications} style applications; limit is {limit}"
+            ),
+            Self::StyleApplicationWorkLimitExceeded { examined, limit } => write!(
+                formatter,
+                "viewport style query examined at least {examined} index nodes; work limit is {limit}"
             ),
             Self::CoordinateOverflow => formatter.write_str("viewport coordinate overflow"),
         }
@@ -286,6 +301,272 @@ struct IndexedStyleApplication {
     range: Range,
     style: ResolvedStyle,
     source_order: u64,
+}
+
+/// One `@apply` target's inclusive rectangle, tagged with its source order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ApplicationRectangle {
+    row_start: u64,
+    row_end: u64,
+    column_start: u64,
+    column_end: u64,
+    /// Position of the owning application within its sheet's source order.
+    application: usize,
+}
+
+impl ApplicationRectangle {
+    fn from_range(range: Range, application: usize) -> Self {
+        Self {
+            row_start: range.start.row,
+            row_end: range.end.row,
+            column_start: range.start.column,
+            column_end: range.end.column,
+            application,
+        }
+    }
+}
+
+/// A bounded rectangular query against an [`ApplicationRectangleIndex`].
+#[derive(Clone, Copy, Debug)]
+struct RectangleQuery {
+    row_start: u64,
+    row_end: u64,
+    column_start: u64,
+    column_end: u64,
+    /// Maximum overlapping rectangles the caller is willing to receive.
+    limit: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RectangleQueryError {
+    OverlapLimitExceeded(usize),
+    WorkLimitExceeded { examined: usize, limit: usize },
+}
+
+#[derive(Debug)]
+struct RectangleQueryState {
+    query: RectangleQuery,
+    work_limit: usize,
+    examined: usize,
+    found: Vec<usize>,
+}
+
+impl RectangleQuery {
+    fn new(range: Range, limit: usize) -> Self {
+        Self {
+            row_start: range.start.row,
+            row_end: range.end.row,
+            column_start: range.start.column,
+            column_end: range.end.column,
+            limit,
+        }
+    }
+}
+
+/// The extent of every rectangle beneath one node of the index.
+#[derive(Clone, Copy, Debug)]
+struct SubtreeBounds {
+    max_row_end: u64,
+    min_column_start: u64,
+    max_column_end: u64,
+}
+
+impl SubtreeBounds {
+    /// Bounds that reject every query, used for nodes with no rectangles.
+    const EMPTY: Self = Self {
+        max_row_end: 0,
+        min_column_start: u64::MAX,
+        max_column_end: 0,
+    };
+}
+
+/// A rectangle index over one sheet's `@apply` targets.
+///
+/// Rectangles are held sorted by row start with a tournament tree above them
+/// that carries each subtree's bounding box. A subtree is skipped whole when
+/// that box cannot reach the queried rectangle on *either* axis: its smallest
+/// row start is past the query, its largest row end is before it, its
+/// smallest column start is past the query, or its largest column end is
+/// before it. A query therefore descends only where a rectangle overlapping
+/// on *both* axes can exist, and every position it reports is a true overlap
+/// rather than a single-axis candidate.
+///
+/// Testing both axes together is what keeps a viewport away from the styled
+/// area cheap on a sheet that mixes full-height and full-width applications:
+/// neither axis alone discriminates there, since the whole-column directives
+/// span every row and the whole-row directives span every column, yet the
+/// bounding boxes still separate both groups from the request.
+///
+/// The column tests only ever prune further, so a query descends no more
+/// nodes than the row bound alone would: work stays proportional to the
+/// applications sharing the requested row band, plus the tree depth, and is
+/// never proportional to the `@apply` directives authored elsewhere on the
+/// sheet. The index stays a small constant factor of the applications the
+/// view already retains, so no build-time bound is traded away for the
+/// per-viewport one.
+#[derive(Clone, Debug, Default)]
+struct ApplicationRectangleIndex {
+    /// Sorted by `row_start`, then by source order for a stable layout.
+    rectangles: Vec<ApplicationRectangle>,
+    /// `bounds[node]` is the bounding box of that node's subtree.
+    bounds: Vec<SubtreeBounds>,
+}
+
+impl ApplicationRectangleIndex {
+    fn new(mut rectangles: Vec<ApplicationRectangle>) -> Self {
+        rectangles.sort_unstable_by_key(|rectangle| (rectangle.row_start, rectangle.application));
+        let nodes = rectangles.len().saturating_mul(4);
+        let mut index = Self {
+            rectangles,
+            bounds: vec![SubtreeBounds::EMPTY; nodes],
+        };
+        if let Some(last) = index.rectangles.len().checked_sub(1) {
+            index.fill(0, 0, last);
+        }
+        index
+    }
+
+    /// Populates `bounds` for the subtree covering `rectangles[low..=high]`.
+    fn fill(&mut self, node: usize, low: usize, high: usize) -> SubtreeBounds {
+        let value = if low == high {
+            let rectangle = self.rectangles[low];
+            SubtreeBounds {
+                max_row_end: rectangle.row_end,
+                min_column_start: rectangle.column_start,
+                max_column_end: rectangle.column_end,
+            }
+        } else {
+            let middle = low + (high - low) / 2;
+            let left = self.fill(node * 2 + 1, low, middle);
+            let right = self.fill(node * 2 + 2, middle + 1, high);
+            SubtreeBounds {
+                max_row_end: left.max_row_end.max(right.max_row_end),
+                min_column_start: left.min_column_start.min(right.min_column_start),
+                max_column_end: left.max_column_end.max(right.max_column_end),
+            }
+        };
+        self.bounds[node] = value;
+        value
+    }
+
+    /// Collects the source-order positions of every rectangle overlapping the
+    /// query on both axes, in index order.
+    ///
+    /// # Errors
+    ///
+    /// Returns the number of overlapping rectangles found, `limit + 1`, as
+    /// soon as the query is known to overlap more than it allows.
+    fn overlapping(&self, query: RectangleQuery) -> Result<Vec<usize>, RectangleQueryError> {
+        let Some(last) = self.rectangles.len().checked_sub(1) else {
+            return Ok(Vec::new());
+        };
+        let tree_height = usize::BITS as usize - self.rectangles.len().leading_zeros() as usize;
+        let work_limit = query
+            .limit
+            .saturating_add(1)
+            .saturating_mul(4)
+            .saturating_add(tree_height.saturating_mul(4));
+        let mut state = RectangleQueryState {
+            query,
+            work_limit,
+            examined: 0,
+            found: Vec::new(),
+        };
+        self.collect(0, 0, last, &mut state)?;
+        Ok(state.found)
+    }
+
+    /// Walks the subtree covering `rectangles[low..=high]`, stopping once the
+    /// overlap or traversal-work budget is exceeded.
+    fn collect(
+        &self,
+        node: usize,
+        low: usize,
+        high: usize,
+        state: &mut RectangleQueryState,
+    ) -> Result<(), RectangleQueryError> {
+        state.examined = state.examined.saturating_add(1);
+        if state.examined > state.work_limit {
+            return Err(RectangleQueryError::WorkLimitExceeded {
+                examined: state.examined,
+                limit: state.work_limit,
+            });
+        }
+        // Sorted starts make `rectangles[low].row_start` the smallest row
+        // start in this subtree, and the tournament tree carries the other
+        // three bounds. Any one of them failing rules out every rectangle
+        // below this node.
+        let bounds = self.bounds[node];
+        if self.rectangles[low].row_start > state.query.row_end
+            || bounds.max_row_end < state.query.row_start
+            || bounds.min_column_start > state.query.column_end
+            || bounds.max_column_end < state.query.column_start
+        {
+            return Ok(());
+        }
+        if low == high {
+            // A leaf's bounding box is its own rectangle, so passing all four
+            // tests above is exactly a two-axis overlap.
+            state.found.push(self.rectangles[low].application);
+            if state.found.len() > state.query.limit {
+                return Err(RectangleQueryError::OverlapLimitExceeded(state.found.len()));
+            }
+            return Ok(());
+        }
+        let middle = low + (high - low) / 2;
+        self.collect(node * 2 + 1, low, middle, state)?;
+        self.collect(node * 2 + 2, middle + 1, high, state)
+    }
+}
+
+/// One sheet's `@apply` applications in source order, with a rectangle index
+/// over their targets.
+#[derive(Clone, Debug, Default)]
+struct SheetStyleIndex {
+    applications: Vec<IndexedStyleApplication>,
+    targets: ApplicationRectangleIndex,
+}
+
+impl SheetStyleIndex {
+    fn new(applications: Vec<IndexedStyleApplication>) -> Self {
+        let targets = ApplicationRectangleIndex::new(
+            applications
+                .iter()
+                .enumerate()
+                .map(|(application, indexed)| {
+                    ApplicationRectangle::from_range(indexed.range, application)
+                })
+                .collect(),
+        );
+        Self {
+            applications,
+            targets,
+        }
+    }
+
+    /// Returns the applications whose target overlaps `range`, in source
+    /// order.
+    ///
+    /// # Errors
+    ///
+    /// Returns the number found when more than `limit` applications truly
+    /// overlap `range`.
+    fn overlapping(
+        &self,
+        range: Range,
+        limit: usize,
+    ) -> Result<Vec<&IndexedStyleApplication>, RectangleQueryError> {
+        let mut positions = self
+            .targets
+            .overlapping(RectangleQuery::new(range, limit))?;
+        // Style precedence is source order, which the index layout, sorted by
+        // row start, does not preserve.
+        positions.sort_unstable();
+        Ok(positions
+            .into_iter()
+            .filter_map(|position| self.applications.get(position))
+            .collect())
+    }
 }
 
 /// A compact, source-order-resolved interval map for one sheet axis.
@@ -434,7 +715,7 @@ pub struct WorkbookView {
     source_map: Option<SourceMap>,
     prepared: PreparedWorkbook,
     sparse_indexes: BTreeMap<SheetId, SheetSparseIndex>,
-    style_indexes: BTreeMap<SheetId, Vec<IndexedStyleApplication>>,
+    style_indexes: BTreeMap<SheetId, SheetStyleIndex>,
     geometry_indexes: BTreeMap<SheetId, SheetGeometryIndex>,
     completeness: ViewCompleteness,
     diagnostics: Vec<Diagnostic>,
@@ -496,10 +777,9 @@ impl WorkbookView {
                 sheet,
                 prepared_sheet,
                 &definitions,
-                limits.max_style_applications,
                 limits.max_style_layers_per_cell,
             )?;
-            style_indexes.insert(sheet.id.clone(), applications);
+            style_indexes.insert(sheet.id.clone(), SheetStyleIndex::new(applications));
         }
         let geometry_indexes = workbook
             .sheets
@@ -612,35 +892,7 @@ impl WorkbookView {
             .get(&request.sheet)
             .ok_or_else(|| ViewError::UnknownSheet(request.sheet.clone()))?
             .coordinates_in(request.range, self.limits.max_presented_cells)?;
-        let style_applications = self
-            .style_indexes
-            .get(&request.sheet)
-            .ok_or_else(|| ViewError::UnknownSheet(request.sheet.clone()))?;
-        let intersecting_styles = style_applications
-            .iter()
-            .filter(|application| application.range.overlaps(request.range))
-            .take(self.limits.max_style_regions.saturating_add(1))
-            .cloned()
-            .collect::<Vec<_>>();
-        if intersecting_styles.len() > self.limits.max_style_regions {
-            return Err(ViewError::StyleRegionLimitExceeded {
-                regions: intersecting_styles.len(),
-                limit: self.limits.max_style_regions,
-            });
-        }
-        let style_regions = intersecting_styles
-            .iter()
-            .filter_map(|application| {
-                application
-                    .range
-                    .intersection(request.range)
-                    .map(|range| StyledRegion {
-                        range,
-                        style: application.style.clone(),
-                        source_order: application.source_order,
-                    })
-            })
-            .collect::<Vec<_>>();
+        let (intersecting_styles, style_regions) = self.resolve_style_regions(request)?;
 
         let mut region_diagnostics = self.diagnostics.clone();
         // Calculation is deliberately after the sparse output limit check so
@@ -696,6 +948,60 @@ impl WorkbookView {
             rows,
             diagnostics: region_diagnostics,
         })
+    }
+
+    /// Resolves the `@apply` targets overlapping `request`, bounding both the
+    /// work done and the results returned.
+    ///
+    /// The sheet's rectangle index reports exactly the applications whose
+    /// target intersects the requested range on both axes, so
+    /// [`ViewLimits::max_style_applications`] bounds the applications this one
+    /// request resolves. A viewport away from the styled area of an
+    /// application-heavy sheet resolves nothing and is projected normally,
+    /// however many applications the sheet declares elsewhere. Both limits are
+    /// checked before any output is allocated.
+    fn resolve_style_regions(
+        &self,
+        request: &VisibleRegionRequest,
+    ) -> Result<(Vec<IndexedStyleApplication>, Vec<StyledRegion>), ViewError> {
+        let style_index = self
+            .style_indexes
+            .get(&request.sheet)
+            .ok_or_else(|| ViewError::UnknownSheet(request.sheet.clone()))?;
+        let intersecting_styles = style_index
+            .overlapping(request.range, self.limits.max_style_applications)
+            .map_err(|error| match error {
+                RectangleQueryError::OverlapLimitExceeded(applications) => {
+                    ViewError::StyleApplicationLimitExceeded {
+                        applications,
+                        limit: self.limits.max_style_applications,
+                    }
+                }
+                RectangleQueryError::WorkLimitExceeded { examined, limit } => {
+                    ViewError::StyleApplicationWorkLimitExceeded { examined, limit }
+                }
+            })?;
+        if intersecting_styles.len() > self.limits.max_style_regions {
+            return Err(ViewError::StyleRegionLimitExceeded {
+                regions: intersecting_styles.len(),
+                limit: self.limits.max_style_regions,
+            });
+        }
+        let style_regions = intersecting_styles
+            .iter()
+            .filter_map(|application| {
+                application
+                    .range
+                    .intersection(request.range)
+                    .map(|range| StyledRegion {
+                        range,
+                        style: application.style.clone(),
+                        source_order: application.source_order,
+                    })
+            })
+            .collect::<Vec<_>>();
+        let intersecting_styles = intersecting_styles.into_iter().cloned().collect::<Vec<_>>();
+        Ok((intersecting_styles, style_regions))
     }
 
     fn calculate_region(
@@ -823,26 +1129,25 @@ fn rows_for(geometry: &AxisGeometryIndex, range: Range) -> Result<Vec<RowPresent
     Ok(rows)
 }
 
+/// Indexes every `@apply` directive authored on `sheet`, in source order.
+///
+/// This runs once at build time and is not itself bounded by
+/// [`ViewLimits::max_style_applications`]: that limit is a per-viewport bound
+/// on the applications resolved while projecting a requested region, so a
+/// sheet with many `@apply` directives must still open successfully. The limit
+/// is enforced later, in [`WorkbookView::visible_region`], against the
+/// applications the [`SheetStyleIndex`] reports as overlapping that request.
 fn index_style_applications(
     sheet: &Sheet,
     prepared: &PreparedSheet,
     definitions: &BTreeMap<StyleId, &marksheet_model::Style>,
-    max_applications: usize,
     max_layers: usize,
 ) -> Result<Vec<IndexedStyleApplication>, ViewError> {
     let mut applications = Vec::new();
-    let mut seen_applications = 0usize;
     for (position, item) in sheet.items.iter().enumerate() {
         let SheetItem::Apply(apply) = item else {
             continue;
         };
-        seen_applications = seen_applications.saturating_add(1);
-        if seen_applications > max_applications {
-            return Err(ViewError::StyleApplicationLimitExceeded {
-                applications: seen_applications,
-                limit: max_applications,
-            });
-        }
         let Some(range) = (match &apply.target {
             ApplyTarget::Range(range) => Some(*range),
             ApplyTarget::Table { table, region } => {
@@ -1230,6 +1535,21 @@ mod tests {
     }
 
     #[test]
+    fn style_application_limit_does_not_block_opening_a_document() {
+        // max_style_applications is documented as a per-viewport bound on work
+        // examined while projecting a region, not a whole-sheet bound checked
+        // at build time. A sheet with more @apply directives than the limit
+        // must still open successfully.
+        let source = b"#!marksheet 0.1\n@style note italic=true\n@sheet s \"Styled\"\n@apply A1 note\n@apply B1 note\n";
+        let document = parse(source);
+        let limits = ViewLimits {
+            max_style_applications: 1,
+            ..ViewLimits::default()
+        };
+        assert!(WorkbookView::from_document(&document, limits).is_ok());
+    }
+
+    #[test]
     fn style_application_limit_bounds_request_resolution_work() {
         let source = b"#!marksheet 0.1\n@style note italic=true\n@sheet s \"Styled\"\n@apply A1 note\n@apply B1 note\n";
         let document = parse(source);
@@ -1237,12 +1557,349 @@ mod tests {
             max_style_applications: 1,
             ..ViewLimits::default()
         };
+        let mut view = WorkbookView::from_document(&document, limits).unwrap();
+        let before = format!("{view:?}");
+        let result = view.visible_region(&VisibleRegionRequest {
+            sheet: "s".parse().unwrap(),
+            range: Range::parse("A1:B1").unwrap(),
+            calculate: false,
+        });
         assert!(matches!(
-            WorkbookView::from_document(&document, limits),
+            result,
             Err(ViewError::StyleApplicationLimitExceeded {
                 applications: 2,
                 limit: 1
             })
         ));
+        // The rejected request must not have mutated any cached view state.
+        assert_eq!(format!("{view:?}"), before);
+    }
+
+    /// Builds a sheet whose rows 1..=1025 each carry an `@apply A:C` band,
+    /// exceeding the default `max_style_applications`.
+    fn oversized_style_document() -> ParsedDocument {
+        use std::fmt::Write as _;
+
+        let mut source =
+            String::from("#!marksheet 0.1\n@style note italic=true\n@sheet s \"Styled\"\n");
+        for row in 1..=1025u32 {
+            let _ = writeln!(source, "@apply A{row}:C{row} note");
+        }
+        let document = parse(source.as_bytes());
+        assert!(!document.has_errors(), "{:?}", document.diagnostics);
+        document
+    }
+
+    #[test]
+    fn thousand_and_twenty_five_style_applications_open_successfully() {
+        // Regression test: a valid workbook with more @apply directives on one
+        // sheet than the default max_style_applications must still open, since
+        // the limit bounds per-viewport projection work, not build-time
+        // indexing. Reproduces the 1025-application case from the finding.
+        let document = oversized_style_document();
+        let result = WorkbookView::from_document(&document, ViewLimits::default());
+        assert!(result.is_ok());
+
+        // Requesting a viewport that really does reach all 1025 pre-indexed
+        // applications exceeds the default limit and fails, atomically, with
+        // the documented error.
+        let mut view = result.unwrap();
+        let before = format!("{view:?}");
+        let region = view.visible_region(&VisibleRegionRequest {
+            sheet: "s".parse().unwrap(),
+            range: Range::parse("A1:A1025").unwrap(),
+            calculate: false,
+        });
+        assert!(matches!(
+            region,
+            Err(ViewError::StyleApplicationLimitExceeded {
+                applications: 1025,
+                limit: 1_024
+            })
+        ));
+        // The rejected request must not have mutated any cached view state.
+        assert_eq!(format!("{view:?}"), before);
+    }
+
+    #[test]
+    fn viewports_away_from_the_styled_area_project_on_an_oversized_sheet() {
+        // The limit is per viewport, so exceeding it on one request must not
+        // make the sheet unviewable: requests that do not reach the excess
+        // applications still project normally.
+        let document = oversized_style_document();
+        let mut view = WorkbookView::from_document(&document, ViewLimits::default()).unwrap();
+        let mut project = |range: &str| {
+            view.visible_region(&VisibleRegionRequest {
+                sheet: "s".parse().unwrap(),
+                range: Range::parse(range).unwrap(),
+                calculate: false,
+            })
+        };
+
+        // Far on both axes: the index prunes every application.
+        let far = project("ZZ9000:ZZ9000").unwrap();
+        assert!(far.style_regions.is_empty());
+        // Distant rows, styled column: pruned on the row axis.
+        let below = project("A9000:C9100").unwrap();
+        assert!(below.style_regions.is_empty());
+        // Every application shares this row band, so the row axis cannot
+        // narrow the request; the column axis prunes them instead.
+        let beside = project("ZZ1:ZZ1025").unwrap();
+        assert!(beside.style_regions.is_empty());
+        // A viewport that genuinely overlaps a few applications resolves them.
+        let overlapping = project("B2:C3").unwrap();
+        assert_eq!(
+            overlapping
+                .style_regions
+                .iter()
+                .map(|region| region.range)
+                .collect::<Vec<_>>(),
+            vec![
+                Range::parse("B2:C2").unwrap(),
+                Range::parse("B3:C3").unwrap()
+            ]
+        );
+    }
+
+    #[test]
+    fn style_index_still_finds_a_sheet_spanning_application_from_far_away() {
+        // Pruning must never lose a wide application: a directive covering the
+        // whole sheet reaches every viewport, however distant.
+        use std::fmt::Write as _;
+
+        let mut source =
+            String::from("#!marksheet 0.1\n@style note italic=true\n@sheet s \"Styled\"\n");
+        for row in 1..=1024u32 {
+            let _ = writeln!(source, "@apply A{row} note");
+        }
+        source.push_str("@apply A1:XFD1048576 note\n");
+        let document = parse(source.as_bytes());
+        assert!(!document.has_errors(), "{:?}", document.diagnostics);
+        let mut view = WorkbookView::from_document(&document, ViewLimits::default()).unwrap();
+        let region = view
+            .visible_region(&VisibleRegionRequest {
+                sheet: "s".parse().unwrap(),
+                range: Range::parse("ZZ9000:ZZ9000").unwrap(),
+                calculate: false,
+            })
+            .unwrap();
+        assert_eq!(
+            region
+                .style_regions
+                .iter()
+                .map(|region| region.range)
+                .collect::<Vec<_>>(),
+            vec![Range::parse("ZZ9000").unwrap()]
+        );
+    }
+
+    #[test]
+    fn style_index_reports_applications_in_source_order() {
+        // The per-axis index is ordered by interval start, but style
+        // precedence is source order: the later @apply must win even when it
+        // starts on an earlier row.
+        let source = b"#!marksheet 0.1\n@style low bold=false\n@style high bold=true\n@sheet s \"Styled\"\n@block B2 csv\nx\n@end\n@apply B2 low\n@apply A1:B2 high\n";
+        let document = parse(source);
+        assert!(!document.has_errors(), "{:?}", document.diagnostics);
+        let mut view = WorkbookView::from_document(&document, ViewLimits::default()).unwrap();
+        let region = view
+            .visible_region(&VisibleRegionRequest {
+                sheet: "s".parse().unwrap(),
+                range: Range::parse("A1:B2").unwrap(),
+                calculate: false,
+            })
+            .unwrap();
+        assert_eq!(
+            region
+                .style_regions
+                .iter()
+                .map(|region| region.source_order)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        let cell = region
+            .cells
+            .iter()
+            .find(|cell| cell.coordinate == coordinate("B2"))
+            .unwrap();
+        assert_eq!(cell.style.properties.bold, Some(true));
+    }
+
+    #[test]
+    fn rectangle_index_reports_only_two_axis_overlaps() {
+        // One rectangle spans the whole sheet while a thousand small ones sit
+        // in its top-left corner. A viewport far from the small rectangles
+        // must be answerable within a limit far below their count, and a
+        // viewport off the sheet's styled area must report nothing at all.
+        let mut rectangles = (0..1_000)
+            .map(|application| ApplicationRectangle {
+                row_start: 1,
+                row_end: 2,
+                column_start: 1,
+                column_end: 2,
+                application,
+            })
+            .collect::<Vec<_>>();
+        rectangles.push(ApplicationRectangle {
+            row_start: 1,
+            row_end: 1_000_000,
+            column_start: 1,
+            column_end: 1_000_000,
+            application: 1_000,
+        });
+        let index = ApplicationRectangleIndex::new(rectangles);
+
+        assert_eq!(
+            index.overlapping(RectangleQuery {
+                row_start: 900_000,
+                row_end: 900_001,
+                column_start: 900_000,
+                column_end: 900_001,
+                limit: 1,
+            }),
+            Ok(vec![1_000])
+        );
+        assert_eq!(
+            index.overlapping(RectangleQuery {
+                row_start: 2_000_000,
+                row_end: 2_000_001,
+                column_start: 1,
+                column_end: 1,
+                limit: 1,
+            }),
+            Ok(Vec::new())
+        );
+        // Sharing the row band alone is not an overlap: the columns are past
+        // every rectangle on the sheet.
+        assert_eq!(
+            index.overlapping(RectangleQuery {
+                row_start: 1,
+                row_end: 2,
+                column_start: 2_000_000,
+                column_end: 2_000_001,
+                limit: 1,
+            }),
+            Ok(Vec::new())
+        );
+        assert_eq!(
+            index.overlapping(RectangleQuery {
+                row_start: 1,
+                row_end: 1,
+                column_start: 1,
+                column_end: 1,
+                limit: 8,
+            }),
+            Err(RectangleQueryError::OverlapLimitExceeded(9))
+        );
+    }
+
+    #[test]
+    fn rectangle_index_bounds_adversarial_non_overlap_traversal() {
+        // Every internal bounding box spans B1 even though the leaves
+        // alternate strictly to either side. Bounding only matches would walk
+        // all 10,000 rectangles for this zero-result query.
+        let rectangles = (0..10_000)
+            .map(|application| ApplicationRectangle {
+                row_start: 1,
+                row_end: 1,
+                column_start: if application % 2 == 0 { 1 } else { 3 },
+                column_end: if application % 2 == 0 { 1 } else { 3 },
+                application,
+            })
+            .collect();
+        let index = ApplicationRectangleIndex::new(rectangles);
+        let error = index
+            .overlapping(RectangleQuery {
+                row_start: 1,
+                row_end: 1,
+                column_start: 2,
+                column_end: 2,
+                limit: 1,
+            })
+            .unwrap_err();
+        let RectangleQueryError::WorkLimitExceeded { examined, limit } = error else {
+            panic!("expected traversal-work limit, got {error:?}");
+        };
+        assert_eq!(examined, limit + 1);
+        assert!(limit < 100, "work limit {limit} must stay sublinear");
+    }
+
+    /// Builds a sheet carrying 1025 whole-column `@apply` directives on
+    /// columns A..ALO and 1025 whole-row directives on rows 1..=1025.
+    fn banded_style_document() -> ParsedDocument {
+        use std::fmt::Write as _;
+
+        let mut source =
+            String::from("#!marksheet 0.1\n@style note italic=true\n@sheet s \"Styled\"\n");
+        for index in 0..1_025u32 {
+            let mut column = String::new();
+            let mut remaining = index;
+            loop {
+                column.insert(
+                    0,
+                    char::from(b'A' + u8::try_from(remaining % 26).unwrap_or_default()),
+                );
+                match remaining.checked_div(26) {
+                    Some(0) | None => break,
+                    Some(next) => remaining = next - 1,
+                }
+            }
+            let _ = writeln!(source, "@apply {column}1:{column}1048576 note");
+        }
+        for row in 1..=1_025u32 {
+            let _ = writeln!(source, "@apply A{row}:XFD{row} note");
+        }
+        let document = parse(source.as_bytes());
+        assert!(!document.has_errors(), "{:?}", document.diagnostics);
+        document
+    }
+
+    #[test]
+    fn banded_rows_and_columns_do_not_refuse_a_viewport_they_miss() {
+        // Regression test: a sheet may hold more whole-column applications
+        // than the limit *and* more whole-row applications than the limit. The
+        // row band alone then fails to narrow the request, and so does the
+        // column band, but a viewport outside every band overlaps nothing and
+        // must project normally rather than be refused.
+        let document = banded_style_document();
+        let mut view = WorkbookView::from_document(&document, ViewLimits::default()).unwrap();
+        let region = view
+            .visible_region(&VisibleRegionRequest {
+                // Column 5000 carries no whole-column band and row 500000
+                // carries no whole-row band.
+                sheet: "s".parse().unwrap(),
+                range: Range::parse("GJH500000").unwrap(),
+                calculate: false,
+            })
+            .unwrap();
+        assert!(region.style_regions.is_empty());
+
+        // A viewport that does sit on one band still resolves exactly it.
+        let on_a_row = view
+            .visible_region(&VisibleRegionRequest {
+                sheet: "s".parse().unwrap(),
+                range: Range::parse("GJH7").unwrap(),
+                calculate: false,
+            })
+            .unwrap();
+        assert_eq!(
+            on_a_row
+                .style_regions
+                .iter()
+                .map(|region| region.range)
+                .collect::<Vec<_>>(),
+            vec![Range::parse("GJH7").unwrap()]
+        );
+
+        // The crossing of one whole-column band and one whole-row band
+        // overlaps exactly two applications.
+        let crossing = view
+            .visible_region(&VisibleRegionRequest {
+                sheet: "s".parse().unwrap(),
+                range: Range::parse("C7").unwrap(),
+                calculate: false,
+            })
+            .unwrap();
+        assert_eq!(crossing.style_regions.len(), 2);
     }
 }

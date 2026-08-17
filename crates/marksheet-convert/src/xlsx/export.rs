@@ -24,7 +24,7 @@ use crate::{
     FormatDescriptor, FormulaDisposition, formula_profile::validate_formula_expression,
 };
 
-use super::xml::{escape_attribute, escape_text};
+use super::xml::{escape_attribute, escape_text, is_xml_character};
 use crate::project::{
     ProjectedSheet, ProjectedTable, ProjectedWorkbook, RowGeometryWorkBudget, XLSX_MAX_COLUMN,
     XLSX_MAX_ROW, effective_column_runs, effective_row_heights, project,
@@ -409,6 +409,13 @@ fn cell_xml(
             xml.push_str(&format!("<c r=\"{coordinate}\"{style}><v/></c>"));
         }
         Some(Value::Text(text)) => {
+            if !text.chars().all(is_xml_character) {
+                return Err(ConvertError::new(
+                    ConvertErrorCode::UnsupportedPackage,
+                    "text contains a control character that XML cannot represent",
+                )
+                .at(ConversionLocation::cell(context.sheet.clone(), coordinate)));
+            }
             let preserve = if text.starts_with(char::is_whitespace)
                 || text.ends_with(char::is_whitespace)
                 || text.is_empty()
@@ -1059,6 +1066,7 @@ fn valid_sheet_label(label: &str) -> bool {
         && !label
             .chars()
             .any(|character| "[]:*?/\\".contains(character))
+        && label.chars().all(is_xml_character)
         && !label.starts_with('\'')
         && !label.ends_with('\'')
 }
@@ -1066,7 +1074,9 @@ fn valid_sheet_label(label: &str) -> bool {
 fn sanitized_sheet_label(label: &str, ordinal: usize, used: &BTreeSet<String>) -> String {
     let mut base: String = label
         .chars()
-        .filter(|character| !"[]:*?/\\".contains(*character) && *character != '\'')
+        .filter(|character| {
+            !"[]:*?/\\".contains(*character) && *character != '\'' && is_xml_character(*character)
+        })
         .take(24)
         .collect();
     if base.is_empty() {
@@ -1703,5 +1713,33 @@ mod tests {
             .expect_err("table limits apply to the whole workbook, not each sheet");
         assert_eq!(failure.error.code, ConvertErrorCode::ResourceLimit);
         assert!(failure.error.message.contains("workbook table count"));
+    }
+
+    #[test]
+    fn characters_xml_cannot_represent_are_reported_rather_than_written() {
+        let mut label_workbook = workbook();
+        label_workbook.sheets[0].label = "Bell\u{7}Label".to_owned();
+        let conversion = export_xlsx(&label_workbook, ConversionLimits::default())
+            .expect("an unrepresentable label is sanitized, not silently emitted");
+        assert!(conversion.report.outcomes().iter().any(|event| {
+            event.outcome == crate::FeatureOutcome::Approximated
+                && event.feature == "sheets"
+                && event
+                    .detail
+                    .as_ref()
+                    .is_some_and(|detail| detail.contains("was exported as"))
+        }));
+        let imported = crate::import_xlsx(&conversion.value, ConversionLimits::default())
+            .expect("the sanitized package is still well-formed XML");
+        assert!(!imported.value.sheets[0].label.contains('\u{7}'));
+
+        let mut text_workbook = workbook();
+        if let SheetItem::Block(block) = &mut text_workbook.sheets[0].items[0] {
+            block.cells[0][0].value = Value::Text("Bell\u{7}Text".to_owned());
+        }
+        let failure = export_xlsx(&text_workbook, ConversionLimits::default())
+            .expect_err("XML has no spelling for a C0 control other than tab, LF, and CR");
+        assert_eq!(failure.error.code, ConvertErrorCode::UnsupportedPackage);
+        assert!(failure.error.message.contains("control character"));
     }
 }

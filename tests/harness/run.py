@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import datetime
 import json
 import os
@@ -15,6 +16,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 MARKSHEET = os.environ.get("MARKSHEET_BIN", str(ROOT / "target/debug/marksheet"))
+MAX_LIVE_RESULT_AGE = datetime.timedelta(days=90)
 
 
 class Server:
@@ -62,7 +64,23 @@ def read_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def validate_manifest() -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def utc_today() -> datetime.date:
+    """Both the recorder and this check must use one clock, not one function.
+
+    `live.py` may record from any local timezone while CI validates in UTC, so
+    a naive `date.today()` on both sides can differ by a day and reject a
+    record made minutes earlier.
+    """
+    return datetime.datetime.now(datetime.timezone.utc).date()
+
+
+def live_result_age(result: dict[str, Any]) -> datetime.timedelta:
+    return utc_today() - datetime.date.fromisoformat(result["verified_at"])
+
+
+def validate_manifest(
+    *, require_fresh: bool = False
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     manifest = read_json(HERE / "manifest.json")
     assert manifest["version"] == "marksheet-harness-corpus@1"
     assert manifest["harnesses"] == ["codex", "claude-code"]
@@ -87,21 +105,70 @@ def validate_manifest() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     assert all(Path(name).name == name and name.endswith(".ms") for name in referenced)
     assert referenced == {path.name for path in HERE.glob("*.ms")}
     assert all((HERE / name).is_file() for name in referenced)
+    return manifest, tasks, validate_live_record(manifest, require_fresh=require_fresh)
+
+
+def validate_live_record(
+    manifest: dict[str, Any], *, require_fresh: bool
+) -> dict[str, Any]:
+    """Check that the live acceptance record is well formed.
+
+    This deliberately does not assert the recorded verdict. `live.py` runs
+    hosted models against real credentials, so its result is evidence rather
+    than a hermetic test outcome; asserting `passed` would make an honest
+    failed run impossible to commit and would turn the record into a constant
+    that cannot report bad news.
+
+    Staleness is likewise not a hermetic failure. Age advances on its own, so
+    asserting it here would break CI on a calendar date with no code change,
+    and only someone with hosted-model credentials could repair the tree. The
+    default run reports a stale record as a warning; `--require-fresh` promotes
+    it to an error for the release step that owns refreshing it.
+    """
     live = read_json(HERE / "live-results.json")
-    assert set(live) == {"version", "verified_at", "corpus", "results"}
+    assert set(live) == {"version", "corpus", "results"}
     assert live["version"] == "marksheet-live-harness@1"
     assert live["corpus"] == manifest["version"]
-    assert datetime.date.fromisoformat(live["verified_at"]) <= datetime.date.today()
     assert [result["harness"] for result in live["results"]] == manifest["harnesses"]
     assert all(
-        set(result) == {"harness", "client", "tasks", "passed"}
+        set(result) == {"harness", "client", "tasks", "passed", "verified_at"}
         and result["tasks"] == 7
-        and result["passed"] is True
+        and isinstance(result["passed"], bool)
         and isinstance(result["client"], str)
         and result["client"]
         for result in live["results"]
     )
-    return manifest, tasks
+    for result in live["results"]:
+        verified_at = datetime.date.fromisoformat(result["verified_at"])
+        age = live_result_age(result)
+        # A future date can only come from a bad record, never from elapsed
+        # time, so it stays a hard failure.
+        assert age >= datetime.timedelta(), (
+            f"{result['harness']} live results dated {verified_at} are in the "
+            "future relative to UTC today; check the recorder's clock"
+        )
+        assert not (require_fresh and age > MAX_LIVE_RESULT_AGE), (
+            f"{result['harness']} live results dated {verified_at} are older "
+            f"than {MAX_LIVE_RESULT_AGE.days} days; rerun live.py --record "
+            "tests/harness/live-results.json"
+        )
+    return live
+
+
+def report_live_record(live: dict[str, Any]) -> None:
+    """Surface the recorded verdicts last, so a failure is the closing word."""
+    print("live acceptance record (evidence, not a CI verdict):")
+    for result in live["results"]:
+        verdict = "passed" if result["passed"] else "FAILED"
+        print(
+            f"  {result['harness']}: {verdict} ({result['client']}; "
+            f"verified {result['verified_at']})"
+        )
+        if live_result_age(result) > MAX_LIVE_RESULT_AGE:
+            print(
+                f"    WARNING: recorded more than {MAX_LIVE_RESULT_AGE.days} "
+                "days ago; rerun live.py --record tests/harness/live-results.json"
+            )
 
 
 def validate_harness(name: str) -> dict[str, Any]:
@@ -267,10 +334,21 @@ def run_harness(name: str, tasks: list[dict[str, Any]]) -> None:
 
 
 def main() -> int:
-    manifest, tasks = validate_manifest()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--require-fresh",
+        action="store_true",
+        help=(
+            "fail when the live acceptance record is older than "
+            f"{MAX_LIVE_RESULT_AGE.days} days; for the release step, not CI"
+        ),
+    )
+    options = parser.parse_args()
+    manifest, tasks, live = validate_manifest(require_fresh=options.require_fresh)
     for harness in manifest["harnesses"]:
         run_harness(harness, tasks)
         print(f"{harness}: 7 tasks passed")
+    report_live_record(live)
     return 0
 
 
