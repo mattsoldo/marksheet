@@ -352,6 +352,92 @@ fn out(temporary: &TempDirectory, name: &str) -> &'static str {
     )
 }
 
+#[test]
+fn convert_refuses_to_overwrite_input_spelled_relative_to_absolute() {
+    let temporary = TempDirectory::new("overwrite-guard-relative");
+    let source = temporary.path().join("core.ms");
+    fs::copy(fixture("sources/core.ms"), &source).expect("copy source fixture");
+    let original = fs::read(&source).expect("read original source");
+
+    // `source` is an absolute path; `--output ./core.ms` names the same file
+    // through a relative spelling resolved against the process's working
+    // directory. Literal PathBuf equality would miss this.
+    let mut command = marksheet();
+    command
+        .current_dir(temporary.path())
+        .arg("convert")
+        .arg("--to")
+        .arg("xlsx")
+        .arg("--output")
+        .arg("./core.ms")
+        .arg(&source);
+    let result = command.output().expect("CLI executes");
+
+    assert_eq!(result.status.code(), Some(2));
+    assert!(result.stdout.is_empty());
+    assert!(text(&result.stderr).contains("refusing to overwrite conversion input"));
+    assert_eq!(
+        fs::read(&source).expect("read source after refusal"),
+        original,
+        "input must be untouched"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn convert_refuses_to_overwrite_input_via_symlinked_alias() {
+    use std::os::unix::fs::symlink;
+
+    let temporary = TempDirectory::new("overwrite-guard-symlink");
+    let source = temporary.path().join("core.ms");
+    fs::copy(fixture("sources/core.ms"), &source).expect("copy source fixture");
+    let original = fs::read(&source).expect("read original source");
+    let alias = temporary.path().join("alias.ms");
+    symlink(&source, &alias).expect("create symlink alias");
+
+    // The input is given through a symlinked alias; the output is the real
+    // path the alias resolves to. Canonicalization must collapse both to the
+    // same file even though neither argument is a literal path match.
+    let result = convert(
+        &alias,
+        "xlsx",
+        &["--output", source.to_str().expect("UTF-8 path")],
+    );
+
+    assert_eq!(result.status.code(), Some(2));
+    assert!(result.stdout.is_empty());
+    assert!(text(&result.stderr).contains("refusing to overwrite conversion input"));
+    assert_eq!(
+        fs::read(&source).expect("read source after refusal"),
+        original,
+        "input must be untouched"
+    );
+}
+
+#[test]
+fn convert_allows_distinct_files_that_share_a_name_in_different_directories() {
+    let temporary = TempDirectory::new("overwrite-guard-distinct");
+    let source_dir = temporary.path().join("source");
+    let output_dir = temporary.path().join("output");
+    fs::create_dir(&source_dir).expect("create source directory");
+    fs::create_dir(&output_dir).expect("create output directory");
+    let source = source_dir.join("core.ms");
+    fs::copy(fixture("sources/core.ms"), &source).expect("copy source fixture");
+    let output = output_dir.join("core.ms");
+
+    let result = convert(
+        &source,
+        "xlsx",
+        &["--output", output.to_str().expect("UTF-8 path")],
+    );
+
+    assert!(result.status.success(), "stderr: {}", text(&result.stderr));
+    assert!(
+        output.exists(),
+        "distinct same-named output must be written"
+    );
+}
+
 fn convert(source: &Path, target: &str, extra: &[&str]) -> Output {
     let mut command = marksheet();
     command.arg("convert").arg("--to").arg(target);

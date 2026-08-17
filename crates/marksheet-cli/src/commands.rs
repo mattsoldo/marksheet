@@ -81,7 +81,7 @@ pub(crate) fn convert(path: &Path, options: &ConvertOptions<'_>) -> Result<ExitC
         || path.with_extension(options.target.extension()),
         Path::to_owned,
     );
-    if output == path {
+    if same_conversion_target(&output, path) {
         return Err(CliError::OutputEqualsInput(output));
     }
     reject_destination_symlink(&output)?;
@@ -921,6 +921,49 @@ pub(crate) fn source_matches(path: &Path, expected: &[u8]) -> Result<bool, CliEr
     reject_symlink(path)?;
     read_source_bounded(path, expected.len())
         .map(|current| current.is_some_and(|bytes| bytes == expected))
+}
+
+/// Reports whether `output` and `input` name the same on-disk file, so the
+/// convert command can refuse to overwrite its own source under a different
+/// spelling (a relative path against an absolute one, or a symlinked
+/// alias). Plain [`PathBuf`] equality alone misses these: it only catches
+/// two arguments that are the literal same string. Canonicalizing resolves
+/// `.`/`..` components and symlinks (including a symlinked input) before
+/// comparing, which is the property we actually need.
+///
+/// `input` is expected to already exist, since conversion has already read
+/// it by the time this runs. `output` frequently does not exist yet, so its
+/// parent directory is canonicalized instead and the file name reattached;
+/// this still collapses distinct spellings of an existing sibling while
+/// tolerating a destination that has not been created. When canonicalization
+/// is not possible for either side, this falls back to the literal
+/// comparison: a provable equality (identical path text) is still refused,
+/// but the absence of proof is never treated as evidence of identity.
+fn same_conversion_target(output: &Path, input: &Path) -> bool {
+    if output == input {
+        return true;
+    }
+    match (canonical_identity(output), canonical_identity(input)) {
+        (Some(output_id), Some(input_id)) => output_id == input_id,
+        _ => false,
+    }
+}
+
+/// Best-effort canonical identity for `path`: the fully resolved path when
+/// `path` itself exists, or its resolved parent joined with the original
+/// file name when only the parent exists yet. Returns `None` when neither
+/// can be resolved, rather than guessing.
+fn canonical_identity(path: &Path) -> Option<PathBuf> {
+    if let Ok(resolved) = fs::canonicalize(path) {
+        return Some(resolved);
+    }
+    let file_name = path.file_name()?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let parent = fs::canonicalize(parent).ok()?;
+    Some(parent.join(file_name))
 }
 
 fn reject_destination_symlink(path: &Path) -> Result<(), CliError> {
