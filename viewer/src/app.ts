@@ -2,7 +2,6 @@ import { formatCoordinate, parseRange } from "./a1";
 import { ExternalFileChangeError, LocalFileSession, downloadSource } from "./local-file";
 import type {
   A1Range,
-  AuthoredValue,
   ByteSpan,
   Coordinate,
   Diagnostic,
@@ -21,6 +20,7 @@ import {
 } from "./presentation";
 import {
   applyStyleTransaction,
+  authoredCellText,
   defineStyleTransaction,
   setCellTransaction,
   setColumnWidthTransaction,
@@ -843,14 +843,7 @@ function inclusiveNumbers(start: number, end: number): number[] {
 function sourceText(cell?: PresentedCell): string {
   if (!cell) return "";
   if ("VirtualFill" in cell.source) return cell.source.VirtualFill.formula;
-  return authoredText(cell.source.Authored.value);
-}
-
-function authoredText(value: AuthoredValue): string {
-  if (value.kind === "blank") return "";
-  if (value.kind === "text" && value.value === "") return "'";
-  if (value.kind === "boolean") return value.value ? "true" : "false";
-  return String(value.value);
+  return authoredCellText(cell.source.Authored.value);
 }
 
 function cellTitle(cell: PresentedCell): string {
@@ -866,7 +859,7 @@ function semanticCellLabel(cell: PresentedCell): string {
   const value = cell.source.Authored.value;
   if (value.kind === "blank") return "Authored blank";
   if (value.kind === "text" && value.value === "") return "Authored empty text";
-  return `Authored ${value.kind} ${authoredText(value)}`;
+  return `Authored ${value.kind} ${authoredCellText(value)}`;
 }
 
 function cellSpan(cell?: PresentedCell): ByteSpan | undefined {
