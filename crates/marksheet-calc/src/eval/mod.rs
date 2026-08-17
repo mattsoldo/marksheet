@@ -29,7 +29,76 @@ pub trait EvaluationContext {
     ///
     /// Returns the spreadsheet error appropriate for an unresolved reference.
     fn resolve(&self, reference: &Reference, span: ByteSpan) -> Result<ResolvedValue, CellError>;
+
+    /// Resolves a reference with the evaluator's live resource budget in hand.
+    ///
+    /// This is the method the evaluator calls. `limits` and `stats` are the
+    /// evaluator's configured bounds and the work it has performed so far in
+    /// the current formula evaluation. A context that materializes a range
+    /// (for example building a [`RectangularRange`]) should override this
+    /// method to check `limits.max_range_cells` against `stats.range_cells`
+    /// plus the range's own cell count *before* allocating, and report
+    /// [`ResolveError::Limit`] if the range alone would exceed the budget.
+    /// That keeps the eval-time limit meaningful: otherwise a context builds
+    /// an unbounded transient value that the evaluator can only reject after
+    /// the fact, one cell at a time, as the range is consumed.
+    ///
+    /// The default implementation ignores the budget and defers to
+    /// [`EvaluationContext::resolve`], which is exactly the pre-existing
+    /// behavior: such a context is still bounded by the evaluator's own
+    /// per-cell accounting, just not before it allocates. Overriding is
+    /// therefore optional, and every existing implementor keeps compiling
+    /// and behaving as before.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResolveError::Cell`] with the spreadsheet error appropriate
+    /// for an unresolved reference, or [`ResolveError::Limit`] if resolving
+    /// the reference would itself exceed an operational resource limit.
+    fn resolve_within_limits(
+        &self,
+        reference: &Reference,
+        span: ByteSpan,
+        limits: &EvaluationLimits,
+        stats: EvaluationStats,
+    ) -> Result<ResolvedValue, ResolveError> {
+        let _ = (limits, stats);
+        self.resolve(reference, span).map_err(ResolveError::Cell)
+    }
 }
+
+/// A reference-resolution failure reported by
+/// [`EvaluationContext::resolve_within_limits`].
+///
+/// [`ResolveError::Cell`] is a normal, catchable spreadsheet error value
+/// (e.g. `#REF!`) and does not interrupt evaluation: it becomes a
+/// [`CalcValue::Error`] at the point of use. [`ResolveError::Limit`] is an
+/// operational failure, identical in kind to the resource limits the
+/// evaluator enforces directly while consuming a value, and aborts the whole
+/// evaluation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ResolveError {
+    Cell(CellError),
+    Limit(EvaluationError),
+}
+
+impl From<CellError> for ResolveError {
+    fn from(error: CellError) -> Self {
+        Self::Cell(error)
+    }
+}
+
+impl fmt::Display for ResolveError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Cell(error) => write!(formatter, "reference resolved to {error}"),
+            Self::Limit(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for ResolveError {}
 
 /// Resource bounds for one formula evaluation.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -175,18 +244,26 @@ impl<C: EvaluationContext + ?Sized> Evaluator<'_, C> {
         match &expression.kind {
             ExprKind::Literal { value } => self.literal(value),
             ExprKind::Reference { reference } => {
-                let resolved = self.context.resolve(reference, expression.span);
-                Ok(match resolved {
+                let resolved = self.context.resolve_within_limits(
+                    reference,
+                    expression.span,
+                    self.limits,
+                    self.stats,
+                );
+                match resolved {
                     Ok(ResolvedValue::Scalar(value)) => {
                         let value = finite_or_error(value);
                         if let CalcValue::Text(text) = &value {
                             self.text(text.len())?;
                         }
-                        RuntimeValue::Scalar(value)
+                        Ok(RuntimeValue::Scalar(value))
                     }
-                    Ok(ResolvedValue::Range(range)) => RuntimeValue::Range(range),
-                    Err(error) => RuntimeValue::Scalar(CalcValue::Error(error)),
-                })
+                    Ok(ResolvedValue::Range(range)) => Ok(RuntimeValue::Range(range)),
+                    Err(ResolveError::Cell(error)) => {
+                        Ok(RuntimeValue::Scalar(CalcValue::Error(error)))
+                    }
+                    Err(ResolveError::Limit(error)) => Err(error),
+                }
             }
             ExprKind::Unary { operator, operand } => self.unary(*operator, operand),
             ExprKind::Binary {
@@ -506,9 +583,9 @@ fn exact_mode(value: &CalcValue) -> Result<(), CellError> {
     }
 }
 
-// Function implementations are kept below the evaluator so every function
+// Function implementations are kept in their own module so every function
 // shares the same work accounting and left-to-right traversal helpers.
-include!("functions.rs");
+mod functions;
 
 #[cfg(test)]
 mod tests;

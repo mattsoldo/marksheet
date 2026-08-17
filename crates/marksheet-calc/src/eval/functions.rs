@@ -1,5 +1,17 @@
+//! Function implementations, split out of [`super`] to keep evaluator
+//! dispatch and function bodies separately navigable.
+
+use super::{
+    CalcValue, CellError, Date, EvaluationContext, EvaluationError, Evaluator, FunctionCall, Month,
+    RuntimeValue, equal_values, exact_mode, finite_or_error, logical_coercion, number_result,
+    numeric_coercion, positive_index, strict_integer, text_coercion,
+};
+
 impl<C: EvaluationContext + ?Sized> Evaluator<'_, C> {
-    fn aggregate(&mut self, call: &FunctionCall) -> Result<RuntimeValue, EvaluationError> {
+    pub(super) fn aggregate(
+        &mut self,
+        call: &FunctionCall,
+    ) -> Result<RuntimeValue, EvaluationError> {
         if call.arguments.is_empty() {
             return Ok(error_value(CellError::Value));
         }
@@ -66,7 +78,10 @@ impl<C: EvaluationContext + ?Sized> Evaluator<'_, C> {
         Ok(RuntimeValue::Scalar(value))
     }
 
-    fn function_if(&mut self, call: &FunctionCall) -> Result<RuntimeValue, EvaluationError> {
+    pub(super) fn function_if(
+        &mut self,
+        call: &FunctionCall,
+    ) -> Result<RuntimeValue, EvaluationError> {
         if call.arguments.len() != 3 {
             return Ok(error_value(CellError::Value));
         }
@@ -78,7 +93,10 @@ impl<C: EvaluationContext + ?Sized> Evaluator<'_, C> {
         self.expression(&call.arguments[usize::from(!condition) + 1])
     }
 
-    fn function_iferror(&mut self, call: &FunctionCall) -> Result<RuntimeValue, EvaluationError> {
+    pub(super) fn function_iferror(
+        &mut self,
+        call: &FunctionCall,
+    ) -> Result<RuntimeValue, EvaluationError> {
         if call.arguments.len() != 2 {
             return Ok(error_value(CellError::Value));
         }
@@ -90,7 +108,7 @@ impl<C: EvaluationContext + ?Sized> Evaluator<'_, C> {
         }
     }
 
-    fn function_and_or(
+    pub(super) fn function_and_or(
         &mut self,
         call: &FunctionCall,
         is_or: bool,
@@ -127,7 +145,10 @@ impl<C: EvaluationContext + ?Sized> Evaluator<'_, C> {
         Ok(RuntimeValue::Scalar(CalcValue::Boolean(!is_or)))
     }
 
-    fn function_not(&mut self, call: &FunctionCall) -> Result<RuntimeValue, EvaluationError> {
+    pub(super) fn function_not(
+        &mut self,
+        call: &FunctionCall,
+    ) -> Result<RuntimeValue, EvaluationError> {
         if call.arguments.len() != 1 {
             return Ok(error_value(CellError::Value));
         }
@@ -138,7 +159,7 @@ impl<C: EvaluationContext + ?Sized> Evaluator<'_, C> {
         }))
     }
 
-    fn numeric_function(
+    pub(super) fn numeric_function(
         &mut self,
         call: &FunctionCall,
     ) -> Result<RuntimeValue, EvaluationError> {
@@ -196,7 +217,10 @@ impl<C: EvaluationContext + ?Sized> Evaluator<'_, C> {
         Ok(RuntimeValue::Scalar(value))
     }
 
-    fn text_function(&mut self, call: &FunctionCall) -> Result<RuntimeValue, EvaluationError> {
+    pub(super) fn text_function(
+        &mut self,
+        call: &FunctionCall,
+    ) -> Result<RuntimeValue, EvaluationError> {
         if call.name == "CONCAT" {
             return self.function_concat(call);
         }
@@ -310,7 +334,9 @@ impl<C: EvaluationContext + ?Sized> Evaluator<'_, C> {
                 RuntimeValue::Range(range) => {
                     for value in range.values() {
                         self.range_cell()?;
-                        if let Err(error) = self.append_text(&mut output, &finite_or_error(value.clone())) {
+                        if let Err(error) =
+                            self.append_text(&mut output, &finite_or_error(value.clone()))
+                        {
                             return match error {
                                 AppendTextError::Cell(error) => Ok(error_value(error)),
                                 AppendTextError::Operational(error) => Err(error),
@@ -329,12 +355,16 @@ impl<C: EvaluationContext + ?Sized> Evaluator<'_, C> {
         value: &CalcValue,
     ) -> Result<(), AppendTextError> {
         let value = text_coercion(value).map_err(AppendTextError::Cell)?;
-        self.text(value.len()).map_err(AppendTextError::Operational)?;
+        self.text(value.len())
+            .map_err(AppendTextError::Operational)?;
         output.push_str(&value);
         Ok(())
     }
 
-    fn lookup_function(&mut self, call: &FunctionCall) -> Result<RuntimeValue, EvaluationError> {
+    pub(super) fn lookup_function(
+        &mut self,
+        call: &FunctionCall,
+    ) -> Result<RuntimeValue, EvaluationError> {
         match call.name.as_str() {
             "INDEX" => self.function_index(call),
             "MATCH" => self.function_match(call),
@@ -437,7 +467,10 @@ impl<C: EvaluationContext + ?Sized> Evaluator<'_, C> {
         Ok(error_value(CellError::NotAvailable))
     }
 
-    fn date_function(&mut self, call: &FunctionCall) -> Result<RuntimeValue, EvaluationError> {
+    pub(super) fn date_function(
+        &mut self,
+        call: &FunctionCall,
+    ) -> Result<RuntimeValue, EvaluationError> {
         let expected = if call.name == "DATE" { 3 } else { 1 };
         if call.arguments.len() != expected {
             return Ok(error_value(CellError::Value));
@@ -482,10 +515,12 @@ impl<C: EvaluationContext + ?Sized> Evaluator<'_, C> {
             (CalcValue::DateTime(value), "DAY") => i32::from(value.day()),
             _ => return Ok(error_value(CellError::Value)),
         };
-        Ok(RuntimeValue::Scalar(CalcValue::Number(f64::from(component))))
+        Ok(RuntimeValue::Scalar(CalcValue::Number(f64::from(
+            component,
+        ))))
     }
 
-    fn inspection_function(
+    pub(super) fn inspection_function(
         &mut self,
         call: &FunctionCall,
     ) -> Result<RuntimeValue, EvaluationError> {
@@ -500,8 +535,10 @@ impl<C: EvaluationContext + ?Sized> Evaluator<'_, C> {
             "ISBLANK" => matches!(value, CalcValue::Blank),
             "ISNUMBER" => matches!(value, CalcValue::Number(number) if number.is_finite()),
             "ISTEXT" => matches!(value, CalcValue::Text(_)),
-            "ISERROR" => matches!(value, CalcValue::Error(_))
-                || matches!(value, CalcValue::Number(number) if !number.is_finite()),
+            "ISERROR" => {
+                matches!(value, CalcValue::Error(_))
+                    || matches!(value, CalcValue::Number(number) if !number.is_finite())
+            }
             _ => unreachable!("inspection dispatcher validates the function name"),
         };
         Ok(RuntimeValue::Scalar(CalcValue::Boolean(result)))
@@ -578,8 +615,9 @@ fn round_decimal(value: f64, digits: i32, mode: &str) -> CalcValue {
     // Digits kept from the left of the expansion. Negative `digits` can move
     // the rounding place above the leading digit, so pad with zeroes to leave
     // one retained digit for a carry to land in.
-    let retained =
-        i64::try_from(integer.len()).unwrap_or(i64::MAX).saturating_add(i64::from(digits));
+    let retained = i64::try_from(integer.len())
+        .unwrap_or(i64::MAX)
+        .saturating_add(i64::from(digits));
     let padding = usize::try_from(1 - retained).unwrap_or(0);
     let retained = usize::try_from(retained).unwrap_or(0).max(1);
     let mut expansion = vec![b'0'; padding];
