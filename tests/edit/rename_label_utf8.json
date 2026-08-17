@@ -1,0 +1,7 @@
+{
+  "transaction": {"kind": "rename_sheet_label", "sheet": "data", "label": "Nouvelle étiquette 日本語 🎉"},
+  "before": "rename_label_utf8.before.ms",
+  "after": "rename_label_utf8.after.ms",
+  "patches": [{"start": 65, "end": 86, "replacement": "\"Nouvelle étiquette 日本語 🎉\""}],
+  "assertions": ["formula_references_unchanged", "byte_offsets_respect_multibyte_utf8_preceding_text"]
+}

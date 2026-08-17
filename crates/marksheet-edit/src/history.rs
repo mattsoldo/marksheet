@@ -991,6 +991,66 @@ mod tests {
     }
 
     #[test]
+    fn multi_entry_undo_redo_chain_restores_byte_exact_history() {
+        let source = sample();
+        let mut session = EditSession::new(source.clone());
+
+        // Three sequential edits of different kinds, each committed against
+        // the session's own advancing history rather than a fixed snapshot.
+        let after_first = session.execute(set_a2(10.0)).unwrap().source;
+        let after_second = session
+            .execute(EditTransaction::single(EditOperation::RenameSheetLabel {
+                sheet: sheet("data"),
+                label: "Updated".to_owned(),
+            }))
+            .unwrap()
+            .source;
+        let after_third = session
+            .execute(EditTransaction::single(EditOperation::SetCell {
+                sheet: sheet("data"),
+                coordinate: coordinate("B2"),
+                value: Value::Number(20.0),
+            }))
+            .unwrap()
+            .source;
+        assert_eq!(session.source(), after_third.as_slice());
+        assert_eq!(session.undo_len(), 3);
+        assert_eq!(session.redo_len(), 0);
+
+        // Undo all the way back to the original bytes, one entry at a time.
+        assert_eq!(session.undo().unwrap(), after_second);
+        assert_eq!(session.undo_len(), 2);
+        assert_eq!(session.redo_len(), 1);
+        assert_eq!(session.undo().unwrap(), after_first);
+        assert_eq!(session.undo_len(), 1);
+        assert_eq!(session.redo_len(), 2);
+        assert_eq!(session.undo().unwrap(), source);
+        assert_eq!(session.undo_len(), 0);
+        assert_eq!(session.redo_len(), 3);
+        assert_eq!(
+            session.undo().unwrap_err().kind,
+            HistoryErrorKind::NothingToUndo
+        );
+
+        // Redo all the way forward, one entry at a time, reaching the exact
+        // same byte states produced the first time through.
+        assert_eq!(session.redo().unwrap(), after_first);
+        assert_eq!(session.undo_len(), 1);
+        assert_eq!(session.redo_len(), 2);
+        assert_eq!(session.redo().unwrap(), after_second);
+        assert_eq!(session.undo_len(), 2);
+        assert_eq!(session.redo_len(), 1);
+        assert_eq!(session.redo().unwrap(), after_third);
+        assert_eq!(session.undo_len(), 3);
+        assert_eq!(session.redo_len(), 0);
+        assert_eq!(
+            session.redo().unwrap_err().kind,
+            HistoryErrorKind::NothingToRedo
+        );
+        assert_eq!(session.source(), after_third.as_slice());
+    }
+
+    #[test]
     fn successful_new_edit_invalidates_redo() {
         let mut session = EditSession::new(sample());
         session.execute(set_a2(10.0)).unwrap();

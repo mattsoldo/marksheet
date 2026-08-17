@@ -30,6 +30,8 @@ The corpus covers the required editing proof:
 - formula-field replacement without canonicalizing surrounding source;
 - append immediately before a table's owning `@end`;
 - atomic sheet/name identifier updates and label-only rename;
+- rename byte-offset discipline against multi-byte UTF-8 source text, CRLF
+  line endings, and a formula reference rewritten inside a quoted CSV field;
 - whole-block movement and its reference rewrite policy;
 - focused reuse of an existing style through `@apply`;
 - virtual-cell and partial-block refusal;

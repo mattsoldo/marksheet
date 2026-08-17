@@ -1,0 +1,11 @@
+{
+  "transaction": {"kind": "rename_name_id", "old": "rate", "new": "tax_rate"},
+  "before": "rename_name_id_quoted_formula.before.ms",
+  "after": "rename_name_id_quoted_formula.after.ms",
+  "patches": [
+    {"start": 22, "end": 26, "replacement": "tax_rate"},
+    {"start": 91, "end": 95, "replacement": "tax_rate"},
+    {"start": 114, "end": 118, "replacement": "tax_rate"}
+  ],
+  "assertions": ["updates_declaration", "rewrites_reference_inside_quoted_csv_field", "preserves_doubled_quote_text_literal", "atomic"]
+}
