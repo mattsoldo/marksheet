@@ -119,13 +119,12 @@ fn is_inside_opaque_payload(ranges: &[(usize, usize)], offset: usize) -> bool {
 }
 
 /// Whether inserting a byte at `offset` extends an opaque payload without
-/// disturbing the structure around it. The end bound is inclusive because
-/// inserting at the first byte of an `@end` line still lands inside the payload
-/// that line terminates.
+/// disturbing the structure around it. Inserting at the end bound changes the
+/// first byte of the structural `@end` line, so that boundary is excluded.
 fn extends_opaque_payload(ranges: &[(usize, usize)], offset: usize) -> bool {
     ranges
         .iter()
-        .any(|&(start, end)| offset >= start && offset <= end)
+        .any(|&(start, end)| offset >= start && offset < end)
 }
 
 /// Asserts that no structural byte of `bytes` is a carriage return.

@@ -213,13 +213,36 @@ fn split_directive(line: Line, source: &[u8]) -> Directive {
 fn find_exact_terminator(source: &[u8], start: usize) -> (usize, Option<Line>) {
     let mut cursor = start;
     while cursor < source.len() {
-        let line = physical_line(source, cursor);
+        let line = extension_payload_line(source, cursor);
         if &source[line.content.range()] == b"@end" {
             return (line.span.start, Some(line));
         }
         cursor = line.span.end;
     }
     (source.len(), None)
+}
+
+/// Split opaque extension payloads only at the structural line endings the
+/// format recognizes. A lone carriage return remains payload data, including
+/// when the following bytes happen to spell `@end`.
+fn extension_payload_line(source: &[u8], start: usize) -> Line {
+    let line_feed = source[start..]
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .map(|relative| start + relative);
+    let span_end = line_feed.map_or(source.len(), |offset| offset + 1);
+    let content_end = line_feed.map_or(source.len(), |offset| {
+        if source.get(offset.wrapping_sub(1)) == Some(&b'\r') {
+            offset - 1
+        } else {
+            offset
+        }
+    });
+    Line {
+        span: Span::new(start, span_end),
+        content: Span::new(start, content_end),
+        newline: Span::new(content_end, span_end),
+    }
 }
 
 /// Locate `@end` while deliberately tracking only quote state needed for the
@@ -453,6 +476,23 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.code.as_str() == "MS1003")
         );
+    }
+
+    #[test]
+    fn bare_carriage_return_before_end_text_does_not_terminate_extension() {
+        let source = b"#!marksheet 0.1\n@extension charts@1 \"x\"\nalpha\r@end\n@end\n";
+        let result = scan(source);
+        let Node::Extension(extension) = &result.cst.nodes[1] else {
+            panic!("expected extension");
+        };
+        assert_eq!(&source[extension.payload.range()], b"alpha\r@end\n");
+        assert_eq!(
+            extension
+                .terminator
+                .map(|line| &source[line.content.range()]),
+            Some(b"@end".as_slice())
+        );
+        assert!(result.diagnostics.is_empty());
     }
 
     #[test]

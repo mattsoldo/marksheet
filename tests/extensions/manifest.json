@@ -12,6 +12,7 @@
     {"id": "required_unavailable", "kind": "availability", "fixture": "required_unavailable.json"},
     {"id": "undeclared_opaque", "kind": "availability", "fixture": "undeclared_opaque.json"},
     {"id": "opaque_crlf", "kind": "lossless", "fixture": "opaque_crlf.json"},
-    {"id": "opaque_payload_carriage_return", "kind": "lossless", "fixture": "opaque_payload_carriage_return.json"}
+    {"id": "opaque_payload_carriage_return", "kind": "lossless", "fixture": "opaque_payload_carriage_return.json"},
+    {"id": "opaque_payload_false_terminator", "kind": "lossless", "fixture": "opaque_payload_false_terminator.json"}
   ]
 }
