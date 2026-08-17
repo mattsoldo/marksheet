@@ -242,19 +242,110 @@ pub struct PreparedCalculation {
     plan: EvaluationPlan,
     values: BTreeMap<CellKey, CalcValue>,
     overrides: BTreeMap<CellKey, CalcValue>,
-    dirty: BTreeSet<CellKey>,
+    dirty: PendingDirty,
     diagnostics: Vec<Diagnostic>,
     limits: CalcLimits,
     revision: u64,
 }
 
+/// Cells whose values are still pending recalculation.
+///
+/// Preparation marks every cell pending, and a caller that only ever
+/// calculates part of a workbook leaves the rest pending forever, so this set
+/// tracks the workbook rather than the current edit. Every operation here is
+/// therefore written to iterate only the cells a caller actually touches; a
+/// whole-set scan such as `BTreeSet::union` or `BTreeSet::retain` would make
+/// each edit cost as much as the never-calculated remainder of the workbook.
+///
+/// `visits` records how many pending entries each operation iterated so that
+/// tests can assert that property directly instead of timing calculations.
+/// Any new operation must record the entries it iterates.
+#[derive(Debug, Default)]
+struct PendingDirty {
+    cells: BTreeSet<CellKey>,
+    #[cfg(test)]
+    visits: std::cell::Cell<usize>,
+}
+
+impl PendingDirty {
+    fn new(cells: BTreeSet<CellKey>) -> Self {
+        Self {
+            cells,
+            #[cfg(test)]
+            visits: std::cell::Cell::new(0),
+        }
+    }
+
+    /// Records that `count` pending entries were iterated.
+    #[allow(unused_variables, clippy::unused_self)]
+    fn visit(&self, count: usize) {
+        #[cfg(test)]
+        self.visits.set(self.visits.get().saturating_add(count));
+    }
+
+    /// Copies the whole set, for callers that explicitly want all of it.
+    fn snapshot(&self) -> BTreeSet<CellKey> {
+        self.visit(self.cells.len());
+        self.cells.clone()
+    }
+
+    /// Returns how large the set would become once `added` is merged in.
+    ///
+    /// Only `added` is iterated, so a limit check costs the change, not the
+    /// backlog it is added to.
+    fn len_after_adding(&self, added: &BTreeSet<CellKey>) -> usize {
+        self.visit(added.len());
+        let new = added
+            .iter()
+            .filter(|cell| !self.cells.contains(cell))
+            .count();
+        self.cells.len().saturating_add(new)
+    }
+
+    fn add_all(&mut self, added: &BTreeSet<CellKey>) {
+        self.visit(added.len());
+        self.cells.extend(added.iter().cloned());
+    }
+
+    /// Returns the pending cells inside `scope`, iterating the smaller side.
+    fn within(&self, scope: &BTreeSet<CellKey>) -> BTreeSet<CellKey> {
+        if scope.len() <= self.cells.len() {
+            self.visit(scope.len());
+            return scope
+                .iter()
+                .filter(|cell| self.cells.contains(cell))
+                .cloned()
+                .collect();
+        }
+        self.visit(self.cells.len());
+        self.cells
+            .iter()
+            .filter(|cell| scope.contains(cell))
+            .cloned()
+            .collect()
+    }
+
+    /// Drops `settled` from the pending set, iterating only `settled`.
+    fn settle(&mut self, settled: &BTreeSet<CellKey>) {
+        self.visit(settled.len());
+        for cell in settled {
+            self.cells.remove(cell);
+        }
+    }
+}
+
 /// A whole-graph evaluation order retained for one graph revision.
 ///
 /// Ordering the graph costs a strongly-connected-component pass plus a
-/// topological pass over every node, so the result is cached until
+/// topological pass over every node, so it is done once during preparation,
+/// which has to visit the whole workbook anyway, and cached until
 /// [`DependencyGraph::revision`] changes. `step_for_cell` then lets one
 /// calculation visit only the steps its dirty set reaches instead of scanning
 /// the whole workbook order.
+///
+/// Only registering a cell the workbook never mentioned changes the graph
+/// after preparation, so an editing session normally reuses this plan for
+/// every calculation.
 #[derive(Debug, Default)]
 struct EvaluationPlan {
     order: Vec<EvaluationStep>,
@@ -292,6 +383,24 @@ impl EvaluationPlan {
         }
     }
 
+    /// Returns the circular components in key order.
+    ///
+    /// Ordering already separated every strongly connected component, so
+    /// reporting cycles from the plan spares preparation a second such pass.
+    /// The key ordering matches [`DependencyGraph::cyclic_components`].
+    fn cyclic_components(&self) -> Vec<&BTreeSet<CellKey>> {
+        let mut components: Vec<_> = self
+            .order
+            .iter()
+            .filter_map(|step| match step {
+                EvaluationStep::Cycle(component) => Some(component),
+                EvaluationStep::Cell(_) => None,
+            })
+            .collect();
+        components.sort_by(|left, right| left.first().cmp(&right.first()));
+        components
+    }
+
     /// Returns exactly the steps `dirty` reaches, in evaluation order.
     fn dirty_steps(&self, dirty: &BTreeSet<CellKey>) -> Vec<&EvaluationStep> {
         let touched: BTreeSet<usize> = dirty
@@ -314,7 +423,7 @@ impl PreparedCalculation {
     #[must_use]
     pub fn pending_dirty(&self) -> DirtySet {
         DirtySet {
-            cells: self.dirty.clone(),
+            cells: self.dirty.snapshot(),
         }
     }
 }
@@ -378,18 +487,23 @@ impl CalcEngine for ReferenceCalcEngine {
                 diagnostics,
             };
         }
-        for component in graph.cyclic_components() {
-            diagnostics.push(cycle_diagnostic(&component, &program));
+        // Preparation is the one place that already visits the whole workbook,
+        // so it also orders the graph. Later calculations then cost their own
+        // dirty scope instead of paying for the cells they never touch.
+        let mut plan = EvaluationPlan::default();
+        plan.refresh(&graph);
+        for component in plan.cyclic_components() {
+            diagnostics.push(cycle_diagnostic(component, &program));
         }
 
         let values = authored_scalar_values(&prepared);
-        let dirty = graph.cells().cloned().collect();
+        let dirty = PendingDirty::new(graph.cells().cloned().collect());
 
         let calculation = PreparedCalculation {
             prepared,
             program,
             graph,
-            plan: EvaluationPlan::default(),
+            plan,
             values,
             overrides: BTreeMap::new(),
             dirty,
@@ -457,7 +571,7 @@ impl CalcEngine for ReferenceCalcEngine {
         }
         let changed_roots: BTreeSet<_> = effective.keys().cloned().collect();
         let changed_dirty = calculation.graph.dirty_closure(changed_roots);
-        let pending_dirty = calculation.dirty.union(&changed_dirty).count();
+        let pending_dirty = calculation.dirty.len_after_adding(&changed_dirty);
         if pending_dirty > calculation.limits.work.max_dirty_cells {
             return Err(ChangeError::DirtyCellLimitExceeded {
                 actual: pending_dirty,
@@ -472,7 +586,7 @@ impl CalcEngine for ReferenceCalcEngine {
             calculation.overrides.insert(cell.clone(), value.clone());
             calculation.values.insert(cell, value);
         }
-        calculation.dirty.extend(changed_dirty.iter().cloned());
+        calculation.dirty.add_all(&changed_dirty);
         calculation.revision = calculation.revision.wrapping_add(1);
         Ok(DirtySet {
             cells: changed_dirty,
@@ -492,7 +606,7 @@ impl CalcEngine for ReferenceCalcEngine {
 
         let scope = request_dependency_scope(&calculation.graph, request);
         retain_relevant_calculation_diagnostics(&mut diagnostics, &scope);
-        let dirty = calculation.dirty.intersection(&scope).cloned().collect();
+        let dirty = calculation.dirty.within(&scope);
         calculation.plan.refresh(&calculation.graph);
         let attempt = match evaluate_pending(calculation, &dirty) {
             Ok(attempt) => attempt,
@@ -509,7 +623,7 @@ impl CalcEngine for ReferenceCalcEngine {
         };
 
         calculation.values.extend(attempt.updates);
-        calculation.dirty.retain(|cell| !dirty.contains(cell));
+        calculation.dirty.settle(&dirty);
         let cells = selected_cells(calculation, request);
         CalculationResult {
             cells,
@@ -1709,6 +1823,10 @@ mod tests {
             )],
         )]);
         let mut calculation = prepared(&workbook);
+        assert_eq!(
+            calculation.plan.computations, 1,
+            "preparation orders the graph once"
+        );
 
         calculate(&mut calculation, "main", "A1:C1");
         assert_eq!(
@@ -1751,6 +1869,118 @@ mod tests {
             calculation.plan.computations, 2,
             "registering a previously absent cell invalidates the cached order"
         );
+    }
+
+    /// Edits `A1` of a `rows`-tall workbook of independent `=A{row}+1` pairs
+    /// and recalculates only `B1`, returning the pending entries visited.
+    ///
+    /// Nothing warms the calculation up first, so every row below the first
+    /// stays pending: this is the shape a viewport-sized recalculation has.
+    fn viewport_edit_dirty_visits(rows: u32) -> usize {
+        let workbook = workbook(vec![sheet(
+            "main",
+            vec![block(
+                "A1",
+                (1..=rows)
+                    .map(|row| {
+                        vec![
+                            Value::Number(f64::from(row)),
+                            formula(&format!("=A{row}+1")),
+                        ]
+                    })
+                    .collect(),
+            )],
+        )]);
+        let mut calculation = prepared(&workbook);
+
+        calculation.dirty.visits.set(0);
+        ReferenceCalcEngine
+            .apply_changes(
+                &mut calculation,
+                ChangeSet::new().with(key("main", "A1"), CalcValue::Number(100.0)),
+            )
+            .unwrap();
+        let result = calculate(&mut calculation, "main", "B1");
+        assert_eq!(values(&result), vec![CalcValue::Number(101.0)]);
+        calculation.dirty.visits.get()
+    }
+
+    #[test]
+    fn pending_dirty_bookkeeping_visits_only_the_changed_scope() {
+        let small = viewport_edit_dirty_visits(64);
+        let large = viewport_edit_dirty_visits(1024);
+
+        assert_eq!(
+            small, large,
+            "a 16x larger workbook must not make an unchanged two-cell edit cost more"
+        );
+        assert!(
+            small <= 8,
+            "the four bookkeeping steps each visit at most the two cells this edit \
+             dirties or the two cells it requests, got {small}"
+        );
+    }
+
+    #[test]
+    fn viewport_sized_calculations_match_always_calculating_everything() {
+        // A chain, a cycle, and an island, so partial viewports leave a mixed
+        // backlog pending between edits.
+        let source = workbook(vec![sheet(
+            "main",
+            vec![
+                block(
+                    "A1",
+                    vec![
+                        vec![Value::Number(1.0), formula("=A1+1"), formula("=B1*2")],
+                        vec![Value::Number(2.0), formula("=A2+B1"), formula("=C1+B2")],
+                        vec![Value::Number(3.0), formula("=A3+C2"), formula("=B3+1")],
+                    ],
+                ),
+                block("E1", vec![vec![formula("=F1"), formula("=E1")]]),
+                block("A5", vec![vec![Value::Number(9.0), formula("=A5*3")]]),
+            ],
+        )]);
+        let prepare_cyclic = || {
+            ReferenceCalcEngine
+                .prepare(&source, CalcLimits::default())
+                .calculation
+                .unwrap()
+        };
+        // One calculation only ever sees the requested viewport; the other
+        // always recalculates everything and is the ground truth.
+        let mut viewport_only = prepare_cyclic();
+        let mut always_full = prepare_cyclic();
+
+        let viewports = ["B1:B1", "C2:C2", "A5:B5", "B3:C3", "E1:F1", "A1:C3"];
+        let edits = [("A1", 10.0), ("A3", 7.0), ("A5", 4.0), ("A2", -1.0)];
+        for (step, viewport) in viewports.iter().cycle().take(24).enumerate() {
+            let (cell, value) = edits[step % edits.len()];
+            let change = ChangeSet::new().with(
+                key("main", cell),
+                CalcValue::Number(value + f64::from(u32::try_from(step).unwrap())),
+            );
+            ReferenceCalcEngine
+                .apply_changes(&mut viewport_only, change.clone())
+                .unwrap();
+            ReferenceCalcEngine
+                .apply_changes(&mut always_full, change)
+                .unwrap();
+
+            let partial = calculate(&mut viewport_only, "main", viewport);
+            calculate(&mut always_full, "main", "A1:F6");
+            let complete = calculate(&mut always_full, "main", viewport);
+            assert_eq!(
+                values(&partial),
+                values(&complete),
+                "step {step} {viewport}"
+            );
+        }
+
+        assert_eq!(
+            values(&calculate(&mut viewport_only, "main", "A1:F6")),
+            values(&calculate(&mut always_full, "main", "A1:F6"))
+        );
+        assert!(viewport_only.pending_dirty().is_empty());
     }
 
     #[test]
