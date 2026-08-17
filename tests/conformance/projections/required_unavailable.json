@@ -1,0 +1,191 @@
+{
+  "completeness": {
+    "calculation_complete": false,
+    "rendering_complete": false
+  },
+  "diagnostics": [
+    {
+      "code": "MS3101",
+      "severity": "error",
+      "span": [
+        16,
+        46
+      ]
+    }
+  ],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 98,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          46
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          47
+        ]
+      },
+      {
+        "content_span": [
+          47,
+          47
+        ],
+        "ending": "lf",
+        "span": [
+          47,
+          48
+        ]
+      },
+      {
+        "content_span": [
+          48,
+          70
+        ],
+        "ending": "lf",
+        "span": [
+          48,
+          71
+        ]
+      },
+      {
+        "content_span": [
+          71,
+          84
+        ],
+        "ending": "lf",
+        "span": [
+          71,
+          85
+        ]
+      },
+      {
+        "content_span": [
+          85,
+          90
+        ],
+        "ending": "lf",
+        "span": [
+          85,
+          91
+        ]
+      },
+      {
+        "content_span": [
+          91,
+          92
+        ],
+        "ending": "lf",
+        "span": [
+          91,
+          93
+        ]
+      },
+      {
+        "content_span": [
+          93,
+          97
+        ],
+        "ending": "lf",
+        "span": [
+          93,
+          98
+        ]
+      }
+    ],
+    "sha256": "da4938b4cdae0a45afe425f552f5f50d728d45253391c7b1aca838e2b8d62265"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [
+      {
+        "id": "actuarial_functions@1",
+        "required": true,
+        "span": [
+          16,
+          46
+        ]
+      }
+    ],
+    "extensions": [],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "inputs",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              85,
+              93
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "Value",
+                    "span": [
+                      85,
+                      90
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Value"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "5",
+                    "span": [
+                      91,
+                      92
+                    ]
+                  },
+                  "value": {
+                    "kind": "number",
+                    "value": "5"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              71,
+              84
+            ]
+          }
+        ],
+        "label": "Inputs",
+        "span": [
+          48,
+          70
+        ]
+      }
+    ],
+    "styles": []
+  }
+}

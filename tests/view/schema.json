@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Marksheet browser-session fixture manifest",
+  "type": "object",
+  "required": ["version", "protocol", "cases"],
+  "properties": {
+    "version": {"const": 1},
+    "protocol": {"const": "marksheet-view-conformance@1"},
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "fixture"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+          "kind": {
+            "enum": [
+              "workbook_view",
+              "layer_projection",
+              "sparse_viewport",
+              "worker_protocol",
+              "diagnostic_source",
+              "external_change"
+            ]
+          },
+          "fixture": {"type": "string", "pattern": "^[a-z][a-z0-9_]*\\.json$"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "$defs": {
+    "standard_layers": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "authored",
+          "virtual",
+          "calculated",
+          "presentation",
+          "geometry",
+          "source_links"
+        ]
+      },
+      "allOf": [
+        {"contains": {"const": "authored"}},
+        {"contains": {"const": "virtual"}},
+        {"contains": {"const": "calculated"}},
+        {"contains": {"const": "presentation"}},
+        {"contains": {"const": "geometry"}},
+        {"contains": {"const": "source_links"}}
+      ]
+    },
+    "visible_region_operation": {
+      "type": "object",
+      "required": ["op", "sheet", "range", "expect_layers"],
+      "properties": {
+        "op": {"const": "visible_region"},
+        "sheet": {"type": "string", "minLength": 1},
+        "range": {"type": "string", "minLength": 1},
+        "expect_layers": {"$ref": "#/$defs/standard_layers"}
+      }
+    },
+    "unsupported_assertions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": ["max_rendered_grid_cells", "max_coordinate_probes", "writes"]
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,212 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [
+    {
+      "code": "MS2201",
+      "severity": "error",
+      "span": [
+        35,
+        54
+      ]
+    }
+  ],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 85,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          34
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          35
+        ]
+      },
+      {
+        "content_span": [
+          35,
+          54
+        ],
+        "ending": "lf",
+        "span": [
+          35,
+          55
+        ]
+      },
+      {
+        "content_span": [
+          55,
+          65
+        ],
+        "ending": "lf",
+        "span": [
+          55,
+          66
+        ]
+      },
+      {
+        "content_span": [
+          66,
+          79
+        ],
+        "ending": "lf",
+        "span": [
+          66,
+          80
+        ]
+      },
+      {
+        "content_span": [
+          80,
+          84
+        ],
+        "ending": "lf",
+        "span": [
+          80,
+          85
+        ]
+      }
+    ],
+    "sha256": "5082b33dbe7a5d17d60baff7caea784c0bd3b5812d59f7dbd363db517a7f9a27"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [],
+    "extensions": [],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "main",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              55,
+              80
+            ],
+            "id": "items",
+            "kind": "table",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "Name",
+                    "span": [
+                      55,
+                      59
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Name"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "Name",
+                    "span": [
+                      60,
+                      64
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Name"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "",
+                    "span": [
+                      65,
+                      65
+                    ]
+                  },
+                  "value": {
+                    "kind": "blank"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "one",
+                    "span": [
+                      66,
+                      69
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "one"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "two",
+                    "span": [
+                      70,
+                      73
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "two"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "three",
+                    "span": [
+                      74,
+                      79
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "three"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              35,
+              54
+            ]
+          }
+        ],
+        "label": "Main",
+        "span": [
+          16,
+          34
+        ]
+      }
+    ],
+    "styles": []
+  }
+}

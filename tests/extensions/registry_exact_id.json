@@ -1,0 +1,6 @@
+{
+  "protocol": "marksheet-extension-fixture@1",
+  "registry": ["assertions@1", "assertions@2", "assertions@1"],
+  "source": "assertions_success.ms",
+  "expect": {"registry_error": "duplicate_exact_id"}
+}

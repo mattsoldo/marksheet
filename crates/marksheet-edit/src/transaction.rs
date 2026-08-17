@@ -12,10 +12,11 @@ use marksheet_calc::{
     prepare::{CompileLimits, PrepareLimits, PreparedWorkbook, compile_formulas},
 };
 use marksheet_model::{
-    ApplyTarget, Block, ByteSpan, Coordinate, Diagnostic, Fill, FillTarget, NameId, Range, SheetId,
-    SheetItem, StyleId, Table, TableId, TableRegion, Value, Workbook,
+    ApplyTarget, Block, ByteSpan, ColumnRange, Coordinate, Diagnostic, Fill, FillTarget,
+    HorizontalAlignment, NameId, NameTarget, NumberFormat, Range, RowRange, SheetId, SheetItem,
+    StyleId, StyleProperties, Table, TableId, TableRegion, Value, VerticalAlignment, Workbook,
 };
-use marksheet_syntax::{ParsedDocument, SourceMap, parse};
+use marksheet_syntax::{ParseOptions, ParsedDocument, SourceMap, parse_with_options};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -112,10 +113,32 @@ pub enum EditOperation {
         old: NameId,
         new: NameId,
     },
+    /// Replaces the target of one existing workbook-scoped name.
+    SetNameTarget {
+        name: NameId,
+        target: NameTarget,
+    },
+    /// Declares a workbook-scoped style before the first sheet.
+    DefineStyle {
+        style: StyleId,
+        properties: StyleProperties,
+    },
     ApplyStyle {
         sheet: SheetId,
         target: ApplyTarget,
         style: StyleId,
+    },
+    /// Appends a later column geometry declaration in the owning sheet.
+    SetColumnWidth {
+        sheet: SheetId,
+        columns: ColumnRange,
+        width: f64,
+    },
+    /// Appends a later row geometry declaration in the owning sheet.
+    SetRowHeight {
+        sheet: SheetId,
+        rows: RowRange,
+        height: f64,
     },
     MoveBlock {
         sheet: SheetId,
@@ -163,7 +186,21 @@ impl EditTransaction {
     /// Returns a structured error and no patches when a precondition, semantic
     /// target, source-location requirement, or final validation fails.
     pub fn execute(&self, source: &[u8]) -> Result<EditResult, EditError> {
-        execute(source, self)
+        self.execute_with_parse_options(source, &ParseOptions::default())
+    }
+
+    /// Executes with the exact host extension capabilities used for both the
+    /// base document and the edited result.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same structured, atomic failures as [`Self::execute`].
+    pub fn execute_with_parse_options(
+        &self,
+        source: &[u8],
+        options: &ParseOptions,
+    ) -> Result<EditResult, EditError> {
+        execute_with_parse_options(source, self, options)
     }
 }
 
@@ -171,6 +208,13 @@ impl EditTransaction {
 #[derive(Clone, Debug)]
 pub struct EditResult {
     pub operations: Vec<EditOperation>,
+    /// Effective identifiers selected for any `DefineStyle` operations.
+    ///
+    /// A request can reuse an equivalent existing declaration under a different
+    /// stable identifier. Callers that create then apply a style across
+    /// separate transactions should use this mapping rather than assume the
+    /// requested identifier was added.
+    pub style_definitions: Vec<StyleDefinitionResolution>,
     pub patches: PatchSet,
     /// Validated, source-bound undo transaction.
     pub inverse_transaction: InverseTransaction,
@@ -181,6 +225,19 @@ pub struct EditResult {
     pub diagnostics: Vec<Diagnostic>,
     pub before: SourceFingerprint,
     pub after: SourceFingerprint,
+}
+
+/// The stable style selected for one `DefineStyle` request.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct StyleDefinitionResolution {
+    /// Index of the corresponding [`EditOperation::DefineStyle`] operation.
+    pub operation_index: usize,
+    /// Identifier supplied to [`EditOperation::DefineStyle`].
+    pub requested: StyleId,
+    /// Existing or newly-created stable identifier selected for this style.
+    pub effective: StyleId,
+    /// Whether this transaction authored a new `@style` declaration.
+    pub created: bool,
 }
 
 impl EditResult {
@@ -208,6 +265,9 @@ pub enum EditErrorKind {
     DestinationOverlap,
     InvalidMove,
     InvalidValue,
+    InvalidNameTarget,
+    InvalidGeometry,
+    InvalidStyle,
     ReferenceRewrite,
     PatchPlan,
     InvalidResult,
@@ -271,15 +331,32 @@ impl std::error::Error for EditError {}
 /// Returns [`EditError`] without a partial patch plan if a source precondition,
 /// operation precondition, patch invariant, or final validation fails.
 pub fn execute(source: &[u8], transaction: &EditTransaction) -> Result<EditResult, EditError> {
+    execute_with_parse_options(source, transaction, &ParseOptions::default())
+}
+
+/// Executes a transaction with host-controlled parser capabilities.
+///
+/// The same `options` value validates the initial snapshot and the patched
+/// result, so extension availability cannot change inside the atomic edit.
+///
+/// # Errors
+///
+/// Returns [`EditError`] without a partial patch plan under the same
+/// conditions as [`execute`].
+pub fn execute_with_parse_options(
+    source: &[u8],
+    transaction: &EditTransaction,
+    options: &ParseOptions,
+) -> Result<EditResult, EditError> {
     let before = SourceFingerprint::of(source);
-    if let Some(expected) = &transaction.expectations.source
-        && !expected.matches(source, before)
-    {
-        return Err(EditError::new(
-            EditErrorKind::Conflict,
-            None,
-            "source bytes no longer match the transaction precondition",
-        ));
+    if let Some(expected) = &transaction.expectations.source {
+        if !expected.matches(source, before) {
+            return Err(EditError::new(
+                EditErrorKind::Conflict,
+                None,
+                "source bytes no longer match the transaction precondition",
+            ));
+        }
     }
     if transaction.operations.len() > 1
         && transaction
@@ -293,10 +370,18 @@ pub fn execute(source: &[u8], transaction: &EditTransaction) -> Result<EditResul
             "MoveBlock cannot be combined with another same-base operation",
         ));
     }
-    let base = ValidDocument::parse(source, EditErrorKind::InvalidBase)?;
+    let base = ValidDocument::parse(source, EditErrorKind::InvalidBase, options)?;
+    let defined_styles = resolve_style_definitions(&base, &transaction.operations)?;
     let mut patches = Vec::new();
     for (index, operation) in transaction.operations.iter().enumerate() {
-        plan_operation(source, &base, operation, index, &mut patches)?;
+        plan_operation(
+            source,
+            &base,
+            operation,
+            index,
+            &defined_styles,
+            &mut patches,
+        )?;
     }
     patches = normalize_combined_patches(patches)?;
     patches.sort_by_key(patch_order);
@@ -306,11 +391,12 @@ pub fn execute(source: &[u8], transaction: &EditTransaction) -> Result<EditResul
     let (edited, inverse) = patch_set
         .apply_with_inverse(source)
         .map_err(|error| patch_error(&error))?;
-    let validated = ValidDocument::parse(&edited, EditErrorKind::InvalidResult)?;
+    let validated = ValidDocument::parse(&edited, EditErrorKind::InvalidResult, options)?;
     let inverse_transaction = InverseTransaction::from_patch_set(inverse.clone());
 
     Ok(EditResult {
         operations: transaction.operations.clone(),
+        style_definitions: defined_styles,
         patches: patch_set,
         inverse_transaction,
         inverse,
@@ -330,8 +416,12 @@ struct ValidDocument {
 }
 
 impl ValidDocument {
-    fn parse(source: &[u8], error_kind: EditErrorKind) -> Result<Self, EditError> {
-        let document = parse(source);
+    fn parse(
+        source: &[u8],
+        error_kind: EditErrorKind,
+        options: &ParseOptions,
+    ) -> Result<Self, EditError> {
+        let document = parse_with_options(source, options);
         if document.has_errors() {
             return Err(EditError::invalid_document(
                 error_kind,
@@ -398,6 +488,7 @@ fn plan_operation(
     base: &ValidDocument,
     operation: &EditOperation,
     index: usize,
+    defined_styles: &[StyleDefinitionResolution],
     patches: &mut Vec<SourcePatch>,
 ) -> Result<(), EditError> {
     match operation {
@@ -418,11 +509,43 @@ fn plan_operation(
         EditOperation::RenameNameId { old, new } => {
             plan_rename_name_id(source, base, old, new, index, patches)
         }
+        EditOperation::SetNameTarget { name, target } => {
+            plan_set_name_target(source, base, name, target, index, patches)
+        }
+        EditOperation::DefineStyle { style, properties } => {
+            let definition = style_definition_at(defined_styles, index).ok_or_else(|| {
+                operation_error(
+                    index,
+                    EditErrorKind::PatchPlan,
+                    "style definition was not resolved before planning",
+                )
+            })?;
+            plan_define_style(source, base, style, properties, definition, index, patches)
+        }
         EditOperation::ApplyStyle {
             sheet,
             target,
             style,
-        } => plan_apply_style(source, base, sheet, target, style, index, patches),
+        } => plan_apply_style(
+            source,
+            base,
+            sheet,
+            target,
+            style,
+            defined_styles,
+            index,
+            patches,
+        ),
+        EditOperation::SetColumnWidth {
+            sheet,
+            columns,
+            width,
+        } => plan_set_column_width(source, base, sheet, *columns, *width, index, patches),
+        EditOperation::SetRowHeight {
+            sheet,
+            rows,
+            height,
+        } => plan_set_row_height(source, base, sheet, *rows, *height, index, patches),
         EditOperation::MoveBlock {
             sheet,
             source: footprint,
@@ -596,20 +719,683 @@ fn plan_rename_sheet_label(
     )
 }
 
+fn resolve_style_definitions(
+    base: &ValidDocument,
+    operations: &[EditOperation],
+) -> Result<Vec<StyleDefinitionResolution>, EditError> {
+    let mut resolutions = Vec::new();
+    for (index, operation) in operations.iter().enumerate() {
+        let EditOperation::DefineStyle { style, properties } = operation else {
+            continue;
+        };
+        validate_style_properties(properties, index)?;
+        if let Some(existing) = base
+            .workbook
+            .styles
+            .iter()
+            .find(|candidate| candidate.id == *style)
+        {
+            if existing.properties != *properties {
+                return Err(operation_error(
+                    index,
+                    EditErrorKind::IdentifierCollision,
+                    "style identifier already has different declared properties",
+                ));
+            }
+            resolutions.push(StyleDefinitionResolution {
+                operation_index: index,
+                requested: style.clone(),
+                effective: existing.id.clone(),
+                created: false,
+            });
+            continue;
+        }
+
+        if let Some(existing) = base
+            .workbook
+            .styles
+            .iter()
+            .find(|candidate| candidate.properties == *properties)
+        {
+            resolutions.push(StyleDefinitionResolution {
+                operation_index: index,
+                requested: style.clone(),
+                effective: existing.id.clone(),
+                created: false,
+            });
+            continue;
+        }
+
+        if let Some(previous) = resolutions
+            .iter()
+            .find(|resolution| resolution.requested == *style)
+        {
+            // The first identical in-transaction definition owns the new
+            // declaration. A later request for the same ID must not quietly
+            // change its meaning.
+            let prior_properties = operations.iter().find_map(|candidate| match candidate {
+                EditOperation::DefineStyle {
+                    style: prior_style,
+                    properties,
+                } if prior_style == style => Some(properties),
+                _ => None,
+            });
+            debug_assert!(prior_properties.is_some());
+            if prior_properties != Some(properties) {
+                return Err(operation_error(
+                    index,
+                    EditErrorKind::IdentifierCollision,
+                    "style identifier is requested with different declared properties",
+                ));
+            }
+            resolutions.push(StyleDefinitionResolution {
+                operation_index: index,
+                requested: style.clone(),
+                effective: previous.effective.clone(),
+                created: false,
+            });
+            continue;
+        }
+
+        if let Some(previous) = resolutions.iter().find(|resolution| {
+            operations.iter().any(|candidate| {
+                matches!(candidate, EditOperation::DefineStyle { style, properties: prior }
+                    if style == &resolution.requested && prior == properties)
+            })
+        }) {
+            // Two fresh IDs with equal property maps in one transaction also
+            // coalesce. Operation order supplies the deterministic stable ID.
+            resolutions.push(StyleDefinitionResolution {
+                operation_index: index,
+                requested: style.clone(),
+                effective: previous.effective.clone(),
+                created: false,
+            });
+            continue;
+        }
+
+        resolutions.push(StyleDefinitionResolution {
+            operation_index: index,
+            requested: style.clone(),
+            effective: style.clone(),
+            created: true,
+        });
+    }
+    Ok(resolutions)
+}
+
+fn style_definition_for<'a>(
+    definitions: &'a [StyleDefinitionResolution],
+    requested: &StyleId,
+) -> Option<&'a StyleDefinitionResolution> {
+    definitions
+        .iter()
+        .find(|definition| &definition.requested == requested)
+}
+
+fn style_definition_at(
+    definitions: &[StyleDefinitionResolution],
+    operation_index: usize,
+) -> Option<&StyleDefinitionResolution> {
+    definitions
+        .iter()
+        .find(|definition| definition.operation_index == operation_index)
+}
+
+fn effective_style_id(definitions: &[StyleDefinitionResolution], requested: &StyleId) -> StyleId {
+    style_definition_for(definitions, requested).map_or_else(
+        || requested.clone(),
+        |definition| definition.effective.clone(),
+    )
+}
+
+fn plan_set_name_target(
+    source: &[u8],
+    base: &ValidDocument,
+    name: &NameId,
+    target: &NameTarget,
+    index: usize,
+    patches: &mut Vec<SourcePatch>,
+) -> Result<(), EditError> {
+    let existing = base
+        .workbook
+        .names
+        .iter()
+        .find(|candidate| &candidate.id == name)
+        .ok_or_else(|| {
+            operation_error(index, EditErrorKind::TargetNotFound, "name does not exist")
+        })?;
+    if &existing.target == target {
+        return Ok(());
+    }
+    validate_name_target(base, target, index)?;
+    let location = base.document.source_map.name(name).ok_or_else(|| {
+        operation_error(
+            index,
+            EditErrorKind::UnlocatableSource,
+            "name does not have one unambiguous declaration",
+        )
+    })?;
+    let span = location.target.ok_or_else(|| {
+        operation_error(
+            index,
+            EditErrorKind::UnlocatableSource,
+            "name target token could not be located",
+        )
+    })?;
+    push_patch(source, patches, span, format_name_target(target), index)
+}
+
+fn validate_name_target(
+    base: &ValidDocument,
+    target: &NameTarget,
+    index: usize,
+) -> Result<(), EditError> {
+    match target {
+        NameTarget::Cell(target) => {
+            validate_name_coordinate(target.coordinate, index)?;
+            if !base
+                .workbook
+                .sheets
+                .iter()
+                .any(|sheet| sheet.id == target.sheet)
+            {
+                return Err(operation_error(
+                    index,
+                    EditErrorKind::TargetNotFound,
+                    "named cell target sheet does not exist",
+                ));
+            }
+        }
+        NameTarget::Range(target) => {
+            validate_name_range(target.range, index)?;
+            if !base
+                .workbook
+                .sheets
+                .iter()
+                .any(|sheet| sheet.id == target.sheet)
+            {
+                return Err(operation_error(
+                    index,
+                    EditErrorKind::TargetNotFound,
+                    "named range target sheet does not exist",
+                ));
+            }
+        }
+        NameTarget::TableColumn { table, header } => {
+            let Some(table) = base.prepared.table(table) else {
+                return Err(operation_error(
+                    index,
+                    EditErrorKind::TargetNotFound,
+                    "named table target does not exist",
+                ));
+            };
+            if !table.headers.contains_key(header) {
+                return Err(operation_error(
+                    index,
+                    EditErrorKind::TargetNotFound,
+                    "named table target header does not exist",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_name_coordinate(coordinate: Coordinate, index: usize) -> Result<(), EditError> {
+    if coordinate.column == 0 || coordinate.row == 0 {
+        return Err(operation_error(
+            index,
+            EditErrorKind::InvalidNameTarget,
+            "named cell target must use one-based coordinates",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_name_range(range: Range, index: usize) -> Result<(), EditError> {
+    validate_name_coordinate(range.start, index)?;
+    validate_name_coordinate(range.end, index)?;
+    if range.start.column > range.end.column || range.start.row > range.end.row {
+        return Err(operation_error(
+            index,
+            EditErrorKind::InvalidNameTarget,
+            "named range target must have ordered coordinates",
+        ));
+    }
+    Ok(())
+}
+
+fn format_name_target(target: &NameTarget) -> String {
+    match target {
+        NameTarget::Cell(target) => format!("{}!{}", target.sheet, target.coordinate),
+        NameTarget::Range(target) => format!("{}!{}", target.sheet, target.range),
+        NameTarget::TableColumn { table, header } => {
+            format!("{table}[{}]", header.replace(']', "]]"))
+        }
+    }
+}
+
+fn plan_define_style(
+    source: &[u8],
+    base: &ValidDocument,
+    style: &StyleId,
+    properties: &StyleProperties,
+    definition: &StyleDefinitionResolution,
+    index: usize,
+    patches: &mut Vec<SourcePatch>,
+) -> Result<(), EditError> {
+    if !definition.created {
+        return Ok(());
+    }
+    debug_assert_eq!(&definition.requested, style);
+    debug_assert_eq!(&definition.effective, style);
+    let insertion = base
+        .document
+        .source_map
+        .top_level_insertion()
+        .ok_or_else(|| {
+            operation_error(
+                index,
+                EditErrorKind::UnlocatableSource,
+                "workbook does not have a safe root directive insertion point",
+            )
+        })?;
+    append_directive(
+        source,
+        patches,
+        insertion,
+        &format!("@style {style}{}", format_style_properties(properties)?),
+        index,
+        "style declaration insertion point has no local line-ending convention",
+    )
+}
+
+fn plan_set_column_width(
+    source: &[u8],
+    base: &ValidDocument,
+    sheet: &SheetId,
+    columns: ColumnRange,
+    width: f64,
+    index: usize,
+    patches: &mut Vec<SourcePatch>,
+) -> Result<(), EditError> {
+    validate_column_geometry(columns, width, index)?;
+    let semantic_sheet = base
+        .workbook
+        .sheets
+        .iter()
+        .find(|candidate| &candidate.id == sheet)
+        .ok_or_else(|| {
+            operation_error(index, EditErrorKind::TargetNotFound, "sheet does not exist")
+        })?;
+    if effective_column_geometry_is(semantic_sheet, columns, width) {
+        return Ok(());
+    }
+    append_sheet_directive(
+        source,
+        base,
+        sheet,
+        &format!(
+            "@column {} width={}",
+            format_column_range(columns),
+            format_finite_number(width).expect("validated finite geometry width")
+        ),
+        index,
+        patches,
+    )
+}
+
+fn plan_set_row_height(
+    source: &[u8],
+    base: &ValidDocument,
+    sheet: &SheetId,
+    rows: RowRange,
+    height: f64,
+    index: usize,
+    patches: &mut Vec<SourcePatch>,
+) -> Result<(), EditError> {
+    validate_row_geometry(rows, height, index)?;
+    let semantic_sheet = base
+        .workbook
+        .sheets
+        .iter()
+        .find(|candidate| &candidate.id == sheet)
+        .ok_or_else(|| {
+            operation_error(index, EditErrorKind::TargetNotFound, "sheet does not exist")
+        })?;
+    if effective_row_geometry_is(semantic_sheet, rows, height) {
+        return Ok(());
+    }
+    append_sheet_directive(
+        source,
+        base,
+        sheet,
+        &format!(
+            "@row {} height={}",
+            format_row_range(rows),
+            format_finite_number(height).expect("validated finite row height")
+        ),
+        index,
+        patches,
+    )
+}
+
+fn validate_style_properties(properties: &StyleProperties, index: usize) -> Result<(), EditError> {
+    if properties
+        .font_size
+        .is_some_and(|size| !size.is_finite() || size <= 0.0)
+    {
+        return Err(operation_error(
+            index,
+            EditErrorKind::InvalidStyle,
+            "style font size must be a positive finite number",
+        ));
+    }
+    if properties.decimals.is_some_and(|decimals| decimals > 15) {
+        return Err(operation_error(
+            index,
+            EditErrorKind::InvalidStyle,
+            "style decimals must be between 0 and 15",
+        ));
+    }
+    if let Some(currency) = &properties.currency {
+        if currency.len() != 3 || !currency.bytes().all(|byte| byte.is_ascii_uppercase()) {
+            return Err(operation_error(
+                index,
+                EditErrorKind::InvalidStyle,
+                "style currency must be a three-letter uppercase ISO 4217 code",
+            ));
+        }
+    }
+    if properties.number == Some(NumberFormat::Currency) && properties.currency.is_none() {
+        return Err(operation_error(
+            index,
+            EditErrorKind::InvalidStyle,
+            "currency number styles require a currency code",
+        ));
+    }
+    Ok(())
+}
+
+fn format_style_properties(properties: &StyleProperties) -> Result<String, EditError> {
+    let mut fields = Vec::new();
+    if let Some(value) = properties.bold {
+        fields.push(format!("bold={value}"));
+    }
+    if let Some(value) = properties.italic {
+        fields.push(format!("italic={value}"));
+    }
+    if let Some(value) = properties.wrap {
+        fields.push(format!("wrap={value}"));
+    }
+    if let Some(value) = &properties.text_color {
+        fields.push(format!(
+            "text-color={}",
+            encode_json_string_text(value.as_str())
+        ));
+    }
+    if let Some(value) = &properties.fill {
+        fields.push(format!("fill={}", encode_json_string_text(value.as_str())));
+    }
+    if let Some(value) = properties.font_size {
+        fields.push(format!(
+            "font-size={}",
+            format_finite_number(value).ok_or_else(|| {
+                EditError::new(
+                    EditErrorKind::InvalidStyle,
+                    None,
+                    "style font size must be a finite JSON number",
+                )
+            })?
+        ));
+    }
+    if let Some(value) = properties.align {
+        fields.push(format!("align={}", format_align(value)));
+    }
+    if let Some(value) = properties.valign {
+        fields.push(format!("valign={}", format_valign(value)));
+    }
+    if let Some(value) = properties.number {
+        fields.push(format!("number={}", format_number_format(value)));
+    }
+    if let Some(value) = properties.decimals {
+        fields.push(format!("decimals={value}"));
+    }
+    if let Some(value) = &properties.currency {
+        fields.push(format!("currency={}", encode_json_string_text(value)));
+    }
+    Ok(if fields.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", fields.join(" "))
+    })
+}
+
+fn format_align(value: HorizontalAlignment) -> &'static str {
+    match value {
+        HorizontalAlignment::Left => "left",
+        HorizontalAlignment::Center => "center",
+        HorizontalAlignment::Right => "right",
+        HorizontalAlignment::General => "general",
+    }
+}
+
+fn format_valign(value: VerticalAlignment) -> &'static str {
+    match value {
+        VerticalAlignment::Top => "top",
+        VerticalAlignment::Middle => "middle",
+        VerticalAlignment::Bottom => "bottom",
+    }
+}
+
+fn format_number_format(value: NumberFormat) -> &'static str {
+    match value {
+        NumberFormat::General => "general",
+        NumberFormat::Integer => "integer",
+        NumberFormat::Decimal => "decimal",
+        NumberFormat::Percent => "percent",
+        NumberFormat::Currency => "currency",
+        NumberFormat::Date => "date",
+        NumberFormat::DateTime => "datetime",
+    }
+}
+
+fn validate_column_geometry(
+    columns: ColumnRange,
+    width: f64,
+    index: usize,
+) -> Result<(), EditError> {
+    if columns.start == 0 || columns.end == 0 || columns.start > columns.end {
+        return Err(operation_error(
+            index,
+            EditErrorKind::InvalidGeometry,
+            "column range must be ordered and use one-based columns",
+        ));
+    }
+    if !width.is_finite() || width <= 0.0 {
+        return Err(operation_error(
+            index,
+            EditErrorKind::InvalidGeometry,
+            "column width must be a positive finite number",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_row_geometry(rows: RowRange, height: f64, index: usize) -> Result<(), EditError> {
+    if rows.start == 0 || rows.end == 0 || rows.start > rows.end {
+        return Err(operation_error(
+            index,
+            EditErrorKind::InvalidGeometry,
+            "row range must be ordered and use one-based rows",
+        ));
+    }
+    if !height.is_finite() || height <= 0.0 {
+        return Err(operation_error(
+            index,
+            EditErrorKind::InvalidGeometry,
+            "row height must be a positive finite number",
+        ));
+    }
+    Ok(())
+}
+
+fn effective_column_geometry_is(
+    sheet: &marksheet_model::Sheet,
+    target: ColumnRange,
+    width: f64,
+) -> bool {
+    sheet.items.iter().rev().find_map(|item| match item {
+        SheetItem::ColumnGeometry(geometry) if column_ranges_overlap(geometry.columns, target) => {
+            Some(geometry.columns == target && geometry.width.to_bits() == width.to_bits())
+        }
+        _ => None,
+    }) == Some(true)
+}
+
+fn effective_row_geometry_is(
+    sheet: &marksheet_model::Sheet,
+    target: RowRange,
+    height: f64,
+) -> bool {
+    sheet.items.iter().rev().find_map(|item| match item {
+        SheetItem::RowGeometry(geometry) if row_ranges_overlap(geometry.rows, target) => {
+            Some(geometry.rows == target && geometry.height.to_bits() == height.to_bits())
+        }
+        _ => None,
+    }) == Some(true)
+}
+
+fn column_ranges_overlap(left: ColumnRange, right: ColumnRange) -> bool {
+    left.start <= right.end && right.start <= left.end
+}
+
+fn row_ranges_overlap(left: RowRange, right: RowRange) -> bool {
+    left.start <= right.end && right.start <= left.end
+}
+
+fn format_column_range(columns: ColumnRange) -> String {
+    let start = Coordinate {
+        column: columns.start,
+        row: 1,
+    }
+    .column_name();
+    let end = Coordinate {
+        column: columns.end,
+        row: 1,
+    }
+    .column_name();
+    if columns.start == columns.end {
+        start
+    } else {
+        format!("{start}:{end}")
+    }
+}
+
+fn format_row_range(rows: RowRange) -> String {
+    if rows.start == rows.end {
+        rows.start.to_string()
+    } else {
+        format!("{}:{}", rows.start, rows.end)
+    }
+}
+
+fn format_finite_number(value: f64) -> Option<String> {
+    // Rust's finite float formatter emits the JSON number grammar used by
+    // Marksheet (including exponent notation when needed). Non-finite values
+    // are excluded before this helper is called.
+    value.is_finite().then(|| value.to_string())
+}
+
+fn append_sheet_directive(
+    source: &[u8],
+    base: &ValidDocument,
+    sheet: &SheetId,
+    line: &str,
+    index: usize,
+    patches: &mut Vec<SourcePatch>,
+) -> Result<(), EditError> {
+    let insertion = base.document.source_map.sheet_insertion(sheet).or_else(|| {
+        // A syntactically valid final `@sheet` may omit its final line ending.
+        // It is still safe to append a new directive after adding that one
+        // separator; recovered CSV/extension constructs were already rejected
+        // by `ValidDocument::parse`.
+        let location = base.document.source_map.sheet(sheet)?;
+        let last_sheet = base
+            .document
+            .source_map
+            .sheets()
+            .iter()
+            .map(|candidate| candidate.directive.line.start)
+            .max()?;
+        (location.directive.line.start == last_sheet)
+            .then_some(ByteSpan::empty(u64::try_from(source.len()).ok()?))
+    });
+    let insertion = insertion.ok_or_else(|| {
+        operation_error(
+            index,
+            EditErrorKind::UnlocatableSource,
+            "sheet does not have a safe directive insertion point",
+        )
+    })?;
+    append_directive(
+        source,
+        patches,
+        insertion,
+        line,
+        index,
+        "sheet directive insertion point has no local line-ending convention",
+    )
+}
+
+fn append_directive(
+    source: &[u8],
+    patches: &mut Vec<SourcePatch>,
+    insertion: ByteSpan,
+    line: &str,
+    index: usize,
+    missing_newline_message: &'static str,
+) -> Result<(), EditError> {
+    let ends_on_newline = newline_before(source, insertion.start);
+    let newline = ends_on_newline
+        .or_else(|| newline_at_or_before(source, insertion.start))
+        .ok_or_else(|| {
+            operation_error(
+                index,
+                EditErrorKind::UnlocatableSource,
+                missing_newline_message,
+            )
+        })?;
+    let mut replacement = Vec::new();
+    if ends_on_newline.is_none() {
+        replacement.extend_from_slice(newline);
+    }
+    replacement.extend_from_slice(line.as_bytes());
+    replacement.extend_from_slice(newline);
+    push_patch(source, patches, insertion, replacement, index)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn plan_apply_style(
     source: &[u8],
     base: &ValidDocument,
     sheet: &SheetId,
     target: &ApplyTarget,
     style: &StyleId,
+    defined_styles: &[StyleDefinitionResolution],
     index: usize,
     patches: &mut Vec<SourcePatch>,
 ) -> Result<(), EditError> {
+    let effective_style = effective_style_id(defined_styles, style);
     if !base
         .workbook
         .styles
         .iter()
-        .any(|candidate| &candidate.id == style)
+        .any(|candidate| candidate.id == effective_style)
+        && !defined_styles
+            .iter()
+            .any(|candidate| candidate.created && candidate.effective == effective_style)
     {
         return Err(operation_error(
             index,
@@ -636,13 +1422,20 @@ fn plan_apply_style(
             _ => None,
         });
     if last_application.is_some_and(|apply| {
-        &apply.target == target && apply.styles.as_slice() == std::slice::from_ref(style)
+        &apply.target == target && apply.styles.as_slice() == std::slice::from_ref(&effective_style)
     }) {
         return Ok(());
     }
 
-    let (insertion, replacement) =
-        apply_style_patch(source, base, semantic_sheet, sheet, target, style, index)?;
+    let (insertion, replacement) = apply_style_patch(
+        source,
+        base,
+        semantic_sheet,
+        sheet,
+        target,
+        &effective_style,
+        index,
+    )?;
     push_patch(source, patches, insertion, replacement, index)
 }
 
@@ -763,14 +1556,14 @@ fn validate_apply_target(
             "style application table is not owned by the target sheet",
         ));
     }
-    if let TableRegion::Column { header } = region
-        && !table_index.headers.contains_key(header)
-    {
-        return Err(operation_error(
-            index,
-            EditErrorKind::TargetNotFound,
-            "style application table header does not exist",
-        ));
+    if let TableRegion::Column { header } = region {
+        if !table_index.headers.contains_key(header) {
+            return Err(operation_error(
+                index,
+                EditErrorKind::TargetNotFound,
+                "style application table header does not exist",
+            ));
+        }
     }
     Ok(())
 }
@@ -1926,6 +2719,13 @@ fn encode_json_string(value: &str) -> Vec<u8> {
     encoded.into_bytes()
 }
 
+fn encode_json_string_text(value: &str) -> String {
+    // `encode_json_string` only emits ASCII syntax plus UTF-8 source
+    // characters, so this conversion cannot fail. Keeping the byte-oriented
+    // primitive avoids a second implementation for source patches.
+    String::from_utf8(encode_json_string(value)).expect("JSON string encoder emits UTF-8")
+}
+
 fn table_newline(source: &[u8], body: ByteSpan) -> &'static [u8] {
     let bytes = source_slice(source, body).unwrap_or_default();
     if bytes.ends_with(b"\r\n") {
@@ -1961,6 +2761,8 @@ fn newline_before(source: &[u8], offset: u64) -> Option<&'static [u8]> {
         Some(b"\r\n")
     } else if source.get(offset.checked_sub(1)?..offset) == Some(b"\n") {
         Some(b"\n")
+    } else if source.get(offset.checked_sub(1)?..offset) == Some(b"\r") {
+        Some(b"\r")
     } else {
         None
     }
@@ -1968,12 +2770,17 @@ fn newline_before(source: &[u8], offset: u64) -> Option<&'static [u8]> {
 
 fn newline_at_or_before(source: &[u8], offset: u64) -> Option<&'static [u8]> {
     let offset = usize::try_from(offset).ok()?.min(source.len());
-    let newline = source[..offset].iter().rposition(|byte| *byte == b'\n')?;
-    if newline > 0 && source[newline - 1] == b'\r' {
-        Some(b"\r\n")
-    } else {
-        Some(b"\n")
+    if let Some(newline) = source[..offset].iter().rposition(|byte| *byte == b'\n') {
+        return if newline > 0 && source[newline - 1] == b'\r' {
+            Some(b"\r\n")
+        } else {
+            Some(b"\n")
+        };
     }
+    source[..offset]
+        .iter()
+        .rposition(|byte| *byte == b'\r')
+        .map(|_| b"\r".as_slice())
 }
 
 fn patch_order(patch: &SourcePatch) -> (u64, u8, u64) {
@@ -2314,6 +3121,212 @@ mod tests {
         .execute(source)
         .unwrap_err();
         assert_eq!(missing_style.kind, EditErrorKind::TargetNotFound);
+    }
+
+    #[test]
+    fn set_name_target_replaces_only_the_target_token_and_validates_it() {
+        let source = b"#!marksheet 0.1\n@name selected = data!A1\n@sheet data \"Data\"\n@block A1 csv\nOne,Two\n1,2\n@end\n";
+        let target = NameTarget::Range(marksheet_model::SheetRange {
+            sheet: sheet("data"),
+            range: range("A2:B2"),
+        });
+        let result = execute_one(
+            source,
+            EditOperation::SetNameTarget {
+                name: name("selected"),
+                target,
+            },
+        );
+        assert_eq!(
+            result.source,
+            b"#!marksheet 0.1\n@name selected = data!A2:B2\n@sheet data \"Data\"\n@block A1 csv\nOne,Two\n1,2\n@end\n"
+        );
+        assert_undo(&result, source);
+
+        let missing_sheet = EditTransaction::single(EditOperation::SetNameTarget {
+            name: name("selected"),
+            target: NameTarget::Cell(marksheet_model::SheetCoordinate {
+                sheet: sheet("missing"),
+                coordinate: coordinate("A1"),
+            }),
+        })
+        .execute(source)
+        .unwrap_err();
+        assert_eq!(missing_sheet.kind, EditErrorKind::TargetNotFound);
+
+        let invalid_coordinate = EditTransaction::single(EditOperation::SetNameTarget {
+            name: name("selected"),
+            target: NameTarget::Cell(marksheet_model::SheetCoordinate {
+                sheet: sheet("data"),
+                coordinate: Coordinate { column: 0, row: 1 },
+            }),
+        })
+        .execute(source)
+        .unwrap_err();
+        assert_eq!(invalid_coordinate.kind, EditErrorKind::InvalidNameTarget);
+    }
+
+    #[test]
+    fn geometry_controls_append_later_directives_in_the_target_sheet() {
+        let source = b"#!marksheet 0.1\n@sheet data \"Data\"\n@block A1 csv\nValue\n1\n@end\n@sheet report \"Report\"\n";
+        let transaction = EditTransaction {
+            operations: vec![
+                EditOperation::SetColumnWidth {
+                    sheet: sheet("data"),
+                    columns: ColumnRange::new(2, 4).unwrap(),
+                    width: 18.0,
+                },
+                EditOperation::SetRowHeight {
+                    sheet: sheet("data"),
+                    rows: RowRange::new(2, 3).unwrap(),
+                    height: 24.0,
+                },
+            ],
+            expectations: EditExpectations::default(),
+        };
+        let result = transaction.execute(source).unwrap();
+        assert_eq!(
+            result.source,
+            b"#!marksheet 0.1\n@sheet data \"Data\"\n@block A1 csv\nValue\n1\n@end\n@column B:D width=18\n@row 2:3 height=24\n@sheet report \"Report\"\n"
+        );
+        assert_undo(&result, source);
+
+        let no_op = execute_one(
+            &result.source,
+            EditOperation::SetColumnWidth {
+                sheet: sheet("data"),
+                columns: ColumnRange::new(2, 4).unwrap(),
+                width: 18.0,
+            },
+        );
+        assert!(!no_op.changed());
+    }
+
+    #[test]
+    fn geometry_controls_reject_unrepresentable_inputs() {
+        let source = b"#!marksheet 0.1\n@sheet data \"Data\"\n";
+        let bad_column = EditTransaction::single(EditOperation::SetColumnWidth {
+            sheet: sheet("data"),
+            columns: ColumnRange { start: 0, end: 1 },
+            width: 12.0,
+        })
+        .execute(source)
+        .unwrap_err();
+        assert_eq!(bad_column.kind, EditErrorKind::InvalidGeometry);
+
+        let bad_row = EditTransaction::single(EditOperation::SetRowHeight {
+            sheet: sheet("data"),
+            rows: RowRange { start: 1, end: 1 },
+            height: f64::INFINITY,
+        })
+        .execute(source)
+        .unwrap_err();
+        assert_eq!(bad_row.kind, EditErrorKind::InvalidGeometry);
+    }
+
+    #[test]
+    fn define_style_can_be_applied_in_the_same_exact_transaction() {
+        let source = b"#!marksheet 0.1\n@name amount = data!A2\n@sheet data \"Data\"\n@block A1 csv\nValue\n1\n@end\n";
+        let transaction = EditTransaction {
+            operations: vec![
+                EditOperation::DefineStyle {
+                    style: StyleId::parse("currency").unwrap(),
+                    properties: StyleProperties {
+                        bold: Some(true),
+                        number: Some(NumberFormat::Currency),
+                        currency: Some("USD".to_owned()),
+                        decimals: Some(2),
+                        ..StyleProperties::default()
+                    },
+                },
+                EditOperation::ApplyStyle {
+                    sheet: sheet("data"),
+                    target: ApplyTarget::Range(range("A2")),
+                    style: StyleId::parse("currency").unwrap(),
+                },
+            ],
+            expectations: EditExpectations::default(),
+        };
+        let result = transaction.execute(source).unwrap();
+        assert_eq!(
+            result.source,
+            b"#!marksheet 0.1\n@name amount = data!A2\n@style currency bold=true number=currency decimals=2 currency=\"USD\"\n@sheet data \"Data\"\n@block A1 csv\nValue\n1\n@end\n@apply A2 currency\n"
+        );
+        assert_undo(&result, source);
+
+        let invalid = EditTransaction::single(EditOperation::DefineStyle {
+            style: StyleId::parse("bad_currency").unwrap(),
+            properties: StyleProperties {
+                number: Some(NumberFormat::Currency),
+                ..StyleProperties::default()
+            },
+        })
+        .execute(source)
+        .unwrap_err();
+        assert_eq!(invalid.kind, EditErrorKind::InvalidStyle);
+    }
+
+    #[test]
+    fn define_style_reuses_structurally_equal_declarations_and_binds_apply() {
+        let source = b"#!marksheet 0.1\n@style money bold=true number=currency decimals=2 currency=\"USD\"\n@sheet data \"Data\"\n@block A1 csv\nValue\n1\n@end\n";
+        let properties = StyleProperties {
+            bold: Some(true),
+            number: Some(NumberFormat::Currency),
+            currency: Some("USD".to_owned()),
+            decimals: Some(2),
+            ..StyleProperties::default()
+        };
+        let transaction = EditTransaction {
+            operations: vec![
+                EditOperation::DefineStyle {
+                    style: StyleId::parse("requested_currency").unwrap(),
+                    properties: properties.clone(),
+                },
+                EditOperation::ApplyStyle {
+                    sheet: sheet("data"),
+                    target: ApplyTarget::Range(range("A2")),
+                    style: StyleId::parse("requested_currency").unwrap(),
+                },
+            ],
+            expectations: EditExpectations::default(),
+        };
+        let result = transaction.execute(source).unwrap();
+        assert_eq!(
+            result.source,
+            b"#!marksheet 0.1\n@style money bold=true number=currency decimals=2 currency=\"USD\"\n@sheet data \"Data\"\n@block A1 csv\nValue\n1\n@end\n@apply A2 money\n"
+        );
+        assert_eq!(
+            result.style_definitions,
+            vec![StyleDefinitionResolution {
+                operation_index: 0,
+                requested: StyleId::parse("requested_currency").unwrap(),
+                effective: StyleId::parse("money").unwrap(),
+                created: false,
+            }]
+        );
+        assert_undo(&result, source);
+
+        let same_id = execute_one(
+            source,
+            EditOperation::DefineStyle {
+                style: StyleId::parse("money").unwrap(),
+                properties: properties.clone(),
+            },
+        );
+        assert!(!same_id.changed());
+        assert_eq!(same_id.style_definitions[0].effective.as_str(), "money");
+        assert!(!same_id.style_definitions[0].created);
+
+        let conflict = EditTransaction::single(EditOperation::DefineStyle {
+            style: StyleId::parse("money").unwrap(),
+            properties: StyleProperties {
+                bold: Some(false),
+                ..StyleProperties::default()
+            },
+        })
+        .execute(source)
+        .unwrap_err();
+        assert_eq!(conflict.kind, EditErrorKind::IdentifierCollision);
     }
 
     #[test]

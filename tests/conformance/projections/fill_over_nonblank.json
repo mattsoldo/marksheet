@@ -1,0 +1,206 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [
+    {
+      "code": "MS2201",
+      "severity": "error",
+      "span": [
+        73,
+        87
+      ]
+    }
+  ],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 88,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          34
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          35
+        ]
+      },
+      {
+        "content_span": [
+          35,
+          48
+        ],
+        "ending": "lf",
+        "span": [
+          35,
+          49
+        ]
+      },
+      {
+        "content_span": [
+          49,
+          59
+        ],
+        "ending": "lf",
+        "span": [
+          49,
+          60
+        ]
+      },
+      {
+        "content_span": [
+          60,
+          67
+        ],
+        "ending": "lf",
+        "span": [
+          60,
+          68
+        ]
+      },
+      {
+        "content_span": [
+          68,
+          72
+        ],
+        "ending": "lf",
+        "span": [
+          68,
+          73
+        ]
+      },
+      {
+        "content_span": [
+          73,
+          87
+        ],
+        "ending": "lf",
+        "span": [
+          73,
+          88
+        ]
+      }
+    ],
+    "sha256": "4cdc7dc845a249f939e8bcf8e65630e612703c11a0a71295f5ea49e323710839"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [],
+    "extensions": [],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "main",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              49,
+              68
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "left",
+                    "span": [
+                      49,
+                      53
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "left"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "right",
+                    "span": [
+                      54,
+                      59
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "right"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "2",
+                    "span": [
+                      60,
+                      61
+                    ]
+                  },
+                  "value": {
+                    "kind": "number",
+                    "value": "2"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "=A2*2",
+                    "span": [
+                      62,
+                      67
+                    ]
+                  },
+                  "value": {
+                    "kind": "formula",
+                    "value": "=A2*2"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              35,
+              48
+            ]
+          },
+          {
+            "formula": "=A2*3",
+            "kind": "fill",
+            "span": [
+              73,
+              87
+            ],
+            "target": "B2"
+          }
+        ],
+        "label": "Main",
+        "span": [
+          16,
+          34
+        ]
+      }
+    ],
+    "styles": []
+  }
+}

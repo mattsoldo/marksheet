@@ -1,0 +1,14 @@
+{
+  "protocol": "marksheet-conversion-fixture@1",
+  "request": {"source": {"format": "marksheet", "version": "0.1", "path": "sources/advanced.ms"}, "destination": "xlsx"},
+  "expect": {
+    "fidelity": "lossy",
+    "artifact": "generated/advanced.xlsx",
+    "outcomes": [
+      {"feature": "scalar_cells", "outcome": "exact"},
+      {"feature": "sheets", "outcome": "exact"},
+      {"feature": "extension.charts", "outcome": "omitted", "location": {"source": "@extension charts@1 \"revenue\""}, "detail": "charts are outside the initial XLSX profile"}
+    ],
+    "diagnostics": [{"code": "MS4102", "severity": "warning", "location": {"source": "@extension charts@1 \"revenue\""}}]
+  }
+}

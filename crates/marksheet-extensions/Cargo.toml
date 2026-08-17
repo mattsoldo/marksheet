@@ -1,0 +1,19 @@
+[package]
+name = "marksheet-extensions"
+description = "Trusted, bounded extension registry and assertions host for Marksheet"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+marksheet-calc = { path = "../marksheet-calc" }
+marksheet-model = { path = "../marksheet-model" }
+serde_json.workspace = true
+
+[dev-dependencies]
+marksheet-syntax = { path = "../marksheet-syntax" }
+
+[lints]
+workspace = true

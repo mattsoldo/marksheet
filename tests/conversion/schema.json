@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://marksheet.dev/schema/conversion-fixtures-1.json",
+  "title": "Marksheet conversion fixture corpus",
+  "type": "object",
+  "required": ["protocol", "request", "expect"],
+  "additionalProperties": false,
+  "properties": {
+    "protocol": {"const": "marksheet-conversion-fixture@1"},
+    "request": {"$ref": "#/$defs/request"},
+    "expect": {"$ref": "#/$defs/expect"}
+  },
+  "$defs": {
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sheet": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "cell": {"type": "string", "pattern": "^[A-Z]+[1-9][0-9]*$"},
+        "range": {"type": "string", "pattern": "^[A-Z]+[1-9][0-9]*(?::[A-Z]+[1-9][0-9]*)?$"},
+        "table": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "source": {"type": "string", "minLength": 1}
+      },
+      "minProperties": 1
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "version"],
+      "properties": {
+        "format": {"enum": ["marksheet", "xlsx", "csv"]},
+        "version": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "pattern": "^(?:[a-z0-9_./-]+)\\.(?:ms|csv)$"},
+        "fixture": {"type": "string", "pattern": "^[a-z0-9_./-]+\\.json$"}
+      },
+      "oneOf": [
+        {"required": ["path"]},
+        {"required": ["fixture"]}
+      ]
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "destination"],
+      "properties": {
+        "source": {"$ref": "#/$defs/source"},
+        "destination": {"enum": ["marksheet", "xlsx", "csv"]},
+        "selection": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "table": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+            "sheet": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+            "range": {"type": "string", "pattern": "^[A-Z]+[1-9][0-9]*(?::[A-Z]+[1-9][0-9]*)?$"}
+          },
+          "oneOf": [
+            {"required": ["table"]},
+            {"required": ["sheet", "range"]}
+          ]
+        },
+        "import_target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sheet", "label"],
+          "properties": {
+            "sheet": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+            "label": {"type": "string", "minLength": 1},
+            "anchor": {"type": "string", "pattern": "^[A-Z]+[1-9][0-9]*$"},
+            "table": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+            "range": {"type": "string", "pattern": "^[A-Z]+[1-9][0-9]*(?::[A-Z]+[1-9][0-9]*)?$"}
+          },
+          "oneOf": [
+            {"required": ["anchor", "table"]},
+            {"required": ["range"]}
+          ]
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["feature", "outcome"],
+      "properties": {
+        "feature": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*$"},
+        "outcome": {"enum": ["exact", "approximated", "omitted", "unsupported"]},
+        "formula": {"enum": ["preserved", "translated", "replaced"]},
+        "location": {"$ref": "#/$defs/location"},
+        "detail": {"type": "string", "minLength": 1}
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity"],
+      "properties": {
+        "code": {"type": "string", "pattern": "^MS[0-9]{4}$"},
+        "severity": {"enum": ["warning", "error"]},
+        "location": {"$ref": "#/$defs/location"}
+      }
+    },
+    "expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fidelity", "outcomes", "diagnostics"],
+      "properties": {
+        "fidelity": {"enum": ["lossless", "lossy", "unsupported"]},
+        "outcomes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/outcome"}},
+        "diagnostics": {"type": "array", "items": {"$ref": "#/$defs/diagnostic"}},
+        "artifact": {"type": "string", "pattern": "^generated/[a-z0-9_./-]+$"}
+      }
+    }
+  }
+}

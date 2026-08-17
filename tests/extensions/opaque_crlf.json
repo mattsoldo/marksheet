@@ -1,0 +1,18 @@
+{
+  "protocol": "marksheet-extension-fixture@1",
+  "registry": ["vendor_data@1"],
+  "source": "opaque_crlf.inline",
+  "expect": {
+    "capabilities_complete": true,
+    "calculation_complete": true,
+    "rendering_complete": true,
+    "validation_complete": true,
+    "valid": true,
+    "diagnostics": [],
+    "opaque_instances": ["vendor_data@1:opaque"],
+    "instance_outcomes": [{"capability": "vendor_data@1", "name": "opaque", "scope": "sheet:inputs", "outcome": "processed"}]
+  },
+  "original_source_base64": "IyFtYXJrc2hlZXQgMC4xDQpAdXNlIHZlbmRvcl9kYXRhQDENCg0KQHNoZWV0IGlucHV0cyAiSW5wdXRzIg0KQGJsb2NrIEExIGNzdg0KVmFsdWUNCjUNCkBlbmQNCkBleHRlbnNpb24gdmVuZG9yX2RhdGFAMSAib3BhcXVlIg0KICBwcmVzZXJ2ZSAgdHdvIHNwYWNlcw0KbGluZT10d28NCkBlbmQNCg==",
+  "lossless_output_base64": "IyFtYXJrc2hlZXQgMC4xDQpAdXNlIHZlbmRvcl9kYXRhQDENCg0KQHNoZWV0IGlucHV0cyAiSW5wdXRzIg0KQGJsb2NrIEExIGNzdg0KVmFsdWUNCjUNCkBlbmQNCkBleHRlbnNpb24gdmVuZG9yX2RhdGFAMSAib3BhcXVlIg0KICBwcmVzZXJ2ZSAgdHdvIHNwYWNlcw0KbGluZT10d28NCkBlbmQNCg==",
+  "canonical_output_base64": "IyFtYXJrc2hlZXQgMC4xCkB1c2UgdmVuZG9yX2RhdGFAMQoKQHNoZWV0IGlucHV0cyAiSW5wdXRzIgpAYmxvY2sgQTEgY3N2ClZhbHVlCjUKQGVuZApAZXh0ZW5zaW9uIHZlbmRvcl9kYXRhQDEgIm9wYXF1ZSIKICBwcmVzZXJ2ZSAgdHdvIHNwYWNlcwpsaW5lPXR3bwpAZW5kCg=="
+}

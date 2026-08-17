@@ -1,0 +1,279 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [
+    {
+      "code": "MS3102",
+      "severity": "warning",
+      "span": [
+        16,
+        33
+      ]
+    }
+  ],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 170,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          33
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          34
+        ]
+      },
+      {
+        "content_span": [
+          34,
+          34
+        ],
+        "ending": "lf",
+        "span": [
+          34,
+          35
+        ]
+      },
+      {
+        "content_span": [
+          35,
+          57
+        ],
+        "ending": "lf",
+        "span": [
+          35,
+          58
+        ]
+      },
+      {
+        "content_span": [
+          58,
+          71
+        ],
+        "ending": "lf",
+        "span": [
+          58,
+          72
+        ]
+      },
+      {
+        "content_span": [
+          72,
+          82
+        ],
+        "ending": "lf",
+        "span": [
+          72,
+          83
+        ]
+      },
+      {
+        "content_span": [
+          83,
+          90
+        ],
+        "ending": "lf",
+        "span": [
+          83,
+          91
+        ]
+      },
+      {
+        "content_span": [
+          91,
+          95
+        ],
+        "ending": "lf",
+        "span": [
+          91,
+          96
+        ]
+      },
+      {
+        "content_span": [
+          96,
+          128
+        ],
+        "ending": "lf",
+        "span": [
+          96,
+          129
+        ]
+      },
+      {
+        "content_span": [
+          129,
+          142
+        ],
+        "ending": "lf",
+        "span": [
+          129,
+          143
+        ]
+      },
+      {
+        "content_span": [
+          143,
+          164
+        ],
+        "ending": "lf",
+        "span": [
+          143,
+          165
+        ]
+      },
+      {
+        "content_span": [
+          165,
+          169
+        ],
+        "ending": "lf",
+        "span": [
+          165,
+          170
+        ]
+      }
+    ],
+    "sha256": "8c8c0dcbbe5a22006bc6305240c34b6288ee2cf6f51efbbc159b0d380d06954b"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [
+      {
+        "id": "assertions@1",
+        "required": false,
+        "span": [
+          16,
+          33
+        ]
+      }
+    ],
+    "extensions": [
+      {
+        "id": "assertions@1",
+        "name": "checks",
+        "payload": {
+          "byte_length": 36,
+          "sha256": "07774ad9b1fdfe2240c20edb21f3ded2e36d41e6af96645dc8423a20b10fdbaf",
+          "span": [
+            129,
+            165
+          ]
+        },
+        "scope": "inputs",
+        "span": [
+          96,
+          128
+        ]
+      }
+    ],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "inputs",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              72,
+              91
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "Value",
+                    "span": [
+                      72,
+                      77
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Value"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "Text",
+                    "span": [
+                      78,
+                      82
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Text"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "5",
+                    "span": [
+                      83,
+                      84
+                    ]
+                  },
+                  "value": {
+                    "kind": "number",
+                    "value": "5"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "hello",
+                    "span": [
+                      85,
+                      90
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "hello"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              58,
+              71
+            ]
+          }
+        ],
+        "label": "Inputs",
+        "span": [
+          35,
+          57
+        ]
+      }
+    ],
+    "styles": []
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "protocol": "marksheet-extension-conformance@1",
+  "cases": [
+    {"id": "registry_exact_id", "kind": "registry", "fixture": "registry_exact_id.json"},
+    {"id": "assertions_success", "kind": "assertions", "fixture": "assertions_success.json"},
+    {"id": "assertions_failure", "kind": "assertions", "fixture": "assertions_failure.json"},
+    {"id": "assertions_malformed", "kind": "assertions", "fixture": "assertions_malformed.json"},
+    {"id": "assertions_limits", "kind": "assertions", "fixture": "assertions_limits.json"},
+    {"id": "assertions_scope", "kind": "assertions", "fixture": "assertions_scope.json"},
+    {"id": "optional_major_mismatch", "kind": "availability", "fixture": "optional_major_mismatch.json"},
+    {"id": "required_unavailable", "kind": "availability", "fixture": "required_unavailable.json"},
+    {"id": "undeclared_opaque", "kind": "availability", "fixture": "undeclared_opaque.json"},
+    {"id": "opaque_crlf", "kind": "lossless", "fixture": "opaque_crlf.json"}
+  ]
+}
