@@ -201,19 +201,37 @@ fn import_xlsx_inner(
         std::mem::take(&mut workbook_info.omitted_features),
         &mut report,
     );
+    let styles_part_name = styles_part.unwrap_or("xl/styles.xml");
     let style_definitions = if let Some(part) = styles_part {
         consumed_parts.insert(part.to_owned());
-        let (definitions, unsupported) = parse_styles(package.part(part)?, part, limits)?;
-        record_consumed_part_omissions(part, unsupported, &mut report);
-        definitions
+        let parsed = parse_styles(package.part(part)?, part, limits)?;
+        record_consumed_part_omissions(part, parsed.unsupported, &mut report);
+        record_dropped_number_formats(part, &parsed.dropped_number_formats, &mut report);
+        parsed.definitions
     } else {
         vec![StyleProperties::default()]
     };
     if style_definitions.len() > limits.max_styles {
         return Err(resource(
-            styles_part.unwrap_or("xl/styles.xml"),
+            styles_part_name,
             "style count exceeds the configured limit",
         ));
+    }
+    // OOXML formats every record that names no other cell format with
+    // `cellXfs[0]`, and this importer already reads it when interpreting cell
+    // values. Marksheet has no workbook-wide default style, so a non-default
+    // entry is materialized on each imported record rather than dropped.
+    let default_format_is_significant = style_definitions
+        .first()
+        .is_some_and(|properties| *properties != StyleProperties::default());
+    if default_format_is_significant {
+        report.approximate(
+            ConversionEvent::new(
+                ConversionFeature::Style,
+                "the XLSX default cell format was applied to every imported cell record because Marksheet has no workbook-wide default style",
+            )
+            .at(xlsx_location(styles_part_name, Some("cellXfs[0]"))),
+        );
     }
     let shared_strings = if let Some(part) = shared_part {
         consumed_parts.insert(part.to_owned());
@@ -595,7 +613,7 @@ fn import_xlsx_inner(
             }
         }
         for (coordinate, imported) in &worksheet.cells {
-            if imported.style > 0 {
+            if imported.style > 0 || default_format_is_significant {
                 let style_id = style_id(imported.style)?;
                 items.push(SheetItem::Apply(Apply {
                     target: ApplyTarget::Range(Range::single(*coordinate)),
@@ -634,7 +652,7 @@ fn import_xlsx_inner(
     let styles = style_definitions
         .into_iter()
         .enumerate()
-        .skip(1)
+        .skip(usize::from(!default_format_is_significant))
         .map(|(index, properties)| {
             Ok(Style {
                 id: style_id(index)?,
@@ -992,6 +1010,30 @@ fn record_consumed_part_omissions(
     }
 }
 
+/// Emits one approximated `core_styles` outcome per source cell format whose
+/// number format the Marksheet style model cannot reproduce.
+fn record_dropped_number_formats(
+    part: &str,
+    dropped: &[DroppedNumberFormat],
+    report: &mut ConversionReport,
+) {
+    for format in dropped {
+        let detail = match &format.code {
+            Some(code) => format!(
+                "XLSX number format {} ({code:?}) has no exact Marksheet equivalent",
+                format.id
+            ),
+            None => format!(
+                "built-in XLSX number format {} has no exact Marksheet equivalent",
+                format.id
+            ),
+        };
+        report.approximate(ConversionEvent::new(ConversionFeature::Style, detail).at(
+            xlsx_location(part, Some(&format!("cellXfs[{}]", format.index))),
+        ));
+    }
+}
+
 fn record_unsupported_style_element(
     reader: &Reader<&[u8]>,
     element: &quick_xml::events::BytesStart<'_>,
@@ -1294,11 +1336,27 @@ fn style_color_has_unsupported_attributes(
     Ok(false)
 }
 
+/// A `cellXfs` number format that the Marksheet style model cannot carry back
+/// out unchanged, reported once per source cell format.
+#[derive(Clone, Debug)]
+struct DroppedNumberFormat {
+    index: usize,
+    id: u32,
+    code: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct ParsedStyles {
+    definitions: Vec<StyleProperties>,
+    unsupported: BTreeSet<String>,
+    dropped_number_formats: Vec<DroppedNumberFormat>,
+}
+
 fn parse_styles(
     bytes: &[u8],
     part: &str,
     limits: ConversionLimits,
-) -> Result<(Vec<StyleProperties>, BTreeSet<String>), ConvertError> {
+) -> Result<ParsedStyles, ConvertError> {
     let prepared = prepare_consumed_part(bytes, part)?;
     let bytes = prepared.bytes.as_ref();
     validate_consumed_part_namespaces(bytes, part)?;
@@ -1308,6 +1366,8 @@ fn parse_styles(
     let mut fonts = Vec::<StyleProperties>::new();
     let mut fills = Vec::<Option<Color>>::new();
     let mut xfs = Vec::<StyleProperties>::new();
+    let mut dropped_number_formats = Vec::<DroppedNumberFormat>::new();
+    let mut current_xf_number_format: Option<u32> = None;
     let mut unsupported = BTreeSet::new();
     let mut clamped_decimals = false;
     prepared.record(
@@ -1375,7 +1435,7 @@ fn parse_styles(
                             .ok_or_else(|| resource(part, "base style count overflow"))?;
                     }
                     b"xf" if section == StyleSection::CellXfs => {
-                        let (style, clamped) = xf_style(
+                        let (style, clamped, number_format_loss) = xf_style(
                             &reader,
                             &element,
                             part,
@@ -1386,6 +1446,7 @@ fn parse_styles(
                         )?;
                         clamped_decimals |= clamped;
                         current_xf = Some(style);
+                        current_xf_number_format = number_format_loss;
                     }
                     b"alignment" if section == StyleSection::CellXfs => {
                         if let Some(style) = &mut current_xf {
@@ -1435,7 +1496,7 @@ fn parse_styles(
                         .checked_add(1)
                         .ok_or_else(|| resource(part, "base style count overflow"))?;
                 } else if element_name == b"xf" && section == StyleSection::CellXfs {
-                    let (style, clamped) = xf_style(
+                    let (style, clamped, number_format_loss) = xf_style(
                         &reader,
                         &element,
                         part,
@@ -1445,6 +1506,12 @@ fn parse_styles(
                         base_xfs,
                     )?;
                     clamped_decimals |= clamped;
+                    record_dropped_number_format(
+                        &mut dropped_number_formats,
+                        xfs.len(),
+                        number_format_loss,
+                        &num_formats,
+                    );
                     xfs.push(style);
                 } else if element_name == b"alignment" && section == StyleSection::CellXfs {
                     if let Some(style) = &mut current_xf {
@@ -1478,11 +1545,18 @@ fn parse_styles(
                         .ok_or_else(|| invalid(part, "fill closes without opening"))?
                         .color,
                 ),
-                b"xf" if section == StyleSection::CellXfs => xfs.push(
-                    current_xf
+                b"xf" if section == StyleSection::CellXfs => {
+                    let style = current_xf
                         .take()
-                        .ok_or_else(|| invalid(part, "cell format closes without opening"))?,
-                ),
+                        .ok_or_else(|| invalid(part, "cell format closes without opening"))?;
+                    record_dropped_number_format(
+                        &mut dropped_number_formats,
+                        xfs.len(),
+                        current_xf_number_format.take(),
+                        &num_formats,
+                    );
+                    xfs.push(style);
+                }
                 b"numFmts" | b"fonts" | b"fills" | b"cellStyleXfs" | b"cellXfs" | b"cellStyles" => {
                     section = StyleSection::None;
                 }
@@ -1519,7 +1593,26 @@ fn parse_styles(
         // carry-over and must not be reported as one.
         unsupported.insert("xlsx_style_decimal_precision".to_owned());
     }
-    Ok((xfs, unsupported))
+    Ok(ParsedStyles {
+        definitions: xfs,
+        unsupported,
+        dropped_number_formats,
+    })
+}
+
+fn record_dropped_number_format(
+    dropped: &mut Vec<DroppedNumberFormat>,
+    index: usize,
+    id: Option<u32>,
+    num_formats: &BTreeMap<u32, String>,
+) {
+    if let Some(id) = id {
+        dropped.push(DroppedNumberFormat {
+            index,
+            id,
+            code: num_formats.get(&id).cloned(),
+        });
+    }
 }
 
 fn declared_style_count(
@@ -1597,7 +1690,7 @@ fn xf_style(
     fills: &[Option<Color>],
     num_formats: &BTreeMap<u32, String>,
     base_xfs: usize,
-) -> Result<(StyleProperties, bool), ConvertError> {
+) -> Result<(StyleProperties, bool, Option<u32>), ConvertError> {
     let font_id = parse_usize_attribute(reader, element, b"fontId", part)?.unwrap_or(0);
     let fill_id = parse_usize_attribute(reader, element, b"fillId", part)?.unwrap_or(0);
     let number_id = parse_u32_attribute(reader, element, b"numFmtId", part)?.unwrap_or(0);
@@ -1622,14 +1715,11 @@ fn xf_style(
     if let Some(Some(fill)) = fills.get(fill_id) {
         style.fill = Some(fill.clone());
     }
+    let custom = num_formats.get(&number_id);
     let mut clamped_decimals = false;
-    apply_number_format(
-        &mut style,
-        number_id,
-        num_formats.get(&number_id),
-        &mut clamped_decimals,
-    );
-    Ok((style, clamped_decimals))
+    apply_number_format(&mut style, number_id, custom, &mut clamped_decimals);
+    let loss = number_format_loss(&style, number_id, custom);
+    Ok((style, clamped_decimals, loss))
 }
 
 fn read_alignment(
@@ -1784,6 +1874,7 @@ fn apply_number_format(
             let significant = strip_format_literals(&lowercase);
             if lowercase.contains('%') {
                 style.number = Some(NumberFormat::Percent);
+                style.decimals = Some(fraction_digits(&lowercase));
             } else if lowercase.contains("[$") {
                 // SPEC requires an ISO 4217 code whenever `number=currency`, so
                 // a format whose currency cannot be identified is kept as a
@@ -1802,14 +1893,17 @@ fn apply_number_format(
                 } else {
                     NumberFormat::Date
                 });
-            } else if lowercase.contains('.') {
+            } else if lowercase.contains(['0', '#']) {
                 style.number = Some(NumberFormat::Decimal);
+                style.decimals = Some(fraction_digits(&lowercase));
             }
             // Marksheet's `decimals` property accepts 0 through 15, so a
             // longer run is clamped rather than carried through to a style the
             // serializer would reject. Real statistical workbooks do go past
-            // it: the ONS inflation tables carry a 21-decimal format.
-            style.decimals = lowercase.split_once('.').map(|(_, fraction)| {
+            // it: the ONS inflation tables carry a 21-decimal format. A code
+            // with no fraction part keeps the digit count derived above, so an
+            // explicit zero-decimal format still re-imports exactly.
+            if let Some((_, fraction)) = lowercase.split_once('.') {
                 let declared = fraction
                     .chars()
                     .take_while(|character| *character == '0')
@@ -1817,10 +1911,39 @@ fn apply_number_format(
                 if declared > MAX_STYLE_DECIMALS {
                     *clamped_decimals = true;
                 }
-                u8::try_from(declared.min(MAX_STYLE_DECIMALS)).unwrap_or(u8::MAX)
-            });
+                style.decimals =
+                    Some(u8::try_from(declared.min(MAX_STYLE_DECIMALS)).unwrap_or(u8::MAX));
+            }
         }
     }
+}
+
+/// Counts the fixed decimal places a numeric format code requests. A code
+/// without a fractional section requests none, which is distinct from a style
+/// that leaves the decimal count unspecified.
+fn fraction_digits(code: &str) -> u8 {
+    code.split_once('.').map_or(0, |(_, fraction)| {
+        u8::try_from(
+            fraction
+                .chars()
+                .take_while(|character| *character == '0')
+                .count(),
+        )
+        .unwrap_or(u8::MAX)
+    })
+}
+
+/// Reports the `numFmtId` whenever the Marksheet style it produced would not
+/// re-export as the same OOXML number format. Comparing against the exporter's
+/// own rendering keeps a Marksheet-authored workbook exact while every format
+/// this profile cannot carry stays visible in the conversion report.
+fn number_format_loss(style: &StyleProperties, id: u32, custom: Option<&String>) -> Option<u32> {
+    let rendered = super::export::custom_number_format_code(style);
+    let reversible = match custom {
+        Some(code) => rendered.is_some_and(|rendered| rendered == *code),
+        None => rendered.is_none() && super::export::built_in_number_format(style) == id,
+    };
+    (!reversible).then_some(id)
 }
 
 struct WorksheetParseContext<'a> {
@@ -2311,11 +2434,20 @@ fn cell_value(
             if !number.is_finite() {
                 return Err(invalid(part, "numeric cell is not finite"));
             }
-            match style.number {
-                Some(NumberFormat::Date) => excel_serial(number, false, date_1904, part),
-                Some(NumberFormat::DateTime) => excel_serial(number, true, date_1904, part),
-                _ => Ok(Value::Number(number)),
-            }
+            let Some(format @ (NumberFormat::Date | NumberFormat::DateTime)) = style.number else {
+                return Ok(Value::Number(number));
+            };
+            // The serial only means a date because of its cell format, and
+            // Excel's fictitious 1900 leap day makes the mapping approximate.
+            let value = excel_serial(number, format == NumberFormat::DateTime, date_1904, part)?;
+            report.approximate(
+                ConversionEvent::new(
+                    ConversionFeature::Cell,
+                    "numeric cell was reinterpreted as an absolute date by its date number format",
+                )
+                .at(ConversionLocation::cell(sheet.clone(), coordinate)),
+            );
+            Ok(value)
         }
         Some(other) => Err(ConvertError::new(
             ConvertErrorCode::UnsupportedPackage,
@@ -2668,6 +2800,7 @@ fn assign_name_identifiers(
     Ok(assigned)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn import_names(
     names: &[DefinedName],
     name_ids: &BTreeMap<String, NameId>,
@@ -3812,8 +3945,13 @@ fn insert_style_only(
     if style >= styles.len() {
         return Err(invalid(part, "cell style index is out of bounds"));
     }
-    if style == 0 {
-        // An empty, unstyled OOXML record has no Marksheet semantic effect.
+    if style == 0
+        && styles
+            .first()
+            .is_some_and(|properties| *properties == StyleProperties::default())
+    {
+        // An empty OOXML record that inherits an unstyled `cellXfs[0]` has no
+        // Marksheet semantic effect. A non-default default format does.
         return Ok(());
     }
     let record_count = worksheet
@@ -5495,12 +5633,13 @@ mod tests {
             "</styleSheet>",
             "<dxfs count=\"0\"/><tableStyles count=\"0\"/></styleSheet>",
         );
-        let (_, benign_features) = parse_styles(
+        let benign_features = parse_styles(
             benign.as_bytes(),
             "xl/styles.xml",
             ConversionLimits::default(),
         )
-        .unwrap();
+        .unwrap()
+        .unsupported;
         assert!(benign_features.is_empty(), "{benign_features:?}");
 
         let adversarial = canonical
@@ -5511,12 +5650,13 @@ mod tests {
                 "</styleSheet>",
                 "<dxfs count=\"1\"><dxf/></dxfs><tableStyles count=\"1\" defaultTableStyle=\"TableStyleMedium2\"/></styleSheet>",
             );
-        let (_, adversarial_features) = parse_styles(
+        let adversarial_features = parse_styles(
             adversarial.as_bytes(),
             "xl/styles.xml",
             ConversionLimits::default(),
         )
-        .unwrap();
+        .unwrap()
+        .unsupported;
         for expected in [
             "xlsx_style_base_formats",
             "xlsx_style_apply_flags",
@@ -6372,6 +6512,206 @@ mod tests {
         assert_eq!(
             translated,
             "=SUM (grand_total)+Sales[Amount]+\"Total\"".to_owned()
+        );
+    }
+
+    #[test]
+    fn non_default_cell_xfs_zero_is_materialized_and_reported() {
+        let exported = export_xlsx(&basic_workbook(), ConversionLimits::default()).unwrap();
+        let styles = package_text(&exported.value, "xl/styles.xml")
+            .replacen("<font>", "<font><b/>", 1)
+            .replacen(
+                "<cellXfs count=\"1\"><xf numFmtId=\"0\"",
+                "<cellXfs count=\"1\"><xf numFmtId=\"14\"",
+                1,
+            );
+        let bytes = rewrite_package(&exported.value, &[("xl/styles.xml", &styles)], &[]);
+        let imported = import_xlsx(&bytes, ConversionLimits::default()).unwrap();
+
+        // The workbook default format is emitted instead of being dropped, and
+        // it carries the very properties the importer used to read A1's value.
+        let default_style = imported
+            .value
+            .styles
+            .iter()
+            .find(|style| style.id == style_id(0).unwrap())
+            .expect("cellXfs[0] is emitted as a Marksheet style");
+        assert_eq!(default_style.properties.bold, Some(true));
+        assert_eq!(default_style.properties.number, Some(NumberFormat::Date));
+        assert!(imported.value.sheets[0].items.iter().any(|item| matches!(
+            item,
+            SheetItem::Apply(apply)
+                if apply.target == ApplyTarget::Range(Range::parse("A1").unwrap())
+                    && apply.styles == vec![style_id(0).unwrap()]
+        )));
+        assert!(imported.value.sheets[0].items.iter().any(|item| matches!(
+            item,
+            SheetItem::Block(block) if matches!(block.cells[0][0].value, Value::Date(_))
+        )));
+
+        assert_eq!(imported.report.fidelity(), crate::Fidelity::Lossy);
+        assert!(imported.report.outcomes().iter().any(|outcome| {
+            outcome.feature == "core_styles"
+                && outcome.outcome == crate::FeatureOutcome::Approximated
+                && outcome.locations.contains(&ConversionLocation::Xlsx {
+                    part: "xl/styles.xml".to_owned(),
+                    reference: Some("cellXfs[0]".to_owned()),
+                })
+        }));
+    }
+
+    #[test]
+    fn exported_zero_decimal_number_format_re_imports_exactly() {
+        let style_id = StyleId::parse("count").unwrap();
+        let properties = StyleProperties {
+            number: Some(NumberFormat::Decimal),
+            decimals: Some(0),
+            ..StyleProperties::default()
+        };
+        let source = Workbook {
+            styles: vec![Style {
+                id: style_id.clone(),
+                properties: properties.clone(),
+                origin: None,
+            }],
+            sheets: vec![Sheet {
+                id: SheetId::parse("data").unwrap(),
+                label: "Data".to_owned(),
+                items: vec![
+                    SheetItem::Block(
+                        Block::new(
+                            Coordinate::parse("A1").unwrap(),
+                            vec![vec![Cell::new(Value::Number(1.0))]],
+                        )
+                        .unwrap(),
+                    ),
+                    SheetItem::Apply(Apply {
+                        target: ApplyTarget::Range(Range::parse("A1").unwrap()),
+                        styles: vec![style_id],
+                        origin: None,
+                    }),
+                ],
+                origin: None,
+            }],
+            ..Workbook::default()
+        };
+
+        let exported = export_xlsx(&source, ConversionLimits::default()).unwrap();
+        assert!(
+            package_text(&exported.value, "xl/styles.xml")
+                .contains("<numFmt numFmtId=\"165\" formatCode=\"0\"/>")
+        );
+        let imported = import_xlsx(&exported.value, ConversionLimits::default()).unwrap();
+        assert_eq!(
+            imported
+                .value
+                .styles
+                .iter()
+                .map(|style| style.properties.clone())
+                .collect::<Vec<_>>(),
+            vec![properties]
+        );
+        assert!(
+            !imported.report.outcomes().iter().any(|outcome| {
+                outcome.feature == "core_styles" && outcome.outcome != crate::FeatureOutcome::Exact
+            }),
+            "{:?}",
+            imported.report.outcomes()
+        );
+    }
+
+    #[test]
+    fn number_formats_without_a_marksheet_equivalent_are_reported() {
+        let exported = export_xlsx(&basic_workbook(), ConversionLimits::default()).unwrap();
+        let styles = package_text(&exported.value, "xl/styles.xml")
+            .replacen(
+                "<fonts count=\"1\">",
+                "<numFmts count=\"1\"><numFmt numFmtId=\"164\" formatCode=\"@\"/></numFmts><fonts count=\"2\">",
+                1,
+            )
+            .replacen("<font></font>", "<font></font><font></font>", 1)
+            .replacen(
+                "<cellXfs count=\"1\"><xf numFmtId=\"0\"",
+                "<cellXfs count=\"2\"><xf numFmtId=\"3\"",
+                1,
+            )
+            .replacen(
+                "</cellXfs>",
+                "<xf numFmtId=\"164\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/></cellXfs>",
+                1,
+            );
+        let bytes = rewrite_package(&exported.value, &[("xl/styles.xml", &styles)], &[]);
+        let imported = import_xlsx(&bytes, ConversionLimits::default()).unwrap();
+
+        assert_eq!(imported.report.fidelity(), crate::Fidelity::Lossy);
+        let details: Vec<_> = imported
+            .report
+            .outcomes()
+            .iter()
+            .filter(|outcome| {
+                outcome.feature == "core_styles"
+                    && outcome.outcome == crate::FeatureOutcome::Approximated
+            })
+            .filter_map(|outcome| outcome.detail.clone())
+            .collect();
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail.contains("built-in XLSX number format 3")),
+            "{details:?}"
+        );
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail.contains("XLSX number format 164 (\"@\")")),
+            "{details:?}"
+        );
+    }
+
+    #[test]
+    fn numeric_cells_under_a_date_format_report_the_coercion() {
+        let exported = export_xlsx(&basic_workbook(), ConversionLimits::default()).unwrap();
+        let styles = package_text(&exported.value, "xl/styles.xml")
+            .replacen("<fonts count=\"1\">", "<fonts count=\"2\">", 1)
+            .replacen("<font></font>", "<font></font><font></font>", 1)
+            .replacen("<cellXfs count=\"1\">", "<cellXfs count=\"2\">", 1)
+            .replacen(
+                "</cellXfs>",
+                "<xf numFmtId=\"14\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\"/></cellXfs>",
+                1,
+            );
+        let worksheet = package_text(&exported.value, "xl/worksheets/sheet1.xml")
+            .replace("<c r=\"A1\"", "<c r=\"A1\" s=\"1\"")
+            .replace("<v>1</v>", "<v>5</v>");
+        let bytes = rewrite_package(
+            &exported.value,
+            &[
+                ("xl/styles.xml", &styles),
+                ("xl/worksheets/sheet1.xml", &worksheet),
+            ],
+            &[],
+        );
+        let imported = import_xlsx(&bytes, ConversionLimits::default()).unwrap();
+
+        assert!(imported.value.sheets[0].items.iter().any(|item| matches!(
+            item,
+            SheetItem::Block(block)
+                if block.cells[0][0].value
+                    == Value::Date(Date::from_calendar_date(1900, Month::January, 5).unwrap())
+        )));
+        assert_eq!(imported.report.fidelity(), crate::Fidelity::Lossy);
+        assert!(
+            imported.report.outcomes().iter().any(|outcome| {
+                outcome.feature == "scalar_cells"
+                    && outcome.outcome == crate::FeatureOutcome::Approximated
+                    && outcome.locations
+                        == vec![ConversionLocation::cell(
+                            SheetId::parse("data").unwrap(),
+                            Coordinate::parse("A1").unwrap(),
+                        )]
+            }),
+            "{:?}",
+            imported.report.outcomes()
         );
     }
 }
