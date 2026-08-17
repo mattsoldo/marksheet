@@ -8,3 +8,7 @@ tests/conformance/valid/csv_edge_cases.ms binary
 tests/roundtrip/crlf_input.ms binary
 tests/edit/rename_sheet_id_crlf.before.ms binary
 tests/edit/rename_sheet_id_crlf.after.ms binary
+
+# These fixtures intentionally retain a byte-order mark and invalid UTF-8.
+tests/conformance/invalid/utf8_bom.ms binary
+tests/conformance/invalid/invalid_utf8.ms binary

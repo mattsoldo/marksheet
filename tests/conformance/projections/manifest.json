@@ -52,6 +52,11 @@
       "source": "tests/conformance/invalid/invalid_table_headers.ms"
     },
     {
+      "id": "tests/conformance/invalid/invalid_utf8",
+      "projection": "invalid_utf8.json",
+      "source": "tests/conformance/invalid/invalid_utf8.ms"
+    },
+    {
       "id": "tests/conformance/invalid/malformed_csv",
       "projection": "malformed_csv.json",
       "source": "tests/conformance/invalid/malformed_csv.ms"
@@ -100,6 +105,11 @@
       "id": "tests/conformance/invalid/unsupported_version",
       "projection": "unsupported_version.json",
       "source": "tests/conformance/invalid/unsupported_version.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/utf8_bom",
+      "projection": "utf8_bom.json",
+      "source": "tests/conformance/invalid/utf8_bom.ms"
     },
     {
       "id": "tests/conformance/valid/all_core",

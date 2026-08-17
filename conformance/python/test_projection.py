@@ -109,9 +109,12 @@ class ExistingCorpusTests(unittest.TestCase):
 class ByteLevelTests(unittest.TestCase):
     def test_bom_invalid_utf8_and_bare_cr_are_diagnosed(self) -> None:
         bom = project_bytes(b"\xef\xbb\xbf#!marksheet 0.1\n@sheet s \"S\"\n")
-        self.assertIn("MS1001", codes(bom))
+        self.assertIn("MS1002", codes(bom))
         invalid_utf8 = project_bytes(b"#!marksheet 0.1\n@sheet s \"\xff\"\n")
-        self.assertIn("MS1001", codes(invalid_utf8))
+        self.assertEqual(codes(invalid_utf8), ["MS1003"])
+        # Invalid UTF-8 withholds the semantic model rather than projecting a
+        # partially decoded workbook, matching the reference parser.
+        self.assertEqual(invalid_utf8["workbook"]["sheets"], [])
         bare_cr = project_bytes(b"#!marksheet 0.1\r@sheet s \"S\"\n")
         self.assertIn("MS1101", codes(bare_cr))
 

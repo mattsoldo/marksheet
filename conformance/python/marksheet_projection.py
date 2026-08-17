@@ -258,13 +258,24 @@ class MarksheetProjection:
             self.diagnostic("MS1301", line)
             self._duplicate_declaration_reported = True
 
+    def line_at(self, offset: int) -> PhysicalLine:
+        """Return the physical line owning a byte offset."""
+
+        for line in self.lines:
+            if offset < line.end:
+                return line
+        return self.lines[-1] if self.lines else PhysicalLine(0, 0, 0, "none")
+
     def decode(self) -> bool:
+        # Encoding faults are their own diagnostic classes: `MS1002` for a
+        # byte-order mark and `MS1003` for invalid UTF-8, reported over the
+        # offending line's content like every other line-scoped diagnostic.
         if self.data.startswith(b"\xef\xbb\xbf"):
-            self.diagnostics.append(Diagnostic("MS1001", "error", 0, 3))
+            self.diagnostic("MS1002", self.line_at(0))
         try:
             self.data.decode("utf-8")
         except UnicodeDecodeError as error:
-            self.diagnostics.append(Diagnostic("MS1001", "error", error.start, error.end))
+            self.diagnostic("MS1003", self.line_at(error.start))
             return False
         self.text_lines = [self.data[line.start:line.content_end].decode("utf-8") for line in self.lines]
         return True
