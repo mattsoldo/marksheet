@@ -1401,10 +1401,11 @@ reported difference exits 1, and an operational I/O or serialization failure
 exits 2. An exit-1 command that promises structured output MUST still emit one
 complete envelope and MUST NOT emit a partial JSON document.
 
-`marksheet-check@1`, `marksheet-inspect@1`, `marksheet-get@1`, and
-`marksheet-edit@1` identify the initial validation, inspection, query, and
-focused-edit envelopes. Each contains `version`, `profile`, `status`, and
-ordered diagnostics where applicable. Source fingerprints exposed to browser
+`marksheet-check@1`, `marksheet-inspect@1`, `marksheet-get@1`,
+`marksheet-edit@1`, and `marksheet-format@1` identify the initial validation,
+inspection, query, focused-edit, and canonical-formatting envelopes. Each
+contains `version`, `profile`, `status`, and ordered diagnostics where
+applicable. Source fingerprints exposed to browser
 or JSON-number consumers encode the 64-bit hash as lowercase hexadecimal text,
 not a potentially lossy JavaScript number.
 
@@ -1429,6 +1430,22 @@ uses `status:"committed_invalid"`, `changed:true`, `valid:false`, includes the
 post-edit diagnostics, and exits 1. A tool adapter MUST preserve that committed
 state explicitly rather than label it as a refusal, because retrying a
 non-idempotent append could duplicate data.
+
+Canonical formatting is admission-checked on its own result. A formatting
+envelope MUST NOT report validity it did not verify: the canonical result MUST
+pass the same admission gate its input passed, and a host that cannot produce
+an admissible canonical result MUST report `status:"invalid"` with
+`changed:false` and perform no write rather than replace an admissible
+workbook. Admission covers parse validity, capability completeness, and formula
+validity. Trusted extension assertions are outside it, because a failed
+assertion holds identically before and after a rewrite and is therefore an
+authoring outcome rather than a formatting defect; formatting such a workbook
+succeeds and continues to report `valid:false`. Diagnostics in a mutating
+envelope are reported against the bytes the command produced. Because
+`marksheet-format@1` does not carry the bytes of an uncommitted proposal, a
+refused format MUST NOT report source positions relative to that proposal;
+diagnostics remain scoped to the unchanged input and `error.kind` identifies
+an `invalid_result` formatter defect.
 
 The optional `marksheet-tools@1` local server exposes `check`, `inspect`,
 `get`, `set`, `append_table_row`, `calculate`, `format`, `convert`, and

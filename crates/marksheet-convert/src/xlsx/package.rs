@@ -204,6 +204,8 @@ impl Package {
                 .is_some_and(|content_type| {
                     content_type.eq_ignore_ascii_case(
                         "application/vnd.ms-excel.sheet.macroEnabled.main+xml",
+                    ) || content_type.eq_ignore_ascii_case(
+                        "application/vnd.ms-excel.template.macroEnabled.main+xml",
                     )
                 });
         Ok(package)
@@ -504,6 +506,8 @@ impl ContentTypes {
             &[
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml",
                 "application/vnd.ms-excel.sheet.macroEnabled.main+xml",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml",
+                "application/vnd.ms-excel.template.macroEnabled.main+xml",
             ]
         } else if relationship.kind.ends_with("/worksheet") {
             &["application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"]
@@ -783,6 +787,31 @@ mod tests {
         ]);
         let error = Package::open(&bytes, ConversionLimits::default()).unwrap_err();
         assert_eq!(error.code, ConvertErrorCode::InvalidPackage);
+    }
+
+    #[test]
+    fn accepts_template_workbook_content_types_and_detects_template_macros() {
+        for (content_type, macro_enabled) in [
+            (
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml",
+                false,
+            ),
+            (
+                "application/vnd.ms-excel.template.macroEnabled.main+xml",
+                true,
+            ),
+        ] {
+            let types = format!(
+                "<?xml version=\"1.0\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Override PartName=\"/xl/workbook.xml\" ContentType=\"{content_type}\"/></Types>"
+            );
+            let bytes = package(&[
+                ("[Content_Types].xml", &types),
+                ("_rels/.rels", ROOT_RELS),
+                ("xl/workbook.xml", "<workbook/>"),
+            ]);
+            let package = Package::open(&bytes, ConversionLimits::default()).unwrap();
+            assert_eq!(package.is_macro_enabled(), macro_enabled, "{content_type}");
+        }
     }
 
     #[test]

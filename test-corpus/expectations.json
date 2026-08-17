@@ -105,6 +105,7 @@
    "real-world/xlsx/gsheets/invoice_smartsheet.xlsx",
    "real-world/xlsx/gsheets/it_project_gantt.xlsx",
    "real-world/xlsx/gsheets/marketers_index.xlsx",
+   "real-world/xlsx/gsheets/marketing_dashboard.xlsx",
    "real-world/xlsx/gsheets/medical_research_gantt.xlsx",
    "real-world/xlsx/gsheets/monthly_budget.xlsx",
    "real-world/xlsx/gsheets/multi_location_inventory.xlsx",
@@ -156,8 +157,7 @@
    "real-world/xlsx/xlnt/4_every_style.xlsx"
   ],
   "diverges": [
-   "real-world/xlsx/gsheets/budget_transactions_dashboard.xlsx",
-   "real-world/xlsx/gsheets/marketing_dashboard.xlsx"
+   "real-world/xlsx/gsheets/budget_transactions_dashboard.xlsx"
   ]
  }
 }

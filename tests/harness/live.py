@@ -225,36 +225,53 @@ def validate_workspace(workspace: Path) -> None:
     assert (workspace / "workbook.xlsx").is_file()
 
 
-def run_harness(harness: str, marksheet: Path) -> dict[str, Any]:
-    manifest = json.loads(
-        (ROOT / "integrations/harnesses" / harness / "harness.json").read_text()
-    )
-    with tempfile.TemporaryDirectory(prefix=f"marksheet-live-{harness}-") as directory:
-        workspace = Path(directory)
-        skill_source = (ROOT / "integrations/harnesses" / harness / manifest["skill_source"]).resolve()
-        skill_target = workspace / manifest["project_install_path"]
-        shutil.copytree(skill_source, skill_target)
-        tools = workspace / ".tools"
-        tools.mkdir()
-        shutil.copy2(marksheet, tools / "marksheet")
-        (tools / "marksheet").chmod(0o755)
-        shutil.copy2(HERE / "invalid_csv.start.ms", workspace / "invalid.ms")
-        shutil.copy2(HERE / "formula_error.ms", workspace / "formula-error.ms")
+def utc_today() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).date().isoformat()
 
-        completed = invoke_agent(harness, workspace)
-        transcript = workspace / "agent-transcript.txt"
-        transcript.write_text(completed.stdout + "\n--- stderr ---\n" + completed.stderr)
-        if completed.returncode != 0:
-            raise AssertionError(
-                f"{harness} exited {completed.returncode}; transcript:\n{transcript.read_text()}"
-            )
-        validate_workspace(workspace)
-    return {
+
+def run_harness(harness: str, marksheet: Path) -> tuple[dict[str, Any], str | None]:
+    result = {
         "harness": harness,
-        "client": client_version(harness),
+        "client": "unavailable",
         "tasks": 7,
-        "passed": True,
+        "passed": False,
+        "verified_at": utc_today(),
     }
+    try:
+        result["client"] = client_version(harness)
+        manifest = json.loads(
+            (ROOT / "integrations/harnesses" / harness / "harness.json").read_text()
+        )
+        with tempfile.TemporaryDirectory(prefix=f"marksheet-live-{harness}-") as directory:
+            workspace = Path(directory)
+            skill_source = (
+                ROOT
+                / "integrations/harnesses"
+                / harness
+                / manifest["skill_source"]
+            ).resolve()
+            skill_target = workspace / manifest["project_install_path"]
+            shutil.copytree(skill_source, skill_target)
+            tools = workspace / ".tools"
+            tools.mkdir()
+            shutil.copy2(marksheet, tools / "marksheet")
+            (tools / "marksheet").chmod(0o755)
+            shutil.copy2(HERE / "invalid_csv.start.ms", workspace / "invalid.ms")
+            shutil.copy2(HERE / "formula_error.ms", workspace / "formula-error.ms")
+
+            completed = invoke_agent(harness, workspace)
+            transcript = workspace / "agent-transcript.txt"
+            transcript.write_text(completed.stdout + "\n--- stderr ---\n" + completed.stderr)
+            if completed.returncode != 0:
+                raise AssertionError(
+                    f"{harness} exited {completed.returncode}; "
+                    f"transcript:\n{transcript.read_text()}"
+                )
+            validate_workspace(workspace)
+    except Exception as error:  # A failed attempt is evidence that must be recorded.
+        return result, str(error)
+    result["passed"] = True
+    return result, None
 
 
 def main() -> int:
@@ -266,13 +283,17 @@ def main() -> int:
     marksheet = options.marksheet.resolve(strict=True)
     harnesses = HARNESSES if options.harness == "all" else (options.harness,)
     results = []
+    failed = False
     for harness in harnesses:
-        result = run_harness(harness, marksheet)
+        result, error = run_harness(harness, marksheet)
         results.append(result)
-        print(f"{harness}: 7 live tasks passed ({result['client']})")
+        if result["passed"]:
+            print(f"{harness}: 7 live tasks passed ({result['client']})")
+        else:
+            failed = True
+            print(f"{harness}: live tasks FAILED ({result['client']}): {error}")
     record = {
         "version": "marksheet-live-harness@1",
-        "verified_at": datetime.date.today().isoformat(),
         "corpus": "marksheet-harness-corpus@1",
         "results": results,
     }
@@ -286,7 +307,7 @@ def main() -> int:
             }
             record["results"] = [merged[name] for name in HARNESSES if name in merged]
         options.record.write_text(json.dumps(record, indent=2) + "\n")
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

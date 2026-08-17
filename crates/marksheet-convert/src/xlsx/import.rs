@@ -294,6 +294,7 @@ fn import_xlsx_inner(
     };
     let mut skipped_sheets = BTreeSet::<SheetId>::new();
     let mut table_ids = BTreeSet::new();
+    let mut omitted_tables = BTreeSet::new();
     let mut table_name_map = BTreeMap::<String, TableId>::new();
     let mut table_headers = BTreeMap::<TableId, BTreeSet<String>>::new();
     let mut fill_outcomes = FillOutcomes::new();
@@ -419,6 +420,8 @@ fn import_xlsx_inner(
                     "duplicate case-insensitive table display name",
                 ));
             }
+            let table_id =
+                unique_identifier::<TableId>(&table.display_name, "xlsx_table", &mut table_ids)?;
             // The table part declares its headers, and the worksheet repeats
             // them as cells. Writers do let the two drift -- a numeric or blank
             // header cell under a named column is common in exported
@@ -457,10 +460,9 @@ fn import_xlsx_inner(
                     )
                     .at(xlsx_location(&part, Some(&table.display_name))),
                 );
+                omitted_tables.insert(table_id);
                 continue;
             }
-            let table_id =
-                unique_identifier::<TableId>(&table.display_name, "xlsx_table", &mut table_ids)?;
             if table_id.as_str() != table.display_name {
                 report.approximate(
                     ConversionEvent::new(
@@ -677,6 +679,14 @@ fn import_xlsx_inner(
         });
     }
 
+    if sheets.is_empty() {
+        return Err(ConvertError::new(
+            ConvertErrorCode::UnsupportedPackage,
+            "workbook contains no worksheet that Marksheet can represent",
+        )
+        .at(xlsx_location("xl/workbook.xml", None)));
+    }
+
     let styles = style_definitions
         .into_iter()
         .skip(style_index_offset)
@@ -700,9 +710,18 @@ fn import_xlsx_inner(
         &mut report,
     )?;
     if !omitted.is_empty() {
-        replace_formulas_referencing_omitted_names(
+        replace_formulas_referencing_omissions(
             &mut sheets,
-            &omitted,
+            OmittedFormulaReferences::Names(&omitted),
+            &fill_outcomes,
+            limits,
+            &mut report,
+        )?;
+    }
+    if !omitted_tables.is_empty() {
+        replace_formulas_referencing_omissions(
+            &mut sheets,
+            OmittedFormulaReferences::Tables(&omitted_tables),
             &fill_outcomes,
             limits,
             &mut report,
@@ -1851,13 +1870,18 @@ fn currency_code(format: &str) -> Option<String> {
     let language =
         u32::from_str_radix(locale.trim_start_matches("0x"), 16).map_or(0, |value| value & 0xFFFF);
     if let Some(code) = match language {
-        0x0409 | 0x1409 | 0x2409 | 0x4409 => Some("USD"),
-        0x0809 | 0x1809 => Some("GBP"),
+        0x0409 => Some("USD"),
+        0x1409 => Some("NZD"),
+        0x4409 => Some("MYR"),
+        0x0809 => Some("GBP"),
         0x0C09 => Some("AUD"),
         0x1009 => Some("CAD"),
-        0x0407 | 0x040C | 0x0410 | 0x0413 | 0x040A | 0x0816 | 0x040B | 0x0408 => Some("EUR"),
+        0x1809 | 0x0407 | 0x040C | 0x0410 | 0x0413 | 0x040A | 0x0816 | 0x040B | 0x0408 => {
+            Some("EUR")
+        }
         0x0411 => Some("JPY"),
-        0x0804 | 0x1004 => Some("CNY"),
+        0x0804 => Some("CNY"),
+        0x1004 => Some("SGD"),
         0x0412 => Some("KRW"),
         0x0419 => Some("RUB"),
         0x0439 | 0x4009 => Some("INR"),
@@ -1915,7 +1939,7 @@ fn apply_number_format(
             if lowercase.contains('%') {
                 style.number = Some(NumberFormat::Percent);
                 style.decimals = Some(fraction_digits(&lowercase));
-            } else if lowercase.contains("[$") {
+            } else if lowercase.contains("[$") && significant.contains(['0', '#']) {
                 // SPEC requires an ISO 4217 code whenever `number=currency`, so
                 // a format whose currency cannot be identified is kept as a
                 // plain decimal rather than emitted as a style this project's
@@ -3095,7 +3119,41 @@ impl FillOutcome {
 
 type FillOutcomes = BTreeMap<(TableId, String), FillOutcome>;
 
-/// Rewrites formulas that reach a defined name the importer omitted.
+#[derive(Clone, Copy)]
+enum OmittedFormulaReferences<'a> {
+    Names(&'a BTreeSet<NameId>),
+    Tables(&'a BTreeSet<TableId>),
+}
+
+impl OmittedFormulaReferences<'_> {
+    fn reaches(self, source: &str, limits: ConversionLimits) -> bool {
+        parse_portable_formula(source, limits).is_ok_and(|formula| match self {
+            Self::Names(omitted) => {
+                expression_references_omitted_name(&formula.expression, omitted)
+            }
+            Self::Tables(omitted) => {
+                expression_references_omitted_table(&formula.expression, omitted)
+            }
+        })
+    }
+
+    fn event(self) -> ConversionEvent {
+        let subject = match self {
+            Self::Names(_) => "defined name",
+            Self::Tables(_) => "table",
+        };
+        ConversionEvent::new(
+            ConversionFeature::Formula,
+            format!(
+                "formula referencing an omitted {subject} was replaced with {}",
+                CellError::Name.token()
+            ),
+        )
+        .formula(FormulaDisposition::Replaced)
+    }
+}
+
+/// Rewrites formulas that reach a defined name or table the importer omitted.
 ///
 /// The portable evaluator resolves such a reference to `#NAME?`, and keeping
 /// the unresolved spelling would make the workbook impossible to export back
@@ -3107,9 +3165,9 @@ type FillOutcomes = BTreeMap<(TableId, String), FillOutcome>;
 /// it — "translated to portable-a1@1", or an exact `@fill`. That claim is no
 /// longer true of a formula this pass destroys, so it is retracted before the
 /// replacement is recorded; otherwise the report would assert both.
-fn replace_formulas_referencing_omitted_names(
+fn replace_formulas_referencing_omissions(
     sheets: &mut [Sheet],
-    omitted: &BTreeSet<NameId>,
+    omitted: OmittedFormulaReferences<'_>,
     fill_outcomes: &FillOutcomes,
     limits: ConversionLimits,
     report: &mut ConversionReport,
@@ -3127,7 +3185,7 @@ fn replace_formulas_referencing_omitted_names(
                     replace_block_formulas(&mut table.block, &sheet_id, omitted, limits, report)?;
                 }
                 SheetItem::Fill(fill) => {
-                    if !references_omitted_name(fill.formula.as_str(), omitted, limits) {
+                    if !omitted.reaches(fill.formula.as_str(), limits) {
                         continue;
                     }
                     let location = match &fill.target {
@@ -3141,11 +3199,13 @@ fn replace_formulas_referencing_omitted_names(
                                 report.retract(ConversionFeature::Formula, |candidate| {
                                     recorded.covers(candidate)
                                 });
+                                recorded.location.clone()
+                            } else {
+                                ConversionLocation::table_on_sheet(sheet_id.clone(), table.clone())
                             }
-                            ConversionLocation::table_on_sheet(sheet_id.clone(), table.clone())
                         }
                     };
-                    report.approximate(omitted_name_reference_event().at(location));
+                    report.approximate(omitted.event().at(location));
                     fill.formula = unresolved.clone();
                 }
                 _ => {}
@@ -3158,7 +3218,7 @@ fn replace_formulas_referencing_omitted_names(
 fn replace_block_formulas(
     block: &mut Block,
     sheet: &SheetId,
-    omitted: &BTreeSet<NameId>,
+    omitted: OmittedFormulaReferences<'_>,
     limits: ConversionLimits,
     report: &mut ConversionReport,
 ) -> Result<(), ConvertError> {
@@ -3168,7 +3228,7 @@ fn replace_block_formulas(
             let Value::Formula(formula) = &cell.value else {
                 continue;
             };
-            if !references_omitted_name(formula.as_str(), omitted, limits) {
+            if !omitted.reaches(formula.as_str(), limits) {
                 continue;
             }
             let coordinate = cell_offset(anchor, column_offset, row_offset)?;
@@ -3178,7 +3238,7 @@ fn replace_block_formulas(
             report.retract(ConversionFeature::Formula, |candidate| {
                 *candidate == location
             });
-            report.approximate(omitted_name_reference_event().at(location));
+            report.approximate(omitted.event().at(location));
             cell.value = Value::Error(CellError::Name);
         }
     }
@@ -3198,26 +3258,6 @@ fn cell_offset(
         .map_err(|error| internal(error.to_string()))
 }
 
-fn omitted_name_reference_event() -> ConversionEvent {
-    ConversionEvent::new(
-        ConversionFeature::Formula,
-        format!(
-            "formula referencing an omitted defined name was replaced with {}",
-            CellError::Name.token()
-        ),
-    )
-    .formula(FormulaDisposition::Replaced)
-}
-
-fn references_omitted_name(
-    source: &str,
-    omitted: &BTreeSet<NameId>,
-    limits: ConversionLimits,
-) -> bool {
-    parse_portable_formula(source, limits)
-        .is_ok_and(|formula| expression_references_omitted_name(&formula.expression, omitted))
-}
-
 fn expression_references_omitted_name(expression: &Expr, omitted: &BTreeSet<NameId>) -> bool {
     match &expression.kind {
         ExprKind::Literal { .. } => false,
@@ -3234,6 +3274,37 @@ fn expression_references_omitted_name(expression: &Expr, omitted: &BTreeSet<Name
             .arguments
             .iter()
             .any(|argument| expression_references_omitted_name(argument, omitted)),
+    }
+}
+
+fn expression_references_omitted_table(expression: &Expr, omitted: &BTreeSet<TableId>) -> bool {
+    match &expression.kind {
+        ExprKind::Literal { .. } => false,
+        ExprKind::Reference { reference } => match reference {
+            marksheet_calc::formula::Reference::Structured(structured) => match structured {
+                marksheet_calc::formula::StructuredReference::Column { table, .. }
+                | marksheet_calc::formula::StructuredReference::Region { table, .. } => {
+                    omitted.contains(table)
+                }
+                marksheet_calc::formula::StructuredReference::CurrentRow {
+                    table: Some(table),
+                    ..
+                } => omitted.contains(table),
+                marksheet_calc::formula::StructuredReference::CurrentRow {
+                    table: None, ..
+                } => false,
+            },
+            _ => false,
+        },
+        ExprKind::Unary { operand, .. } => expression_references_omitted_table(operand, omitted),
+        ExprKind::Binary { left, right, .. } => {
+            expression_references_omitted_table(left, omitted)
+                || expression_references_omitted_table(right, omitted)
+        }
+        ExprKind::Call { call } => call
+            .arguments
+            .iter()
+            .any(|argument| expression_references_omitted_table(argument, omitted)),
     }
 }
 
@@ -3561,7 +3632,9 @@ fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
 ///   as ignorable via `mc:Ignorable`, and offers `mc:AlternateContent` with a
 ///   `mc:Choice`/`mc:Fallback` pair. Because this importer satisfies no
 ///   `Requires` namespace, every `Choice` is discarded and the `Fallback` body
-///   is kept.
+///   is kept. `mc:ProcessContent` unwraps named ignorable elements while
+///   preserving their children, and namespace declarations on any unwrapped
+///   wrapper are transplanted so those children remain namespace-well-formed.
 ///
 /// Removing that content is what makes ordinary Excel output importable:
 /// essentially every worksheet Excel has written since 2010 carries
@@ -3587,6 +3660,8 @@ struct Scope {
     depth: usize,
     prefixes: Vec<(Vec<u8>, Vec<u8>)>,
     ignorable: Vec<Vec<u8>>,
+    process_content: Vec<(Vec<u8>, Vec<u8>)>,
+    unwrapped: bool,
 }
 
 fn resolve<'s>(scopes: &'s [Scope], prefix: &[u8]) -> Option<&'s [u8]> {
@@ -3623,30 +3698,56 @@ fn push_scope(scopes: &mut Vec<Scope>, depth: usize, element: &BytesStart<'_>) {
         depth,
         prefixes,
         ignorable: Vec::new(),
+        process_content: Vec::new(),
+        unwrapped: false,
     });
 
     let mut ignorable = Vec::new();
+    let mut process_content = Vec::new();
     for attribute in element.attributes().flatten() {
         let key = attribute.key.as_ref();
         let Some((prefix, local)) = split_qname(key) else {
             continue;
         };
-        if local != b"Ignorable" || resolve(scopes, prefix) != Some(MARKUP_COMPATIBILITY_NS) {
+        if resolve(scopes, prefix) != Some(MARKUP_COMPATIBILITY_NS) {
             continue;
         }
         let value = String::from_utf8_lossy(&attribute.value).into_owned();
-        for candidate in value.split_whitespace() {
-            if let Some(namespace) = resolve(scopes, candidate.as_bytes()) {
-                ignorable.push(namespace.to_vec());
+        if local == b"Ignorable" {
+            for candidate in value.split_whitespace() {
+                if let Some(namespace) = resolve(scopes, candidate.as_bytes()) {
+                    ignorable.push(namespace.to_vec());
+                }
+            }
+        } else if local == b"ProcessContent" {
+            for candidate in value.split_whitespace() {
+                let candidate = candidate.as_bytes();
+                let (candidate_prefix, candidate_local) = split_qname(candidate)
+                    .map_or((&b""[..], candidate), |(prefix, local)| (prefix, local));
+                if let Some(namespace) = resolve(scopes, candidate_prefix) {
+                    process_content.push((namespace.to_vec(), candidate_local.to_vec()));
+                }
             }
         }
     }
     if let Some(scope) = scopes.last_mut() {
         scope.ignorable = ignorable;
+        scope.process_content = process_content;
     }
 }
 
-/// Decides an element's fate from its namespace alone.
+fn should_process_content(scopes: &[Scope], namespace: &[u8], local: &[u8]) -> bool {
+    scopes.iter().any(|scope| {
+        scope
+            .process_content
+            .iter()
+            .any(|(candidate_namespace, candidate_local)| {
+                candidate_namespace == namespace && candidate_local == local
+            })
+    })
+}
+
+/// Decides an element's fate from its namespace and local name.
 fn classify(
     scopes: &[Scope],
     element: &BytesStart<'_>,
@@ -3678,6 +3779,9 @@ fn classify(
     }
     if namespace.is_some_and(|namespace| is_ignorable(scopes, namespace)) {
         *dropped_markup_compatibility = true;
+        if namespace.is_some_and(|namespace| should_process_content(scopes, namespace, local)) {
+            return Frame::Unwrap;
+        }
         return Frame::Drop;
     }
     Frame::Keep
@@ -3693,6 +3797,7 @@ fn filter_attributes(
     dropped_markup_compatibility: &mut bool,
 ) -> Result<Option<BytesStart<'static>>, ConvertError> {
     let mut keep = Vec::new();
+    let mut existing = BTreeSet::new();
     let mut removed = false;
     for attribute in element.attributes() {
         let attribute = attribute
@@ -3713,10 +3818,26 @@ fn filter_attributes(
             removed = true;
             *dropped_markup_compatibility = true;
         } else {
+            existing.insert(key.to_vec());
             keep.push(attribute);
         }
     }
-    if !removed {
+    let mut transplanted = Vec::<(Vec<u8>, Vec<u8>)>::new();
+    for scope in scopes.iter().rev().filter(|scope| scope.unwrapped) {
+        for (prefix, namespace) in &scope.prefixes {
+            let key = if prefix.is_empty() {
+                b"xmlns".to_vec()
+            } else {
+                let mut key = b"xmlns:".to_vec();
+                key.extend_from_slice(prefix);
+                key
+            };
+            if existing.insert(key.clone()) {
+                transplanted.push((key, namespace.clone()));
+            }
+        }
+    }
+    if !removed && transplanted.is_empty() {
         return Ok(None);
     }
     let qualified = element.name();
@@ -3725,6 +3846,9 @@ fn filter_attributes(
     let mut rebuilt = BytesStart::new(name.to_owned());
     for attribute in keep {
         rebuilt.push_attribute(attribute);
+    }
+    for (key, namespace) in &transplanted {
+        rebuilt.push_attribute((key.as_slice(), namespace.as_slice()));
     }
     Ok(rebuilt.into_owned().into())
 }
@@ -3781,6 +3905,9 @@ fn prepare_consumed_part<'a>(
                     &mut dropped_extension_list,
                     &mut dropped_markup_compatibility,
                 );
+                if let Some(scope) = scopes.last_mut() {
+                    scope.unwrapped = action == Frame::Unwrap;
+                }
                 match action {
                     Frame::Drop => dropping += 1,
                     Frame::Keep => {
@@ -3810,6 +3937,9 @@ fn prepare_consumed_part<'a>(
                     &mut dropped_extension_list,
                     &mut dropped_markup_compatibility,
                 );
+                if let Some(scope) = scopes.last_mut() {
+                    scope.unwrapped = action == Frame::Unwrap;
+                }
                 if action == Frame::Keep {
                     match filter_attributes(
                         &scopes,
@@ -4351,7 +4481,49 @@ fn translate_excel_formula(formula: &str, names: FormulaNames<'_>) -> String {
             output.push_str(&formula[start..index]);
             continue;
         }
-        if bytes[index].is_ascii_alphabetic() || bytes[index] == b'_' {
+        // Structured selectors contain exact header data, not formula name
+        // tokens. Copy the selector spelling wholesale so an identically
+        // spelled defined name cannot rewrite its header.
+        if bytes[index] == b'[' {
+            let start = index;
+            index += 1;
+            while index < bytes.len() {
+                if bytes[index] == b']' {
+                    if bytes.get(index + 1) == Some(&b']') {
+                        index += 2;
+                        continue;
+                    }
+                    index += 1;
+                    break;
+                }
+                index += 1;
+            }
+            output.push_str(&formula[start..index]);
+            continue;
+        }
+        // Error literals have word-shaped bodies (`#REF!`, `#NAME?`, ...),
+        // but those bodies are never defined-name references.
+        if bytes[index] == b'#' {
+            let start = index;
+            index += 1;
+            while index < bytes.len()
+                && (bytes[index].is_ascii_alphanumeric() || matches!(bytes[index], b'_' | b'/'))
+            {
+                index += 1;
+            }
+            if matches!(bytes.get(index), Some(b'!' | b'?')) {
+                index += 1;
+            }
+            output.push_str(&formula[start..index]);
+            continue;
+        }
+        let starts_name = bytes[index].is_ascii_alphabetic()
+            || bytes[index] == b'_'
+            || (bytes[index] == b'\\'
+                && bytes
+                    .get(index + 1)
+                    .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_'));
+        if starts_name {
             let start = index;
             index += 1;
             while index < bytes.len()
@@ -4478,15 +4650,20 @@ fn record_unconsumed_package_content(
 
     for record in package.relationship_inventory(limits)? {
         let relationship = &record.relationship;
+        let source_is_workbook = record.source.eq_ignore_ascii_case("xl/workbook.xml");
+        let source_is_worksheet = record
+            .source
+            .to_ascii_lowercase()
+            .starts_with("xl/worksheets/");
         let consumed = if relationship.kind.ends_with("/officeDocument") {
             record.source.is_empty() && relationship.target == "xl/workbook.xml"
         } else if relationship.kind.ends_with("/worksheet")
             || relationship.kind.ends_with("/styles")
             || relationship.kind.ends_with("/sharedStrings")
         {
-            record.source == "xl/workbook.xml" && consumed_parts.contains(&relationship.target)
+            source_is_workbook && consumed_parts.contains(&relationship.target)
         } else if relationship.kind.ends_with("/table") {
-            record.source.starts_with("xl/worksheets/")
+            source_is_worksheet
                 && consumed_parts.contains(&record.source)
                 && consumed_parts.contains(&relationship.target)
         } else {
@@ -4594,6 +4771,7 @@ mod tests {
     /// worksheet is reachable only through its relationship role.
     fn disguise_worksheet_part(bytes: &[u8], part: &str, worksheet: &str) -> Vec<u8> {
         let target = part.strip_prefix("xl/").unwrap();
+        let disguised_relationships = relationships_part(part);
         let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
         let mut parts = Vec::new();
         for index in 0..archive.len() {
@@ -4603,6 +4781,7 @@ mod tests {
             entry.read_to_end(&mut content).unwrap();
             let (name, content) = match name.as_str() {
                 "xl/worksheets/sheet1.xml" => (part.to_owned(), worksheet.as_bytes().to_vec()),
+                "xl/worksheets/_rels/sheet1.xml.rels" => (disguised_relationships.clone(), content),
                 "[Content_Types].xml" => {
                     let text = String::from_utf8(content)
                         .unwrap()
@@ -4743,6 +4922,9 @@ mod tests {
             ("[$€-40C]#,##0.00", Some("EUR")),
             ("[$USD]#,##0.00", Some("USD")),
             ("[$€]#,##0.00", Some("EUR")),
+            ("[$$-1409]#,##0.00", Some("NZD")),
+            ("[$€-1809]#,##0.00", Some("EUR")),
+            ("[$$-1004]#,##0.00", Some("SGD")),
             // A bare "$" is used by a dozen currencies and carries no locale
             // here, so no code can be claimed.
             ("[$$]#,##0.00", None),
@@ -4775,6 +4957,19 @@ mod tests {
         );
         assert_eq!(style.number, Some(NumberFormat::Currency));
         assert_eq!(style.currency.as_deref(), Some("GBP"));
+    }
+
+    #[test]
+    fn locale_only_date_format_is_not_mistaken_for_currency() {
+        let mut style = StyleProperties::default();
+        apply_number_format(
+            &mut style,
+            202,
+            Some(&"[$-409]mmmm d, yyyy".to_owned()),
+            &mut false,
+        );
+        assert_eq!(style.number, Some(NumberFormat::Date));
+        assert_eq!(style.currency, None);
     }
 
     /// Marksheet decodes a CRLF inside a quoted field to one LF, so a CR that
@@ -4813,6 +5008,22 @@ mod tests {
         assert_eq!(imported.value.sheets.len(), 1);
     }
 
+    #[test]
+    fn a_workbook_with_only_non_worksheet_sheets_is_rejected() {
+        let exported = export_xlsx(&basic_workbook(), ConversionLimits::default()).unwrap();
+        let relationships = package_text(&exported.value, "xl/_rels/workbook.xml.rels")
+            .replace("/worksheet\"", "/chartsheet\"");
+        let bytes = rewrite_package(
+            &exported.value,
+            &[("xl/_rels/workbook.xml.rels", &relationships)],
+            &[],
+        );
+
+        let error = import_xlsx(&bytes, ConversionLimits::default()).unwrap_err();
+        assert_eq!(error.error.code, ConvertErrorCode::UnsupportedPackage);
+        assert!(error.error.message.contains("no worksheet"));
+    }
+
     /// `mc:Choice` requires an extension namespace this importer does not
     /// implement, so the `mc:Fallback` body is the content that applies.
     #[test]
@@ -4826,6 +5037,32 @@ mod tests {
         assert!(text.contains("<kept/>"), "{text}");
         assert!(!text.contains("<chosen/>"), "{text}");
         assert!(prepared.dropped_markup_compatibility);
+    }
+
+    #[test]
+    fn alternate_content_preserves_bindings_declared_on_unwrapped_wrappers() {
+        let prepared = prepare_consumed_part(
+            br#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:AlternateContent><mc:Fallback xmlns:s="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><s:kept/></mc:Fallback></mc:AlternateContent></workbook>"#,
+            "xl/workbook.xml",
+        )
+        .unwrap();
+        let text = String::from_utf8(prepared.bytes.into_owned()).unwrap();
+        assert!(text.contains("<s:kept xmlns:s="), "{text}");
+        validate_consumed_part_namespaces(text.as_bytes(), "xl/workbook.xml").unwrap();
+    }
+
+    #[test]
+    fn process_content_unwraps_ignorable_elements_and_keeps_their_children() {
+        let prepared = prepare_consumed_part(
+            br#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:x="urn:example" mc:Ignorable="x" mc:ProcessContent="x:wrapper"><x:wrapper><sheetData/></x:wrapper><x:dropped><cols/></x:dropped></worksheet>"#,
+            "xl/worksheets/sheet1.xml",
+        )
+        .unwrap();
+        let text = String::from_utf8(prepared.bytes.into_owned()).unwrap();
+        assert!(text.contains("<sheetData"), "{text}");
+        assert!(!text.contains("x:wrapper"), "{text}");
+        assert!(!text.contains("<cols"), "{text}");
+        validate_consumed_part_namespaces(text.as_bytes(), "xl/worksheets/sheet1.xml").unwrap();
     }
 
     /// Real files place `x15:workbookPr` inside `extLst`. A local-name parser
@@ -5577,6 +5814,28 @@ mod tests {
         let worksheet = package_text(&exported.value, "xl/worksheets/sheet1.xml");
         let bytes = disguise_worksheet_part(&exported.value, part, &worksheet);
         assert_eq!(import_xlsx(&bytes, limits).unwrap().value.sheets.len(), 1);
+    }
+
+    #[test]
+    fn consumed_table_relationships_follow_case_insensitive_worksheet_paths() {
+        let exported = export_xlsx(
+            &calculated_column_named_workbook(),
+            ConversionLimits::default(),
+        )
+        .unwrap();
+        let worksheet = package_text(&exported.value, "xl/worksheets/sheet1.xml");
+        let bytes =
+            disguise_worksheet_part(&exported.value, "xl/Worksheets/Sheet1.xml", &worksheet);
+        let imported = import_xlsx(&bytes, ConversionLimits::default()).unwrap();
+
+        assert!(
+            !imported.report.outcomes().iter().any(|outcome| {
+                outcome.feature == "ooxml_relationship"
+                    && outcome.outcome == crate::FeatureOutcome::Omitted
+            }),
+            "{:?}",
+            imported.report.outcomes()
+        );
     }
 
     #[test]
@@ -6478,6 +6737,90 @@ mod tests {
     }
 
     #[test]
+    fn formulas_reaching_an_omitted_table_are_replaced_and_reported() {
+        let source = Workbook {
+            sheets: vec![Sheet {
+                id: SheetId::parse("data").unwrap(),
+                label: "Data".to_owned(),
+                items: vec![
+                    SheetItem::Table(Table {
+                        id: TableId::parse("sales").unwrap(),
+                        block: Block::new(
+                            Coordinate::parse("A1").unwrap(),
+                            vec![
+                                vec![Cell::new(Value::Text("Amount".to_owned()))],
+                                vec![Cell::new(Value::Number(1.0))],
+                            ],
+                        )
+                        .unwrap(),
+                        origin: None,
+                    }),
+                    SheetItem::Block(
+                        Block::new(
+                            Coordinate::parse("D1").unwrap(),
+                            vec![vec![Cell::new(Value::Formula(
+                                FormulaSource::new("=SUM(sales[Amount])").unwrap(),
+                            ))]],
+                        )
+                        .unwrap(),
+                    ),
+                ],
+                origin: None,
+            }],
+            ..Workbook::default()
+        };
+        let exported = export_xlsx(&source, ConversionLimits::default()).unwrap();
+        let table = package_text(&exported.value, "xl/tables/table1.xml")
+            .replace("name=\"Amount\"", "name=\"Different\"");
+        let bytes = rewrite_package(&exported.value, &[("xl/tables/table1.xml", &table)], &[]);
+        let imported = import_xlsx(&bytes, ConversionLimits::default()).unwrap();
+
+        assert!(
+            !imported.value.sheets[0]
+                .items
+                .iter()
+                .any(|item| matches!(item, SheetItem::Table(_)))
+        );
+        let formula_value = imported.value.sheets[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                SheetItem::Block(block) if block.anchor == Coordinate::parse("D1").unwrap() => {
+                    Some(block.cells[0][0].value.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(formula_value, Value::Error(CellError::Name));
+        let formula_outcomes: Vec<_> = imported
+            .report
+            .outcomes()
+            .iter()
+            .filter(|outcome| {
+                outcome.feature == "portable_formulas"
+                    && outcome.locations
+                        == vec![ConversionLocation::cell(
+                            SheetId::parse("data").unwrap(),
+                            Coordinate::parse("D1").unwrap(),
+                        )]
+            })
+            .collect();
+        assert_eq!(formula_outcomes.len(), 1, "{formula_outcomes:?}");
+        assert_eq!(
+            formula_outcomes[0].formula,
+            Some(FormulaDisposition::Replaced)
+        );
+        assert!(
+            formula_outcomes[0]
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("omitted table"))
+        );
+        let text = marksheet_syntax::serialize_workbook(&imported.value).unwrap();
+        assert!(!marksheet_syntax::parse(&text).has_errors());
+    }
+
+    #[test]
     fn multi_area_defined_name_degrades_while_supported_names_import_exactly() {
         let exported = export_xlsx(
             &named_range_workbook("=SUM(A1:A2)"),
@@ -6612,6 +6955,90 @@ mod tests {
     #[test]
     fn calculated_column_reaching_an_omitted_name_is_replaced() {
         assert_calculated_column_degraded(&calculated_column_import_with_omitted_name());
+    }
+
+    #[test]
+    fn omitted_name_replacements_keep_each_calculated_column_location() {
+        let sheet_id = SheetId::parse("data").unwrap();
+        let table_id = TableId::parse("sales").unwrap();
+        let left_location = xlsx_location("xl/tables/table1.xml", Some("Left"));
+        let right_location = xlsx_location("xl/tables/table1.xml", Some("Right"));
+        let mut sheets = vec![Sheet {
+            id: sheet_id.clone(),
+            label: "Data".to_owned(),
+            items: vec![
+                SheetItem::Fill(Fill {
+                    target: FillTarget::TableColumn {
+                        table: table_id.clone(),
+                        header: "Left".to_owned(),
+                    },
+                    formula: FormulaSource::new("=SUM(total)").unwrap(),
+                    origin: None,
+                }),
+                SheetItem::Fill(Fill {
+                    target: FillTarget::TableColumn {
+                        table: table_id.clone(),
+                        header: "Right".to_owned(),
+                    },
+                    formula: FormulaSource::new("=SUM(total)").unwrap(),
+                    origin: None,
+                }),
+            ],
+            origin: None,
+        }];
+        let fill_outcomes = BTreeMap::from([
+            (
+                (table_id.clone(), "Left".to_owned()),
+                FillOutcome {
+                    location: left_location.clone(),
+                    sheet: sheet_id.clone(),
+                    body: Range::parse("A2:A3").unwrap(),
+                },
+            ),
+            (
+                (table_id, "Right".to_owned()),
+                FillOutcome {
+                    location: right_location.clone(),
+                    sheet: sheet_id,
+                    body: Range::parse("B2:B3").unwrap(),
+                },
+            ),
+        ]);
+        let mut report =
+            ConversionReport::new(FormatDescriptor::xlsx(), FormatDescriptor::marksheet_ir());
+        for location in [left_location.clone(), right_location.clone()] {
+            report.exact_event(
+                ConversionEvent::new(ConversionFeature::Formula, "calculated column")
+                    .formula(FormulaDisposition::Translated)
+                    .at(location),
+            );
+        }
+
+        let omitted = BTreeSet::from([NameId::parse("total").unwrap()]);
+        replace_formulas_referencing_omissions(
+            &mut sheets,
+            OmittedFormulaReferences::Names(&omitted),
+            &fill_outcomes,
+            ConversionLimits::default(),
+            &mut report,
+        )
+        .unwrap();
+
+        let replacements: Vec<_> = report
+            .outcomes()
+            .iter()
+            .filter(|outcome| outcome.formula == Some(FormulaDisposition::Replaced))
+            .map(|outcome| outcome.locations.clone())
+            .collect();
+        assert_eq!(replacements.len(), 2, "{replacements:?}");
+        assert!(
+            replacements.contains(&vec![left_location]),
+            "{replacements:?}"
+        );
+        assert!(
+            replacements.contains(&vec![right_location]),
+            "{replacements:?}"
+        );
     }
 
     /// Excel authors defined names in whatever case they like, and writes that
@@ -6940,6 +7367,22 @@ mod tests {
     }
 
     #[test]
+    fn defined_name_rewrite_preserves_structured_selector_headers() {
+        let names = BTreeMap::from([("total".to_owned(), NameId::parse("named_total").unwrap())]);
+
+        assert_eq!(
+            translate_excel_formula(
+                "SUM(sales[Total])+Total",
+                FormulaNames {
+                    sheets: &BTreeMap::new(),
+                    names: &names,
+                },
+            ),
+            "=SUM(sales[Total])+named_total"
+        );
+    }
+
+    #[test]
     fn number_formats_without_a_marksheet_equivalent_are_reported() {
         let exported = export_xlsx(&basic_workbook(), ConversionLimits::default()).unwrap();
         let styles = package_text(&exported.value, "xl/styles.xml")
@@ -6988,6 +7431,69 @@ mod tests {
     }
 
     #[test]
+    fn overprecise_number_format_does_not_create_an_invalid_style() {
+        let exported = export_xlsx(&basic_workbook(), ConversionLimits::default()).unwrap();
+        let styles = package_text(&exported.value, "xl/styles.xml")
+            .replacen(
+                "<fonts count=\"1\">",
+                "<numFmts count=\"1\"><numFmt numFmtId=\"164\" formatCode=\"0.0000000000000000\"/></numFmts><fonts count=\"1\">",
+                1,
+            )
+            .replacen(
+                "<cellXfs count=\"1\"><xf numFmtId=\"0\"",
+                "<cellXfs count=\"1\"><xf numFmtId=\"164\"",
+                1,
+            );
+        let bytes = rewrite_package(&exported.value, &[("xl/styles.xml", &styles)], &[]);
+        let imported = import_xlsx(&bytes, ConversionLimits::default()).unwrap();
+
+        assert_eq!(imported.value.styles[0].properties.decimals, Some(15));
+        let text = marksheet_syntax::serialize_workbook(&imported.value).unwrap();
+        assert!(!marksheet_syntax::parse(&text).has_errors());
+        assert!(imported.report.outcomes().iter().any(|outcome| {
+            outcome.feature == "core_styles"
+                && outcome.outcome == crate::FeatureOutcome::Approximated
+                && outcome.locations.contains(&ConversionLocation::Xlsx {
+                    part: "xl/styles.xml".to_owned(),
+                    reference: Some("cellXfs[0]".to_owned()),
+                })
+        }));
+    }
+
+    #[test]
+    fn symbol_currency_format_does_not_create_an_invalid_style() {
+        let exported = export_xlsx(&basic_workbook(), ConversionLimits::default()).unwrap();
+        let styles = package_text(&exported.value, "xl/styles.xml")
+            .replacen(
+                "<fonts count=\"1\">",
+                "<numFmts count=\"1\"><numFmt numFmtId=\"164\" formatCode=\"[$$-409]#,##0.00\"/></numFmts><fonts count=\"1\">",
+                1,
+            )
+            .replacen(
+                "<cellXfs count=\"1\"><xf numFmtId=\"0\"",
+                "<cellXfs count=\"1\"><xf numFmtId=\"164\"",
+                1,
+            );
+        let bytes = rewrite_package(&exported.value, &[("xl/styles.xml", &styles)], &[]);
+        let imported = import_xlsx(&bytes, ConversionLimits::default()).unwrap();
+
+        let properties = &imported.value.styles[0].properties;
+        assert_eq!(properties.number, Some(NumberFormat::Currency));
+        assert_eq!(properties.decimals, Some(2));
+        assert_eq!(properties.currency.as_deref(), Some("USD"));
+        let text = marksheet_syntax::serialize_workbook(&imported.value).unwrap();
+        assert!(!marksheet_syntax::parse(&text).has_errors());
+        assert!(imported.report.outcomes().iter().any(|outcome| {
+            outcome.feature == "core_styles"
+                && outcome.outcome == crate::FeatureOutcome::Approximated
+                && outcome.locations.contains(&ConversionLocation::Xlsx {
+                    part: "xl/styles.xml".to_owned(),
+                    reference: Some("cellXfs[0]".to_owned()),
+                })
+        }));
+    }
+
+    #[test]
     fn numeric_cells_under_a_date_format_report_the_coercion() {
         let exported = export_xlsx(&basic_workbook(), ConversionLimits::default()).unwrap();
         let styles = package_text(&exported.value, "xl/styles.xml")
@@ -7031,6 +7537,41 @@ mod tests {
             }),
             "{:?}",
             imported.report.outcomes()
+        );
+    }
+
+    #[test]
+    fn defined_name_rewrite_recognizes_a_leading_backslash() {
+        let names = BTreeMap::from([(
+            "\\total".to_owned(),
+            NameId::parse("escaped_total").unwrap(),
+        )]);
+
+        assert_eq!(
+            translate_excel_formula(
+                "SUM(\\Total)",
+                FormulaNames {
+                    sheets: &BTreeMap::new(),
+                    names: &names,
+                },
+            ),
+            "=SUM(escaped_total)"
+        );
+    }
+
+    #[test]
+    fn defined_name_rewrite_preserves_error_literals() {
+        let names = BTreeMap::from([("ref".to_owned(), NameId::parse("named_ref").unwrap())]);
+
+        assert_eq!(
+            translate_excel_formula(
+                "#REF!+REF",
+                FormulaNames {
+                    sheets: &BTreeMap::new(),
+                    names: &names,
+                },
+            ),
+            "=#REF!+named_ref"
         );
     }
 

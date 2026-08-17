@@ -93,21 +93,21 @@ fn format_extension(output: &mut Vec<u8>, source: &[u8], extension: &ExtensionBl
     output.extend_from_slice(b"@end\n");
 }
 
+/// Rewrites CRLF to LF inside an opaque extension payload and copies every
+/// other byte verbatim.
+///
+/// SPEC section 18 item 12 normalizes only CRLF here; a lone carriage return is
+/// unknown payload data that SPEC section 17 requires a lossless editor to keep
+/// byte-for-byte, so canonical output must not rewrite it either.
 fn normalize_line_endings(output: &mut Vec<u8>, bytes: &[u8]) {
     let mut index = 0;
     while index < bytes.len() {
-        match bytes[index] {
-            b'\r' => {
-                output.push(b'\n');
-                index += 1;
-                if bytes.get(index) == Some(&b'\n') {
-                    index += 1;
-                }
-            }
-            byte => {
-                output.push(byte);
-                index += 1;
-            }
+        if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+            output.push(b'\n');
+            index += 2;
+        } else {
+            output.push(bytes[index]);
+            index += 1;
         }
     }
 }
@@ -130,7 +130,28 @@ fn format_arguments(name: &str, arguments: &str) -> String {
         ),
         "column" => format_geometry(arguments, canonical_column_range),
         "row" => format_geometry(arguments, canonical_row_range),
-        _ => canonical_tokens(arguments, |_, token| canonical_token(token)),
+        _ => canonical_tokens(arguments, |index, token| {
+            if holds_identifier(name, index) {
+                token.to_owned()
+            } else {
+                canonical_token(token)
+            }
+        }),
+    }
+}
+
+/// Reports whether an argument position holds a stable identifier rather than
+/// a cell target.
+///
+/// `canonical_target` rewrites A1-shaped text to its upper-case spelling, which
+/// is correct for anchors and references but would rewrite identifiers such as
+/// `q1` or `data1` into spellings the `[a-z][a-z0-9_]*` identifier grammar
+/// rejects, turning a valid workbook into an invalid one.
+fn holds_identifier(directive: &str, index: usize) -> bool {
+    match directive {
+        "sheet" | "table" | "style" => index == 0,
+        "apply" => index > 0,
+        _ => false,
     }
 }
 
@@ -299,6 +320,33 @@ mod tests {
     fn canonical(source: &[u8]) -> Vec<u8> {
         let document = parse(source);
         canonicalize(&document).expect("valid document")
+    }
+
+    #[test]
+    fn a1_shaped_identifiers_survive_canonical_formatting() {
+        let source = b"#!marksheet 0.1\n@style h2 bold=true\n\n@sheet q1 \"Q1\"\n@table data1 A1 csv\nItem,Total\nRent,5\n@end\n@apply data1[Total] h2\n";
+
+        let formatted = canonical(source);
+        let text = String::from_utf8(formatted).expect("canonical output is UTF-8");
+
+        assert!(text.contains("@sheet q1 \"Q1\"\n"), "{text}");
+        assert!(text.contains("@table data1 A1 csv\n"), "{text}");
+        assert!(text.contains("@style h2 bold=true\n"), "{text}");
+        assert!(text.contains("@apply data1[Total] h2\n"), "{text}");
+        assert!(
+            !parse(text.as_bytes()).has_errors(),
+            "canonical formatting must not invalidate a valid workbook: {text}"
+        );
+    }
+
+    #[test]
+    fn block_anchors_are_still_canonicalized_beside_identifiers() {
+        let source = b"#!marksheet 0.1\n@sheet q1 \"Q1\"\n@table data1 b2 csv\nItem\nRent\n@end\n";
+
+        let formatted = canonical(source);
+        let text = String::from_utf8(formatted).expect("canonical output is UTF-8");
+
+        assert!(text.contains("@table data1 B2 csv\n"), "{text}");
     }
 
     #[test]
