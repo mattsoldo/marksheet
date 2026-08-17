@@ -5,16 +5,17 @@
 //! before any result is returned.  This keeps semantic edits, source patches,
 //! and undo data on the same transactional boundary.
 
-use std::{fmt, str, sync::Arc};
+use std::{collections::HashMap, fmt, str, sync::Arc};
 
 use marksheet_calc::{
     formula::{A1Move, FormulaPatch, FormulaRewrite, FormulaRewriteError, rewrite_formula_text},
     prepare::{CompileLimits, PrepareLimits, PreparedWorkbook, compile_formulas},
 };
 use marksheet_model::{
-    ApplyTarget, Block, ByteSpan, ColumnRange, Coordinate, Diagnostic, Fill, FillTarget,
+    ApplyTarget, Block, ByteSpan, Color, ColumnRange, Coordinate, Diagnostic, Fill, FillTarget,
     HorizontalAlignment, NameId, NameTarget, NumberFormat, Range, RowRange, SheetId, SheetItem,
-    StyleId, StyleProperties, Table, TableId, TableRegion, Value, VerticalAlignment, Workbook,
+    Style, StyleId, StyleProperties, Table, TableId, TableRegion, Value, VerticalAlignment,
+    Workbook,
 };
 use marksheet_syntax::{ParseOptions, ParsedDocument, SourceMap, parse_with_options};
 use serde::{Deserialize, Serialize};
@@ -811,22 +812,100 @@ fn plan_rename_sheet_label(
     )
 }
 
+/// A hashable projection of [`StyleProperties`] that reproduces its `PartialEq`
+/// semantics exactly.
+///
+/// [`StyleProperties`] is only `PartialEq` because `font_size` is a float, so
+/// the key carries the size's bit pattern instead.  `-0.0` normalizes onto
+/// `0.0` because the two compare equal, and a `NaN` size yields no key at all
+/// because it compares equal to nothing: such a property map is simply left out
+/// of every index, which is what a linear `==` scan would conclude anyway.
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct StylePropertiesKey<'a> {
+    bold: Option<bool>,
+    italic: Option<bool>,
+    wrap: Option<bool>,
+    text_color: Option<&'a str>,
+    fill: Option<&'a str>,
+    font_size: Option<u64>,
+    align: Option<HorizontalAlignment>,
+    valign: Option<VerticalAlignment>,
+    number: Option<NumberFormat>,
+    decimals: Option<u8>,
+    currency: Option<&'a str>,
+}
+
+fn style_properties_key(properties: &StyleProperties) -> Option<StylePropertiesKey<'_>> {
+    let font_size = match properties.font_size {
+        None => None,
+        Some(size) if size.is_nan() => return None,
+        Some(0.0) => Some(0.0_f64.to_bits()),
+        Some(size) => Some(size.to_bits()),
+    };
+    Some(StylePropertiesKey {
+        bold: properties.bold,
+        italic: properties.italic,
+        wrap: properties.wrap,
+        text_color: properties.text_color.as_ref().map(Color::as_str),
+        fill: properties.fill.as_ref().map(Color::as_str),
+        font_size,
+        align: properties.align,
+        valign: properties.valign,
+        number: properties.number,
+        decimals: properties.decimals,
+        currency: properties.currency.as_deref(),
+    })
+}
+
+/// Selects the stable identifier for every `DefineStyle` request.
+///
+/// A request coalesces onto an existing declaration in four ordered cases: a
+/// base style with the same ID, a base style with equal properties, an earlier
+/// request for the same ID, and an earlier request whose ID was first defined
+/// with equal properties.  Each case reads a precomputed index, so the pass
+/// stays linear in the operation count instead of rescanning the operations for
+/// every candidate resolution.
 fn resolve_style_definitions(
     base: &ValidDocument,
     operations: &[EditOperation],
 ) -> Result<Vec<StyleDefinitionResolution>, EditError> {
-    let mut resolutions = Vec::new();
+    let mut base_by_id: HashMap<&StyleId, &Style> = HashMap::new();
+    let mut base_by_properties: HashMap<StylePropertiesKey<'_>, &Style> = HashMap::new();
+    for style in &base.workbook.styles {
+        base_by_id.entry(&style.id).or_insert(style);
+        if let Some(key) = style_properties_key(&style.properties) {
+            base_by_properties.entry(key).or_insert(style);
+        }
+    }
+
+    // The properties of the first request for each identifier. The first
+    // request owns the declaration, so it also defines the property map that
+    // every later request for that identifier must match.
+    let mut first_request: HashMap<&StyleId, &StyleProperties> = HashMap::new();
+    for operation in operations {
+        if let EditOperation::DefineStyle { style, properties } = operation {
+            first_request.entry(style).or_insert(properties);
+        }
+    }
+
+    let mut resolutions: Vec<StyleDefinitionResolution> = Vec::new();
+    // Position in `resolutions` of the first resolution requesting an
+    // identifier, and of the first resolution whose identifier was first
+    // requested with a given property map.
+    let mut resolved_by_id: HashMap<&StyleId, usize> = HashMap::new();
+    let mut resolved_by_properties: HashMap<StylePropertiesKey<'_>, usize> = HashMap::new();
+
     for (index, operation) in operations.iter().enumerate() {
         let EditOperation::DefineStyle { style, properties } = operation else {
             continue;
         };
         validate_style_properties(properties, index)?;
-        if let Some(existing) = base
-            .workbook
-            .styles
-            .iter()
-            .find(|candidate| candidate.id == *style)
-        {
+        let requested_properties = first_request
+            .get(style)
+            .copied()
+            .expect("every requested style identifier is indexed");
+
+        let (effective, created) = if let Some(existing) = base_by_id.get(style).copied() {
             if existing.properties != *properties {
                 return Err(operation_error(
                     index,
@@ -834,84 +913,48 @@ fn resolve_style_definitions(
                     "style identifier already has different declared properties",
                 ));
             }
-            resolutions.push(StyleDefinitionResolution {
-                operation_index: index,
-                requested: style.clone(),
-                effective: existing.id.clone(),
-                created: false,
-            });
-            continue;
-        }
-
-        if let Some(existing) = base
-            .workbook
-            .styles
-            .iter()
-            .find(|candidate| candidate.properties == *properties)
+            (existing.id.clone(), false)
+        } else if let Some(existing) =
+            style_properties_key(properties).and_then(|key| base_by_properties.get(&key).copied())
         {
-            resolutions.push(StyleDefinitionResolution {
-                operation_index: index,
-                requested: style.clone(),
-                effective: existing.id.clone(),
-                created: false,
-            });
-            continue;
-        }
-
-        if let Some(previous) = resolutions
-            .iter()
-            .find(|resolution| resolution.requested == *style)
-        {
+            (existing.id.clone(), false)
+        } else if let Some(previous) = resolved_by_id.get(style).copied() {
             // The first identical in-transaction definition owns the new
             // declaration. A later request for the same ID must not quietly
             // change its meaning.
-            let prior_properties = operations.iter().find_map(|candidate| match candidate {
-                EditOperation::DefineStyle {
-                    style: prior_style,
-                    properties,
-                } if prior_style == style => Some(properties),
-                _ => None,
-            });
-            debug_assert!(prior_properties.is_some());
-            if prior_properties != Some(properties) {
+            if requested_properties != properties {
                 return Err(operation_error(
                     index,
                     EditErrorKind::IdentifierCollision,
                     "style identifier is requested with different declared properties",
                 ));
             }
-            resolutions.push(StyleDefinitionResolution {
-                operation_index: index,
-                requested: style.clone(),
-                effective: previous.effective.clone(),
-                created: false,
-            });
-            continue;
-        }
-
-        if let Some(previous) = resolutions.iter().find(|resolution| {
-            operations.iter().any(|candidate| {
-                matches!(candidate, EditOperation::DefineStyle { style, properties: prior }
-                    if style == &resolution.requested && prior == properties)
-            })
-        }) {
+            (resolutions[previous].effective.clone(), false)
+        } else if let Some(previous) = style_properties_key(properties)
+            .and_then(|key| resolved_by_properties.get(&key).copied())
+        {
             // Two fresh IDs with equal property maps in one transaction also
             // coalesce. Operation order supplies the deterministic stable ID.
-            resolutions.push(StyleDefinitionResolution {
-                operation_index: index,
-                requested: style.clone(),
-                effective: previous.effective.clone(),
-                created: false,
-            });
-            continue;
-        }
+            // Only the property map of an ID's first request can match here: a
+            // later request that redefines the same ID with these properties is
+            // a collision, which the case above rejects before this transaction
+            // can return any resolution.
+            (resolutions[previous].effective.clone(), false)
+        } else {
+            (style.clone(), true)
+        };
 
+        let position = resolutions.len();
         resolutions.push(StyleDefinitionResolution {
             operation_index: index,
             requested: style.clone(),
-            effective: style.clone(),
-            created: true,
+            effective,
+            created,
         });
+        resolved_by_id.entry(style).or_insert(position);
+        if let Some(key) = style_properties_key(requested_properties) {
+            resolved_by_properties.entry(key).or_insert(position);
+        }
     }
     Ok(resolutions)
 }
@@ -2950,6 +2993,10 @@ mod tests {
         NameId::parse(value).unwrap()
     }
 
+    fn style_id(value: &str) -> StyleId {
+        StyleId::parse(value).unwrap()
+    }
+
     fn execute_one(source: &[u8], operation: EditOperation) -> EditResult {
         EditTransaction::single(operation).execute(source).unwrap()
     }
@@ -3430,6 +3477,238 @@ mod tests {
         .execute(source)
         .unwrap_err();
         assert_eq!(conflict.kind, EditErrorKind::IdentifierCollision);
+    }
+
+    #[test]
+    fn define_style_coalescing_cases_select_stable_identifiers() {
+        let source = b"#!marksheet 0.1\n@sheet data \"Data\"\n@block A1 csv\nValue\n1\n@end\n";
+        let bold = StyleProperties {
+            bold: Some(true),
+            ..StyleProperties::default()
+        };
+        let italic = StyleProperties {
+            italic: Some(true),
+            ..StyleProperties::default()
+        };
+
+        // Same ID with the same properties coalesces onto the first request,
+        // a fresh ID with equal properties coalesces onto it as well, and a
+        // later operation referencing either ID binds to the effective one.
+        let coalesced = EditTransaction {
+            operations: vec![
+                EditOperation::DefineStyle {
+                    style: style_id("emphasis"),
+                    properties: bold.clone(),
+                },
+                EditOperation::DefineStyle {
+                    style: style_id("emphasis"),
+                    properties: bold.clone(),
+                },
+                EditOperation::DefineStyle {
+                    style: style_id("strong"),
+                    properties: bold,
+                },
+                EditOperation::DefineStyle {
+                    style: style_id("slanted"),
+                    properties: italic,
+                },
+                EditOperation::ApplyStyle {
+                    sheet: sheet("data"),
+                    target: ApplyTarget::Range(range("A2")),
+                    style: style_id("strong"),
+                },
+            ],
+            expectations: EditExpectations::default(),
+        }
+        .execute(source)
+        .unwrap();
+        assert_eq!(
+            coalesced.style_definitions,
+            vec![
+                StyleDefinitionResolution {
+                    operation_index: 0,
+                    requested: style_id("emphasis"),
+                    effective: style_id("emphasis"),
+                    created: true,
+                },
+                StyleDefinitionResolution {
+                    operation_index: 1,
+                    requested: style_id("emphasis"),
+                    effective: style_id("emphasis"),
+                    created: false,
+                },
+                StyleDefinitionResolution {
+                    operation_index: 2,
+                    requested: style_id("strong"),
+                    effective: style_id("emphasis"),
+                    created: false,
+                },
+                StyleDefinitionResolution {
+                    operation_index: 3,
+                    requested: style_id("slanted"),
+                    effective: style_id("slanted"),
+                    created: true,
+                },
+            ]
+        );
+        assert_eq!(
+            coalesced.source,
+            b"#!marksheet 0.1\n@style emphasis bold=true\n@style slanted italic=true\n@sheet data \"Data\"\n@block A1 csv\nValue\n1\n@end\n@apply A2 emphasis\n"
+        );
+        assert_undo(&coalesced, source);
+    }
+
+    #[test]
+    fn define_style_prefers_base_declarations_over_new_ones() {
+        let bold = StyleProperties {
+            bold: Some(true),
+            ..StyleProperties::default()
+        };
+
+        // Base declarations win over in-transaction ones, by ID first and by
+        // equal properties second.
+        let existing = b"#!marksheet 0.1\n@style base_bold bold=true\n@sheet data \"Data\"\n";
+        let reused = EditTransaction {
+            operations: vec![
+                EditOperation::DefineStyle {
+                    style: style_id("fresh_bold"),
+                    properties: bold.clone(),
+                },
+                EditOperation::DefineStyle {
+                    style: style_id("base_bold"),
+                    properties: bold,
+                },
+            ],
+            expectations: EditExpectations::default(),
+        }
+        .execute(existing)
+        .unwrap();
+        assert!(!reused.changed());
+        assert_eq!(
+            reused
+                .style_definitions
+                .iter()
+                .map(|definition| definition.effective.as_str())
+                .collect::<Vec<_>>(),
+            ["base_bold", "base_bold"]
+        );
+        assert!(
+            reused
+                .style_definitions
+                .iter()
+                .all(|definition| !definition.created)
+        );
+    }
+
+    #[test]
+    fn define_style_rejects_one_identifier_with_two_property_maps() {
+        let source = b"#!marksheet 0.1\n@sheet data \"Data\"\n@block A1 csv\nValue\n1\n@end\n";
+        let bold = StyleProperties {
+            bold: Some(true),
+            ..StyleProperties::default()
+        };
+        let italic = StyleProperties {
+            italic: Some(true),
+            ..StyleProperties::default()
+        };
+
+        // The same ID requested with different properties is a collision, and
+        // the collision is reported for the operation that diverges.
+        let collision = EditTransaction {
+            operations: vec![
+                EditOperation::DefineStyle {
+                    style: style_id("emphasis"),
+                    properties: bold.clone(),
+                },
+                EditOperation::DefineStyle {
+                    style: style_id("emphasis"),
+                    properties: italic.clone(),
+                },
+            ],
+            expectations: EditExpectations::default(),
+        }
+        .execute(source)
+        .unwrap_err();
+        assert_eq!(collision.kind, EditErrorKind::IdentifierCollision);
+        assert_eq!(collision.operation_index, Some(1));
+
+        // A later request that redefines an earlier ID still collides even
+        // when an intervening request shares its property map.
+        let late_collision = EditTransaction {
+            operations: vec![
+                EditOperation::DefineStyle {
+                    style: style_id("emphasis"),
+                    properties: bold,
+                },
+                EditOperation::DefineStyle {
+                    style: style_id("slanted"),
+                    properties: italic.clone(),
+                },
+                EditOperation::DefineStyle {
+                    style: style_id("emphasis"),
+                    properties: italic,
+                },
+            ],
+            expectations: EditExpectations::default(),
+        }
+        .execute(source)
+        .unwrap_err();
+        assert_eq!(late_collision.kind, EditErrorKind::IdentifierCollision);
+        assert_eq!(late_collision.operation_index, Some(2));
+    }
+
+    #[test]
+    fn define_style_distinguishes_property_maps_that_only_look_alike() {
+        let source = b"#!marksheet 0.1\n@sheet data \"Data\"\n";
+        let definitions = EditTransaction {
+            operations: vec![
+                EditOperation::DefineStyle {
+                    style: style_id("small"),
+                    properties: StyleProperties {
+                        font_size: Some(10.0),
+                        ..StyleProperties::default()
+                    },
+                },
+                EditOperation::DefineStyle {
+                    style: style_id("smaller"),
+                    properties: StyleProperties {
+                        font_size: Some(10.5),
+                        ..StyleProperties::default()
+                    },
+                },
+                EditOperation::DefineStyle {
+                    style: style_id("also_small"),
+                    properties: StyleProperties {
+                        font_size: Some(10.0),
+                        ..StyleProperties::default()
+                    },
+                },
+                EditOperation::DefineStyle {
+                    style: style_id("tinted"),
+                    properties: StyleProperties {
+                        font_size: Some(10.0),
+                        text_color: Some(Color::parse("#101010").unwrap()),
+                        ..StyleProperties::default()
+                    },
+                },
+            ],
+            expectations: EditExpectations::default(),
+        }
+        .execute(source)
+        .unwrap()
+        .style_definitions;
+        assert_eq!(
+            definitions
+                .iter()
+                .map(|definition| (definition.effective.as_str(), definition.created))
+                .collect::<Vec<_>>(),
+            [
+                ("small", true),
+                ("smaller", true),
+                ("small", false),
+                ("tinted", true),
+            ]
+        );
     }
 
     #[test]
