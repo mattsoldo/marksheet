@@ -215,16 +215,40 @@ pub(crate) fn format(path: &Path, check: bool) -> Result<ExitCode, commands::Cli
             );
         }
     };
-    if check {
-        return print_format_check(&source, &formatted, &diagnostics);
+    let would_change = source != formatted;
+    if would_change && json_string_encoded_len(&formatted) > MAX_FORMAT_REPLACEMENT_JSON_BYTES {
+        return print_format_failure(
+            &source,
+            check,
+            &diagnostics,
+            "resource_limit",
+            "formatted source cannot fit in the bounded exact-patch response",
+        );
     }
-    apply_format(path, &source, &formatted, &diagnostics)
+    let Ok(formatted_diagnostics) = validate_format_candidate(&source, &formatted, &diagnostics)
+    else {
+        return print_format_regression(&source, &formatted, check, &diagnostics);
+    };
+    if check {
+        let proposed_valid = !formatted_diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error);
+        return print_format_check(&source, &formatted, &diagnostics, proposed_valid);
+    }
+    apply_format(
+        path,
+        &source,
+        &formatted,
+        &diagnostics,
+        &formatted_diagnostics,
+    )
 }
 
 fn print_format_check(
     source: &[u8],
     formatted: &[u8],
     diagnostics: &[Diagnostic],
+    proposed_valid: bool,
 ) -> Result<ExitCode, commands::CliError> {
     let would_change = source != formatted;
     let output = FormatOutput {
@@ -234,13 +258,14 @@ fn print_format_check(
         check_only: true,
         changed: false,
         would_change,
-        valid: !diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.severity == Severity::Error),
+        valid: proposed_valid,
         before: SourceVersion::new(source),
         after: SourceVersion::new(source),
         proposed: would_change.then(|| SourceVersion::new(formatted)),
         patches: Vec::new(),
+        // Check mode does not produce the candidate bytes, and the @1
+        // envelope has no candidate-source binding. Report the verified
+        // candidate verdict while keeping positions scoped to the input.
         diagnostics: json_diagnostics(source, diagnostics),
         error: None,
     };
@@ -256,18 +281,10 @@ fn apply_format(
     path: &Path,
     source: &[u8],
     formatted: &[u8],
-    diagnostics: &[Diagnostic],
+    source_diagnostics: &[Diagnostic],
+    formatted_diagnostics: &[Diagnostic],
 ) -> Result<ExitCode, commands::CliError> {
     let would_change = source != formatted;
-    if would_change && json_string_encoded_len(formatted) > MAX_FORMAT_REPLACEMENT_JSON_BYTES {
-        return print_format_failure(
-            source,
-            false,
-            diagnostics,
-            "resource_limit",
-            "formatted source cannot fit in the bounded exact-patch response",
-        );
-    }
     if would_change && !commands::replace_atomically_if_current(path, formatted, source)? {
         let after = match commands::read_source_bounded(path, MAX_AUTOMATION_SOURCE_BYTES)? {
             Some(current) => SourceVersion::new(&current),
@@ -285,7 +302,7 @@ fn apply_format(
             after,
             proposed: Some(SourceVersion::new(formatted)),
             patches: Vec::new(),
-            diagnostics: json_diagnostics(source, diagnostics),
+            diagnostics: json_diagnostics(source, source_diagnostics),
             error: Some(AutomationError {
                 kind: "conflict",
                 message: "source bytes changed after formatting was planned",
@@ -302,7 +319,7 @@ fn apply_format(
         check_only: false,
         changed: would_change,
         would_change,
-        valid: !diagnostics
+        valid: !formatted_diagnostics
             .iter()
             .any(|diagnostic| diagnostic.severity == Severity::Error),
         before: SourceVersion::new(source),
@@ -317,11 +334,100 @@ fn apply_format(
         } else {
             Vec::new()
         },
-        diagnostics: json_diagnostics(formatted, diagnostics),
+        // `formatted` is the source these diagnostics were derived from, and
+        // when nothing changed it is byte-identical to `source`, so spans and
+        // line index always describe the same bytes.
+        diagnostics: json_diagnostics(formatted, formatted_diagnostics),
         error: None,
     };
     print_json(&output)?;
     Ok(ExitCode::SUCCESS)
+}
+
+/// Candidate source reparsed through the pipeline that admitted the base
+/// workbook, so a mutating command can report the state it actually produced.
+struct Revalidated {
+    /// Whether the source would pass the same admission gate the base source
+    /// passed: parseable, capability-complete, and free of formula errors.
+    admissible: bool,
+    diagnostics: Vec<Diagnostic>,
+}
+
+/// Rechecks candidate source against the admission gate exactly.
+///
+/// Trusted extension diagnostics are deliberately excluded, because admission
+/// excludes them too. A failed assertion is an authoring outcome that
+/// formatting neither causes nor repairs, so treating it as a formatter defect
+/// would refuse to format a workbook that was already failing that assertion
+/// before and after the rewrite.
+fn revalidate(source: &[u8]) -> Revalidated {
+    let document = commands::parse_with_extensions(source);
+    let mut diagnostics = document.diagnostics.clone();
+    let mut formula_errors = false;
+    if let Some(workbook) = document.parsed.workbook.as_ref() {
+        let formula_diagnostics = commands::validate_formulas(workbook);
+        formula_errors = formula_diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error);
+        diagnostics.extend(formula_diagnostics);
+    }
+    commands::sort_and_deduplicate_diagnostics(&mut diagnostics);
+    Revalidated {
+        admissible: !document.parsed.has_errors()
+            && document.capabilities_complete
+            && !formula_errors,
+        diagnostics,
+    }
+}
+
+/// Applies the result-admission gate before either check-only reporting or a
+/// write is allowed to describe the canonical candidate.
+fn validate_format_candidate(
+    source: &[u8],
+    formatted: &[u8],
+    diagnostics: &[Diagnostic],
+) -> Result<Vec<Diagnostic>, Vec<Diagnostic>> {
+    if source == formatted {
+        return Ok(diagnostics.to_vec());
+    }
+    let revalidated = revalidate(formatted);
+    if revalidated.admissible {
+        Ok(revalidated.diagnostics)
+    } else {
+        Err(revalidated.diagnostics)
+    }
+}
+
+fn print_format_regression(
+    source: &[u8],
+    formatted: &[u8],
+    check: bool,
+    diagnostics: &[Diagnostic],
+) -> Result<ExitCode, commands::CliError> {
+    let before = SourceVersion::new(source);
+    let output = FormatOutput {
+        version: "marksheet-format@1",
+        profile: "portable-a1@1",
+        status: "invalid",
+        check_only: check,
+        changed: false,
+        would_change: true,
+        valid: false,
+        after: before.clone(),
+        before,
+        proposed: Some(SourceVersion::new(formatted)),
+        patches: Vec::new(),
+        // The @1 envelope fingerprints but cannot reconstruct or explicitly
+        // bind the uncommitted proposal. Never expose candidate-relative
+        // positions that clients would naturally map onto the unchanged file.
+        diagnostics: json_diagnostics(source, diagnostics),
+        error: Some(AutomationError {
+            kind: "invalid_result",
+            message: "canonical formatting would produce an invalid workbook; no write performed",
+        }),
+    };
+    print_json(&output)?;
+    Ok(ExitCode::from(1))
 }
 
 fn get_cells(
@@ -1302,4 +1408,25 @@ impl SourceVersion {
 struct AutomationError<'a> {
     kind: &'static str,
     message: &'a str,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changed_format_candidate_must_pass_admission() {
+        let diagnostics = validate_format_candidate(
+            b"#!marksheet 0.1\n",
+            b"#!marksheet 0.1\n@sheet broken\n",
+            &[],
+        )
+        .expect_err("an invalid changed candidate must be refused in every mode");
+
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity == Severity::Error)
+        );
+    }
 }
