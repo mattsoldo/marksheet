@@ -273,7 +273,7 @@ impl fmt::Display for ViewError {
                 limit,
             } => write!(
                 formatter,
-                "sheet has {applications} style applications; viewport limit is {limit}"
+                "viewport must examine {applications} style applications; limit is {limit}"
             ),
             Self::CoordinateOverflow => formatter.write_str("viewport coordinate overflow"),
         }
@@ -496,7 +496,6 @@ impl WorkbookView {
                 sheet,
                 prepared_sheet,
                 &definitions,
-                limits.max_style_applications,
                 limits.max_style_layers_per_cell,
             )?;
             style_indexes.insert(sheet.id.clone(), applications);
@@ -612,35 +611,7 @@ impl WorkbookView {
             .get(&request.sheet)
             .ok_or_else(|| ViewError::UnknownSheet(request.sheet.clone()))?
             .coordinates_in(request.range, self.limits.max_presented_cells)?;
-        let style_applications = self
-            .style_indexes
-            .get(&request.sheet)
-            .ok_or_else(|| ViewError::UnknownSheet(request.sheet.clone()))?;
-        let intersecting_styles = style_applications
-            .iter()
-            .filter(|application| application.range.overlaps(request.range))
-            .take(self.limits.max_style_regions.saturating_add(1))
-            .cloned()
-            .collect::<Vec<_>>();
-        if intersecting_styles.len() > self.limits.max_style_regions {
-            return Err(ViewError::StyleRegionLimitExceeded {
-                regions: intersecting_styles.len(),
-                limit: self.limits.max_style_regions,
-            });
-        }
-        let style_regions = intersecting_styles
-            .iter()
-            .filter_map(|application| {
-                application
-                    .range
-                    .intersection(request.range)
-                    .map(|range| StyledRegion {
-                        range,
-                        style: application.style.clone(),
-                        source_order: application.source_order,
-                    })
-            })
-            .collect::<Vec<_>>();
+        let (intersecting_styles, style_regions) = self.resolve_style_regions(request)?;
 
         let mut region_diagnostics = self.diagnostics.clone();
         // Calculation is deliberately after the sparse output limit check so
@@ -696,6 +667,56 @@ impl WorkbookView {
             rows,
             diagnostics: region_diagnostics,
         })
+    }
+
+    /// Resolves the `@apply` intervals overlapping `request`, bounding both
+    /// the work examined and the results returned.
+    ///
+    /// Every request linearly scans the sheet's pre-indexed applications to
+    /// find the ones overlapping this viewport, so that scan is exactly the
+    /// work [`ViewLimits::max_style_applications`] bounds. It is checked
+    /// before doing that scan, matching `visible_region`'s "before
+    /// allocating output" contract.
+    fn resolve_style_regions(
+        &self,
+        request: &VisibleRegionRequest,
+    ) -> Result<(Vec<IndexedStyleApplication>, Vec<StyledRegion>), ViewError> {
+        let style_applications = self
+            .style_indexes
+            .get(&request.sheet)
+            .ok_or_else(|| ViewError::UnknownSheet(request.sheet.clone()))?;
+        if style_applications.len() > self.limits.max_style_applications {
+            return Err(ViewError::StyleApplicationLimitExceeded {
+                applications: style_applications.len(),
+                limit: self.limits.max_style_applications,
+            });
+        }
+        let intersecting_styles = style_applications
+            .iter()
+            .filter(|application| application.range.overlaps(request.range))
+            .take(self.limits.max_style_regions.saturating_add(1))
+            .cloned()
+            .collect::<Vec<_>>();
+        if intersecting_styles.len() > self.limits.max_style_regions {
+            return Err(ViewError::StyleRegionLimitExceeded {
+                regions: intersecting_styles.len(),
+                limit: self.limits.max_style_regions,
+            });
+        }
+        let style_regions = intersecting_styles
+            .iter()
+            .filter_map(|application| {
+                application
+                    .range
+                    .intersection(request.range)
+                    .map(|range| StyledRegion {
+                        range,
+                        style: application.style.clone(),
+                        source_order: application.source_order,
+                    })
+            })
+            .collect::<Vec<_>>();
+        Ok((intersecting_styles, style_regions))
     }
 
     fn calculate_region(
@@ -823,26 +844,25 @@ fn rows_for(geometry: &AxisGeometryIndex, range: Range) -> Result<Vec<RowPresent
     Ok(rows)
 }
 
+/// Indexes every `@apply` directive authored on `sheet`.
+///
+/// This runs once at build time and is not itself bounded by
+/// [`ViewLimits::max_style_applications`]: that limit is documented as a
+/// per-viewport bound on work examined while projecting a requested region,
+/// so a sheet with many `@apply` directives must still open successfully.
+/// The limit is enforced later, in [`WorkbookView::visible_region`], against
+/// the applications a specific request would need to scan.
 fn index_style_applications(
     sheet: &Sheet,
     prepared: &PreparedSheet,
     definitions: &BTreeMap<StyleId, &marksheet_model::Style>,
-    max_applications: usize,
     max_layers: usize,
 ) -> Result<Vec<IndexedStyleApplication>, ViewError> {
     let mut applications = Vec::new();
-    let mut seen_applications = 0usize;
     for (position, item) in sheet.items.iter().enumerate() {
         let SheetItem::Apply(apply) = item else {
             continue;
         };
-        seen_applications = seen_applications.saturating_add(1);
-        if seen_applications > max_applications {
-            return Err(ViewError::StyleApplicationLimitExceeded {
-                applications: seen_applications,
-                limit: max_applications,
-            });
-        }
         let Some(range) = (match &apply.target {
             ApplyTarget::Range(range) => Some(*range),
             ApplyTarget::Table { table, region } => {
@@ -1230,6 +1250,21 @@ mod tests {
     }
 
     #[test]
+    fn style_application_limit_does_not_block_opening_a_document() {
+        // max_style_applications is documented as a per-viewport bound on work
+        // examined while projecting a region, not a whole-sheet bound checked
+        // at build time. A sheet with more @apply directives than the limit
+        // must still open successfully.
+        let source = b"#!marksheet 0.1\n@style note italic=true\n@sheet s \"Styled\"\n@apply A1 note\n@apply B1 note\n";
+        let document = parse(source);
+        let limits = ViewLimits {
+            max_style_applications: 1,
+            ..ViewLimits::default()
+        };
+        assert!(WorkbookView::from_document(&document, limits).is_ok());
+    }
+
+    #[test]
     fn style_application_limit_bounds_request_resolution_work() {
         let source = b"#!marksheet 0.1\n@style note italic=true\n@sheet s \"Styled\"\n@apply A1 note\n@apply B1 note\n";
         let document = parse(source);
@@ -1237,11 +1272,56 @@ mod tests {
             max_style_applications: 1,
             ..ViewLimits::default()
         };
+        let mut view = WorkbookView::from_document(&document, limits).unwrap();
+        let before = format!("{view:?}");
+        let result = view.visible_region(&VisibleRegionRequest {
+            sheet: "s".parse().unwrap(),
+            range: Range::parse("A1:B1").unwrap(),
+            calculate: false,
+        });
         assert!(matches!(
-            WorkbookView::from_document(&document, limits),
+            result,
             Err(ViewError::StyleApplicationLimitExceeded {
                 applications: 2,
                 limit: 1
+            })
+        ));
+        // The rejected request must not have mutated any cached view state.
+        assert_eq!(format!("{view:?}"), before);
+    }
+
+    #[test]
+    fn thousand_and_twenty_five_style_applications_open_successfully() {
+        // Regression test: a valid workbook with more @apply directives on one
+        // sheet than the default max_style_applications must still open, since
+        // the limit bounds per-viewport projection work, not build-time
+        // indexing. Reproduces the 1025-application case from the finding.
+        use std::fmt::Write as _;
+
+        let mut source =
+            String::from("#!marksheet 0.1\n@style note italic=true\n@sheet s \"Styled\"\n");
+        for row in 1..=1025u32 {
+            let _ = writeln!(source, "@apply A{row} note");
+        }
+        let document = parse(source.as_bytes());
+        assert!(!document.has_errors());
+        let result = WorkbookView::from_document(&document, ViewLimits::default());
+        assert!(result.is_ok());
+
+        // Requesting a viewport whose projection must examine all 1025
+        // pre-indexed applications exceeds the default limit and fails,
+        // atomically, with the documented error.
+        let mut view = result.unwrap();
+        let region = view.visible_region(&VisibleRegionRequest {
+            sheet: "s".parse().unwrap(),
+            range: Range::parse("A1:A1025").unwrap(),
+            calculate: false,
+        });
+        assert!(matches!(
+            region,
+            Err(ViewError::StyleApplicationLimitExceeded {
+                applications: 1025,
+                limit: 1_024
             })
         ));
     }
