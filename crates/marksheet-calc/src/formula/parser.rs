@@ -528,6 +528,17 @@ impl Parser<'_> {
         ))
     }
 
+    /// Builds one AST node, enforcing the parser's depth and node-count
+    /// limits before it is returned to the caller.
+    ///
+    /// Depth is purely structural: a unary or binary operator's depth is one
+    /// more than its deepest child, and a call's depth is one more than its
+    /// deepest argument. This means a left-spine chain of the same operator —
+    /// for example `1+2+3+...+257`, which never branches — still nests one
+    /// level per additional term, exactly like a genuinely nested expression
+    /// of the same depth. A flat chain of more than `max_depth` (256 by
+    /// default) terms is therefore rejected as `MS2202`, just as deliberately
+    /// nested input would be.
     fn node(&mut self, kind: ExprKind, span: ByteSpan) -> Result<Expr, FormulaError> {
         let depth = match &kind {
             ExprKind::Literal { .. } | ExprKind::Reference { .. } => 1,

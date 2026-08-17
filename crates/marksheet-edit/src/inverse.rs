@@ -5,7 +5,7 @@
 //! publish an undo or redo result. This module keeps those guarantees on the
 //! inverse path instead of treating undo as an unvalidated byte operation.
 
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 use marksheet_calc::prepare::{CompileLimits, PrepareLimits, PreparedWorkbook, compile_formulas};
 use marksheet_model::{Diagnostic, Workbook};
@@ -36,6 +36,11 @@ impl InverseTransaction {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.patches.is_empty()
+    }
+
+    /// The shared snapshot this transaction is bound to.
+    pub(crate) fn shared_base(&self) -> &Arc<Vec<u8>> {
+        self.patches.shared_base()
     }
 
     /// Applies the transaction, then validates the resulting workbook and all

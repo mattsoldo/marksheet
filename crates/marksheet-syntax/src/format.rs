@@ -6,6 +6,7 @@ use marksheet_model::{Coordinate, Range, Value, canonical_number};
 use crate::ParsedDocument;
 use crate::cst::{CsvBlock, Directive, ExtensionBlock, Node};
 use crate::diagnostic::Diagnostic;
+use crate::tokens::{split_target_and_rest, split_tokens};
 
 /// Canonicalizes a valid document. Invalid documents are returned unchanged by
 /// omission: callers receive the diagnostics and can refuse a destructive
@@ -117,7 +118,7 @@ fn format_arguments(name: &str, arguments: &str) -> String {
             || arguments.to_owned(),
             |(id, target)| format!("{id} = {}", canonical_target(target)),
         ),
-        "fill" => split_target(arguments).map_or_else(
+        "fill" => split_target_and_rest(arguments).map_or_else(
             || arguments.to_owned(),
             |(target, formula)| {
                 format!(
@@ -129,30 +130,56 @@ fn format_arguments(name: &str, arguments: &str) -> String {
         ),
         "column" => format_geometry(arguments, canonical_column_range),
         "row" => format_geometry(arguments, canonical_row_range),
-        _ => split_space_tokens(arguments)
-            .into_iter()
-            .map(canonical_token)
-            .collect::<Vec<_>>()
-            .join(" "),
+        _ => canonical_tokens(arguments, |index, token| {
+            if holds_identifier(name, index) {
+                token.to_owned()
+            } else {
+                canonical_token(token)
+            }
+        }),
+    }
+}
+
+/// Reports whether an argument position holds a stable identifier rather than
+/// a cell target.
+///
+/// `canonical_target` rewrites A1-shaped text to its upper-case spelling, which
+/// is correct for anchors and references but would rewrite identifiers such as
+/// `q1` or `data1` into spellings the `[a-z][a-z0-9_]*` identifier grammar
+/// rejects, turning a valid workbook into an invalid one.
+fn holds_identifier(directive: &str, index: usize) -> bool {
+    match directive {
+        "sheet" | "table" | "style" => index == 0,
+        "apply" => index > 0,
+        _ => false,
     }
 }
 
 fn format_geometry(arguments: &str, format_target: fn(&str) -> Option<String>) -> String {
-    let mut tokens = split_space_tokens(arguments);
-    if let Some(target) = tokens.first_mut() {
-        let formatted = format_target(target);
-        if let Some(formatted) = formatted {
-            return std::iter::once(formatted)
-                .chain(tokens[1..].iter().map(|token| canonical_token(token)))
-                .collect::<Vec<_>>()
-                .join(" ");
+    canonical_tokens(arguments, |index, token| {
+        if index == 0 {
+            if let Some(formatted) = format_target(token) {
+                return formatted;
+            }
         }
-    }
-    tokens
-        .into_iter()
-        .map(canonical_token)
-        .collect::<Vec<_>>()
-        .join(" ")
+        canonical_token(token)
+    })
+}
+
+/// Rewrites each argument token, leaving arguments that cannot be tokenized
+/// untouched rather than dropping them.
+fn canonical_tokens(arguments: &str, format_token: impl Fn(usize, &str) -> String) -> String {
+    split_tokens(arguments).map_or_else(
+        |_| arguments.to_owned(),
+        |tokens| {
+            tokens
+                .iter()
+                .enumerate()
+                .map(|(index, token)| format_token(index, token.text))
+                .collect::<Vec<_>>()
+                .join(" ")
+        },
+    )
 }
 
 fn canonical_column_range(value: &str) -> Option<String> {
@@ -190,24 +217,20 @@ fn canonical_row_range(value: &str) -> Option<String> {
 }
 
 fn canonical_token(token: &str) -> String {
+    // A quoted argument is one JSON string, so an `=` inside it never starts a
+    // property and must not be split off as a key.
+    if token.starts_with('"') {
+        return canonical_json_string(token);
+    }
     if let Some((key, value)) = token.split_once('=') {
         return format!("{key}={}", canonical_property_value(value));
-    }
-    if token.starts_with('"') {
-        return serde_json::from_str::<String>(token)
-            .ok()
-            .and_then(|value| serde_json::to_string(&value).ok())
-            .unwrap_or_else(|| token.to_owned());
     }
     canonical_target(token)
 }
 
 fn canonical_property_value(value: &str) -> String {
     if value.starts_with('"') {
-        return serde_json::from_str::<String>(value)
-            .ok()
-            .and_then(|decoded| serde_json::to_string(&decoded).ok())
-            .unwrap_or_else(|| value.to_owned());
+        return canonical_json_string(value);
     }
     if let Ok(number) = value.parse::<f64>() {
         if number.is_finite() {
@@ -215,6 +238,13 @@ fn canonical_property_value(value: &str) -> String {
         }
     }
     value.to_owned()
+}
+
+fn canonical_json_string(value: &str) -> String {
+    serde_json::from_str::<String>(value)
+        .ok()
+        .and_then(|decoded| serde_json::to_string(&decoded).ok())
+        .unwrap_or_else(|| value.to_owned())
 }
 
 fn canonical_target(target: &str) -> String {
@@ -227,46 +257,6 @@ fn canonical_target(target: &str) -> String {
         return range.to_string();
     }
     target.to_owned()
-}
-
-/// Tokenizes directive arguments while retaining JSON strings and structured
-/// references containing spaces as single tokens.
-fn split_space_tokens(arguments: &str) -> Vec<&str> {
-    let bytes = arguments.as_bytes();
-    let mut tokens = Vec::new();
-    let mut start = 0;
-    let mut index = 0;
-    let mut in_string = false;
-    let mut escaped = false;
-    let mut brackets = 0_u32;
-    while index <= bytes.len() {
-        let boundary =
-            index == bytes.len() || (bytes[index] == b' ' && !in_string && brackets == 0);
-        if boundary {
-            if start < index {
-                tokens.push(&arguments[start..index]);
-            }
-            index += 1;
-            start = index;
-            continue;
-        }
-        match bytes[index] {
-            b'"' if !escaped => in_string = !in_string,
-            b'\\' if in_string => escaped = !escaped,
-            b'[' if !in_string => brackets += 1,
-            b']' if !in_string && brackets > 0 => brackets -= 1,
-            _ => escaped = false,
-        }
-        index += 1;
-    }
-    tokens
-}
-
-fn split_target(arguments: &str) -> Option<(&str, &str)> {
-    let tokens = split_space_tokens(arguments);
-    let target = *tokens.first()?;
-    let rest = arguments.get(target.len()..)?.trim_start();
-    (!rest.is_empty()).then_some((target, rest))
 }
 
 fn canonical_scalar(value: &Value) -> String {
@@ -330,6 +320,33 @@ mod tests {
     fn canonical(source: &[u8]) -> Vec<u8> {
         let document = parse(source);
         canonicalize(&document).expect("valid document")
+    }
+
+    #[test]
+    fn a1_shaped_identifiers_survive_canonical_formatting() {
+        let source = b"#!marksheet 0.1\n@style h2 bold=true\n\n@sheet q1 \"Q1\"\n@table data1 A1 csv\nItem,Total\nRent,5\n@end\n@apply data1[Total] h2\n";
+
+        let formatted = canonical(source);
+        let text = String::from_utf8(formatted).expect("canonical output is UTF-8");
+
+        assert!(text.contains("@sheet q1 \"Q1\"\n"), "{text}");
+        assert!(text.contains("@table data1 A1 csv\n"), "{text}");
+        assert!(text.contains("@style h2 bold=true\n"), "{text}");
+        assert!(text.contains("@apply data1[Total] h2\n"), "{text}");
+        assert!(
+            !parse(text.as_bytes()).has_errors(),
+            "canonical formatting must not invalidate a valid workbook: {text}"
+        );
+    }
+
+    #[test]
+    fn block_anchors_are_still_canonicalized_beside_identifiers() {
+        let source = b"#!marksheet 0.1\n@sheet q1 \"Q1\"\n@table data1 b2 csv\nItem\nRent\n@end\n";
+
+        let formatted = canonical(source);
+        let text = String::from_utf8(formatted).expect("canonical output is UTF-8");
+
+        assert!(text.contains("@table data1 B2 csv\n"), "{text}");
     }
 
     #[test]

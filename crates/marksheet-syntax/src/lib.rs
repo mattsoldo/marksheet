@@ -10,6 +10,7 @@ mod lower;
 mod scanner;
 mod serialize;
 mod source_map;
+mod tokens;
 
 pub mod cst;
 
@@ -279,6 +280,77 @@ mod tests {
             .map(|diagnostic| diagnostic.code.as_str())
             .collect();
         assert_eq!(codes, ["MS2101"]);
+    }
+
+    #[test]
+    fn canonical_fill_normalizes_spacing_around_an_escaped_structured_header() {
+        let source = b"#!marksheet 0.1\n@sheet s \"Sheet\"\n@table t A1 csv\nA] B\n\n@end\n@fill t[A]] B]   = sum ( B2 )\n";
+        let document = parse(source);
+        assert!(!document.has_errors(), "{:?}", document.diagnostics);
+        let canonical = canonicalize(&document).expect("valid fill must canonicalize");
+        let rendered = String::from_utf8(canonical.clone()).expect("canonical output is UTF-8");
+        assert!(
+            rendered.contains("@fill t[A]] B] =SUM(B2)\n"),
+            "directive spacing must be normalized around the escaped header, and the \
+             formula after it canonicalized: {rendered}"
+        );
+        let reparsed = parse(&canonical);
+        assert!(!reparsed.has_errors(), "{:?}", reparsed.diagnostics);
+        assert_eq!(
+            canonicalize(&reparsed).expect("canonical output must canonicalize again"),
+            canonical
+        );
+    }
+
+    #[test]
+    fn canonical_directives_keep_spaces_inside_an_escaped_structured_header() {
+        let source = b"#!marksheet 0.1\n@style bold bold=true\n@sheet s \"Sheet\"\n@table t A1 csv\nA]  B\n\n@end\n@fill t[A]]  B] =1\n@apply t[A]]  B] bold\n";
+        let document = parse(source);
+        assert!(!document.has_errors(), "{:?}", document.diagnostics);
+        let canonical = canonicalize(&document).expect("valid directives must canonicalize");
+        let rendered = String::from_utf8(canonical.clone()).expect("canonical output is UTF-8");
+        assert!(
+            rendered.contains("@fill t[A]]  B] =1\n")
+                && rendered.contains("@apply t[A]]  B] bold\n"),
+            "a header space must survive canonicalization: {rendered}"
+        );
+        let reparsed = parse(&canonical);
+        assert!(!reparsed.has_errors(), "{:?}", reparsed.diagnostics);
+        assert_eq!(
+            canonicalize(&reparsed).expect("canonical output must canonicalize again"),
+            canonical
+        );
+    }
+
+    #[test]
+    fn fill_formula_text_stays_opaque_when_the_target_is_split() {
+        // Splitting a `@fill` target must not scan the formula that follows it:
+        // a formula the formula parser rejects is that parser's business, and
+        // must never surface as a tokenizer-level rejection of the directive.
+        let source =
+            b"#!marksheet 0.1\n\n@sheet s \"S\"\n\n@block A1 csv\n,\n@end\n\n@fill B1 =\"unterminated\n";
+        let document = parse(source);
+        assert!(
+            document.diagnostics.is_empty(),
+            "malformed formula text must stay opaque to the tokenizer: {:?}",
+            document.diagnostics
+        );
+        assert_eq!(
+            canonicalize(&document).expect("an opaque formula must canonicalize"),
+            source,
+            "an unparsable formula is emitted verbatim"
+        );
+    }
+
+    #[test]
+    fn canonical_quoted_arguments_are_not_split_on_an_embedded_equals() {
+        let source = b"#!marksheet 0.1\n@sheet s \"a=\\u0041\"\n";
+        let document = parse(source);
+        assert!(!document.has_errors(), "{:?}", document.diagnostics);
+        assert_eq!(
+            canonicalize(&document).expect("valid sheet label must canonicalize"),
+            b"#!marksheet 0.1\n\n@sheet s \"a=A\"\n"
+        );
     }
 
     #[test]
