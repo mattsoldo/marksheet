@@ -43,7 +43,9 @@ pub struct ViewLimits {
     /// Maximum ordered style applications resolved for one presented cell.
     pub max_style_layers_per_cell: usize,
     /// Maximum pre-indexed `@apply` directives resolved while projecting one
-    /// viewport.
+    /// viewport. The rectangle index derives a small traversal-work budget
+    /// from this value and its tree height, so adversarial non-overlaps cannot
+    /// force a scan proportional to every application on the sheet.
     ///
     /// Each sheet keeps a rectangle index over its `@apply` targets, so a
     /// request resolves exactly the applications whose target rectangle
@@ -246,6 +248,7 @@ pub enum ViewError {
     StyleRegionLimitExceeded { regions: usize, limit: usize },
     StyleLayerLimitExceeded { layers: usize, limit: usize },
     StyleApplicationLimitExceeded { applications: usize, limit: usize },
+    StyleApplicationWorkLimitExceeded { examined: usize, limit: usize },
     CoordinateOverflow,
 }
 
@@ -282,6 +285,10 @@ impl fmt::Display for ViewError {
             } => write!(
                 formatter,
                 "viewport overlaps at least {applications} style applications; limit is {limit}"
+            ),
+            Self::StyleApplicationWorkLimitExceeded { examined, limit } => write!(
+                formatter,
+                "viewport style query examined at least {examined} index nodes; work limit is {limit}"
             ),
             Self::CoordinateOverflow => formatter.write_str("viewport coordinate overflow"),
         }
@@ -328,6 +335,20 @@ struct RectangleQuery {
     column_end: u64,
     /// Maximum overlapping rectangles the caller is willing to receive.
     limit: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RectangleQueryError {
+    OverlapLimitExceeded(usize),
+    WorkLimitExceeded { examined: usize, limit: usize },
+}
+
+#[derive(Debug)]
+struct RectangleQueryState {
+    query: RectangleQuery,
+    work_limit: usize,
+    examined: usize,
+    found: Vec<usize>,
 }
 
 impl RectangleQuery {
@@ -435,49 +456,66 @@ impl ApplicationRectangleIndex {
     ///
     /// Returns the number of overlapping rectangles found, `limit + 1`, as
     /// soon as the query is known to overlap more than it allows.
-    fn overlapping(&self, query: RectangleQuery) -> Result<Vec<usize>, usize> {
-        let mut found = Vec::new();
+    fn overlapping(&self, query: RectangleQuery) -> Result<Vec<usize>, RectangleQueryError> {
         let Some(last) = self.rectangles.len().checked_sub(1) else {
-            return Ok(found);
+            return Ok(Vec::new());
         };
-        if self.collect(0, 0, last, query, &mut found) {
-            Ok(found)
-        } else {
-            Err(found.len())
-        }
+        let tree_height = usize::BITS as usize - self.rectangles.len().leading_zeros() as usize;
+        let work_limit = query
+            .limit
+            .saturating_add(1)
+            .saturating_mul(4)
+            .saturating_add(tree_height.saturating_mul(4));
+        let mut state = RectangleQueryState {
+            query,
+            work_limit,
+            examined: 0,
+            found: Vec::new(),
+        };
+        self.collect(0, 0, last, &mut state)?;
+        Ok(state.found)
     }
 
-    /// Walks the subtree covering `rectangles[low..=high]`, returning `false`
-    /// once more than `query.limit` overlapping rectangles have been found.
+    /// Walks the subtree covering `rectangles[low..=high]`, stopping once the
+    /// overlap or traversal-work budget is exceeded.
     fn collect(
         &self,
         node: usize,
         low: usize,
         high: usize,
-        query: RectangleQuery,
-        found: &mut Vec<usize>,
-    ) -> bool {
+        state: &mut RectangleQueryState,
+    ) -> Result<(), RectangleQueryError> {
+        state.examined = state.examined.saturating_add(1);
+        if state.examined > state.work_limit {
+            return Err(RectangleQueryError::WorkLimitExceeded {
+                examined: state.examined,
+                limit: state.work_limit,
+            });
+        }
         // Sorted starts make `rectangles[low].row_start` the smallest row
         // start in this subtree, and the tournament tree carries the other
         // three bounds. Any one of them failing rules out every rectangle
         // below this node.
         let bounds = self.bounds[node];
-        if self.rectangles[low].row_start > query.row_end
-            || bounds.max_row_end < query.row_start
-            || bounds.min_column_start > query.column_end
-            || bounds.max_column_end < query.column_start
+        if self.rectangles[low].row_start > state.query.row_end
+            || bounds.max_row_end < state.query.row_start
+            || bounds.min_column_start > state.query.column_end
+            || bounds.max_column_end < state.query.column_start
         {
-            return true;
+            return Ok(());
         }
         if low == high {
             // A leaf's bounding box is its own rectangle, so passing all four
             // tests above is exactly a two-axis overlap.
-            found.push(self.rectangles[low].application);
-            return found.len() <= query.limit;
+            state.found.push(self.rectangles[low].application);
+            if state.found.len() > state.query.limit {
+                return Err(RectangleQueryError::OverlapLimitExceeded(state.found.len()));
+            }
+            return Ok(());
         }
         let middle = low + (high - low) / 2;
-        self.collect(node * 2 + 1, low, middle, query, found)
-            && self.collect(node * 2 + 2, middle + 1, high, query, found)
+        self.collect(node * 2 + 1, low, middle, state)?;
+        self.collect(node * 2 + 2, middle + 1, high, state)
     }
 }
 
@@ -517,7 +555,7 @@ impl SheetStyleIndex {
         &self,
         range: Range,
         limit: usize,
-    ) -> Result<Vec<&IndexedStyleApplication>, usize> {
+    ) -> Result<Vec<&IndexedStyleApplication>, RectangleQueryError> {
         let mut positions = self
             .targets
             .overlapping(RectangleQuery::new(range, limit))?;
@@ -932,9 +970,16 @@ impl WorkbookView {
             .ok_or_else(|| ViewError::UnknownSheet(request.sheet.clone()))?;
         let intersecting_styles = style_index
             .overlapping(request.range, self.limits.max_style_applications)
-            .map_err(|applications| ViewError::StyleApplicationLimitExceeded {
-                applications,
-                limit: self.limits.max_style_applications,
+            .map_err(|error| match error {
+                RectangleQueryError::OverlapLimitExceeded(applications) => {
+                    ViewError::StyleApplicationLimitExceeded {
+                        applications,
+                        limit: self.limits.max_style_applications,
+                    }
+                }
+                RectangleQueryError::WorkLimitExceeded { examined, limit } => {
+                    ViewError::StyleApplicationWorkLimitExceeded { examined, limit }
+                }
             })?;
         if intersecting_styles.len() > self.limits.max_style_regions {
             return Err(ViewError::StyleRegionLimitExceeded {
@@ -1744,8 +1789,39 @@ mod tests {
                 column_end: 1,
                 limit: 8,
             }),
-            Err(9)
+            Err(RectangleQueryError::OverlapLimitExceeded(9))
         );
+    }
+
+    #[test]
+    fn rectangle_index_bounds_adversarial_non_overlap_traversal() {
+        // Every internal bounding box spans B1 even though the leaves
+        // alternate strictly to either side. Bounding only matches would walk
+        // all 10,000 rectangles for this zero-result query.
+        let rectangles = (0..10_000)
+            .map(|application| ApplicationRectangle {
+                row_start: 1,
+                row_end: 1,
+                column_start: if application % 2 == 0 { 1 } else { 3 },
+                column_end: if application % 2 == 0 { 1 } else { 3 },
+                application,
+            })
+            .collect();
+        let index = ApplicationRectangleIndex::new(rectangles);
+        let error = index
+            .overlapping(RectangleQuery {
+                row_start: 1,
+                row_end: 1,
+                column_start: 2,
+                column_end: 2,
+                limit: 1,
+            })
+            .unwrap_err();
+        let RectangleQueryError::WorkLimitExceeded { examined, limit } = error else {
+            panic!("expected traversal-work limit, got {error:?}");
+        };
+        assert_eq!(examined, limit + 1);
+        assert!(limit < 100, "work limit {limit} must stay sublinear");
     }
 
     /// Builds a sheet carrying 1025 whole-column `@apply` directives on
