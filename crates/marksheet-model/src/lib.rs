@@ -305,32 +305,25 @@ typed_identifier!(TableId, "A workbook-scoped table identifier.");
 typed_identifier!(NameId, "A workbook-scoped named-reference identifier.");
 typed_identifier!(StyleId, "A workbook-scoped style identifier.");
 
-/// The last column addressable by a mainstream spreadsheet GUI (`XFD`).
-pub const MAX_ADDRESSABLE_COLUMN: u64 = 16_384;
-/// The last row addressable by a mainstream spreadsheet GUI.
-pub const MAX_ADDRESSABLE_ROW: u64 = 1_048_576;
-
 /// Reports whether an identifier would read as an A1 or R1C1 cell address
-/// rather than a name, compared case-insensitively.
+/// rather than a name, compared case-insensitively, per SPEC section 4.1.
 ///
-/// [`Coordinate`] itself is deliberately unbounded, but this test is bounded to
-/// the addressable grid, because an identifier only competes with a *usable*
-/// address. `chartrange2` is therefore a name — `CHARTRANGE` is not a column —
-/// while `q4` is an address. That is the same rule a spreadsheet GUI applies
-/// when it validates a defined name, so ordinary workbook names survive import.
+/// This deliberately matches [`Coordinate::parse`], which is unbounded, rather
+/// than the smaller grid a spreadsheet GUI can address. The formula layer
+/// resolves any A1-shaped word to a reference using that same unbounded parse,
+/// so a name allowed outside the GUI's grid would be shadowed by a reference in
+/// every formula that used it: `@name xfe1` would parse, and `=xfe1` would then
+/// read cell `XFE1` instead of the name and silently evaluate to Blank. The
+/// rule must therefore stay a superset of whatever the formula layer can read
+/// as an address.
 ///
-/// Every producer and consumer of identifiers shares this one definition: an
-/// importer that minted a name the serializer then rejected would leave a
-/// workbook that imports but cannot be written back out.
+/// Every producer and consumer of identifiers shares this one definition. An
+/// importer that minted a name the serializer rejects leaves a workbook that
+/// imports but cannot be written back out; XLSX names that trip this rule are
+/// renamed on import instead, with the approximation reported.
 #[must_use]
 pub fn resembles_cell_address(value: &str) -> bool {
-    if let Ok(coordinate) = Coordinate::parse(value)
-        && coordinate.column <= MAX_ADDRESSABLE_COLUMN
-        && coordinate.row <= MAX_ADDRESSABLE_ROW
-    {
-        return true;
-    }
-    resembles_r1c1_address(value)
+    Coordinate::parse(value).is_ok() || resembles_r1c1_address(value)
 }
 
 fn resembles_r1c1_address(value: &str) -> bool {
@@ -341,17 +334,10 @@ fn resembles_r1c1_address(value: &str) -> bool {
     let Some((row, column)) = rest.split_once('C') else {
         return false;
     };
-    if row.is_empty()
-        || column.is_empty()
-        || !row.bytes().all(|byte| byte.is_ascii_digit())
-        || !column.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return false;
-    }
-    let (Ok(row), Ok(column)) = (row.parse::<u64>(), column.parse::<u64>()) else {
-        return false;
-    };
-    (1..=MAX_ADDRESSABLE_ROW).contains(&row) && (1..=MAX_ADDRESSABLE_COLUMN).contains(&column)
+    !row.is_empty()
+        && !column.is_empty()
+        && row.bytes().all(|byte| byte.is_ascii_digit())
+        && column.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 /// A concrete one-based spreadsheet coordinate.
@@ -1610,28 +1596,29 @@ mod tests {
         );
     }
     #[test]
-    fn cell_address_resemblance_is_bounded_to_the_addressable_grid() {
-        // Inside the grid: an identifier here would compete with a real address.
-        // `rc1` is column RC, row 1 -- an ordinary address despite reading like
-        // an R1C1 fragment.
-        for address in ["a1", "A1", "q4", "XFD1048576", "r1c1", "R1C1", "rc1"] {
+    fn cell_address_resemblance_covers_everything_the_formula_layer_reads_as_a_reference() {
+        // Anything `Coordinate::parse` accepts is a reference to the formula
+        // layer, so all of it must be refused as a name -- including addresses
+        // beyond the grid a GUI can display. `@name xfe1` previously parsed,
+        // and `=xfe1` then read cell XFE1 and evaluated to Blank.
+        for address in [
+            "a1",
+            "A1",
+            "q4",
+            "XFD1048576",
+            "r1c1",
+            "R1C1",
+            "rc1",
+            "xfe1",
+            "sales2024",
+            "chartrange2",
+            "a1048577",
+            "r0c0",
+        ] {
             assert!(resembles_cell_address(address), "{address}");
         }
-        // Beyond the grid: no spreadsheet can address these, so ordinary
-        // workbook names such as `ChartRange2` stay usable as identifiers.
-        for name in [
-            "chartrange2",
-            "ChartRange2",
-            "sales2024",
-            "xfe1",
-            "a1048577",
-            "r1c16385",
-            "r1048577c1",
-        ] {
-            assert!(!resembles_cell_address(name), "{name}");
-        }
-        // Not addresses at all.
-        for name in ["total", "q", "_hidden", "a", "r1c", "a0", "r0c0"] {
+        // Not addresses in any shape.
+        for name in ["total", "q", "_hidden", "a", "r1c", "a0", "x_1"] {
             assert!(!resembles_cell_address(name), "{name}");
         }
     }

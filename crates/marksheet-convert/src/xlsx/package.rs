@@ -55,13 +55,6 @@ impl Package {
             if file.is_symlink() {
                 return Err(invalid(file.name(), "symlink ZIP entries are not accepted"));
             }
-            // Explicit directory entries are ordinary, valid ZIP records that
-            // many writers emit (Java's, and therefore Apache POI's, among
-            // them). They carry no part content, so skip them rather than
-            // rejecting an otherwise well-formed package.
-            if file.is_dir() {
-                continue;
-            }
             if !matches!(
                 file.compression(),
                 CompressionMethod::Stored | CompressionMethod::Deflated
@@ -79,13 +72,10 @@ impl Package {
                     )
                 })?
                 .to_owned();
-            validate_part_name(&raw_name)?;
-            if file.enclosed_name().is_none() {
-                return Err(invalid(&raw_name, "ZIP entry name is not safely enclosed"));
-            }
-            if !folded_names.insert(raw_name.to_ascii_lowercase()) {
-                return Err(invalid(&raw_name, "duplicate or case-alias ZIP entry name"));
-            }
+            // Budgets are charged against every record, including directory
+            // entries: a "directory" can still declare a payload, and skipping
+            // it before this point would smuggle an unbounded one past the
+            // size, total-size and compression-ratio limits.
             if file.size() > limits.max_zip_entry_uncompressed_bytes {
                 return Err(resource(
                     &raw_name,
@@ -111,6 +101,20 @@ impl Package {
                     &raw_name,
                     "ZIP entry compression ratio exceeds the configured limit",
                 ));
+            }
+            // Explicit directory entries are ordinary, valid ZIP records that
+            // many writers emit (Java's, and therefore Apache POI's, among
+            // them). They carry no part content and their names are not part
+            // names, so they are skipped once charged above.
+            if file.is_dir() {
+                continue;
+            }
+            validate_part_name(&raw_name)?;
+            if file.enclosed_name().is_none() {
+                return Err(invalid(&raw_name, "ZIP entry name is not safely enclosed"));
+            }
+            if !folded_names.insert(raw_name.to_ascii_lowercase()) {
+                return Err(invalid(&raw_name, "duplicate or case-alias ZIP entry name"));
             }
             let declared_size = file.size();
             let capacity = usize::try_from(declared_size)
@@ -373,6 +377,7 @@ impl ContentTypes {
         let part = "[Content_Types].xml";
         let mut reader = Reader::from_reader(bytes);
         let mut content_types = Self::default();
+        let mut folded_overrides = BTreeSet::new();
         let mut entries = 0_usize;
         loop {
             match reader.read_event() {
@@ -409,6 +414,15 @@ impl ContentTypes {
                             validate_part_name(name)?;
                             let value =
                                 required_attribute(&reader, &element, b"ContentType", part)?;
+                            // Part names compare case-insensitively, so two
+                            // overrides differing only by case would make a
+                            // part's declared type depend on spelling.
+                            if !folded_overrides.insert(name.to_ascii_lowercase()) {
+                                return Err(invalid(
+                                    part,
+                                    "duplicate or case-alias override content type",
+                                ));
+                            }
                             if content_types
                                 .overrides
                                 .insert(name.to_owned(), value)
@@ -519,16 +533,20 @@ pub(super) fn relationships_part(source_part: &str) -> String {
 /// Whether the importer opens this part for spreadsheet content, as opposed to
 /// carrying it as unconsumed package content in the fidelity report.
 fn is_consumed_part(name: &str) -> bool {
-    name == "[Content_Types].xml"
-        || std::path::Path::new(name)
+    // Folded, because part names resolve case-insensitively: a worksheet stored
+    // as `xl/Worksheets/Sheet1.xml` is still opened, so it must not take the
+    // relaxed path meant for parts this converter never reads.
+    let folded = name.to_ascii_lowercase();
+    folded == "[content_types].xml"
+        || std::path::Path::new(&folded)
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("rels"))
         || matches!(
-            name,
-            "xl/workbook.xml" | "xl/styles.xml" | "xl/sharedStrings.xml"
+            folded.as_str(),
+            "xl/workbook.xml" | "xl/styles.xml" | "xl/sharedstrings.xml"
         )
-        || name.starts_with("xl/worksheets/")
-        || name.starts_with("xl/tables/")
+        || folded.starts_with("xl/worksheets/")
+        || folded.starts_with("xl/tables/")
 }
 
 fn starts_with_utf16_bom(content: &[u8]) -> bool {

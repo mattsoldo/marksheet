@@ -105,6 +105,16 @@ const STRICT_OFFICE_RELATIONSHIPS_NS: &[u8] =
 const MARKUP_COMPATIBILITY_NS: &[u8] =
     b"http://schemas.openxmlformats.org/markup-compatibility/2006";
 const XML_NS: &[u8] = b"http://www.w3.org/XML/1998/namespace";
+/// ISO 4217 codes accepted from a literal `[$XXX]` currency section. Kept to
+/// the codes a spreadsheet is realistically formatted in rather than the full
+/// register, because an unrecognised run falls back to a plain decimal.
+const ISO_4217_CODES: &[&str] = &[
+    "AED", "ARS", "AUD", "BGN", "BRL", "CAD", "CHF", "CLP", "CNY", "COP", "CZK", "DKK", "EGP",
+    "EUR", "GBP", "HKD", "HRK", "HUF", "IDR", "ILS", "INR", "ISK", "JPY", "KRW", "MAD", "MXN",
+    "MYR", "NGN", "NOK", "NZD", "PEN", "PHP", "PKR", "PLN", "RON", "RSD", "RUB", "SAR", "SEK",
+    "SGD", "THB", "TRY", "TWD", "UAH", "USD", "VND", "ZAR",
+];
+
 /// The largest `decimals` a Draft 0.1 `@style` accepts.
 const MAX_STYLE_DECIMALS: usize = 15;
 
@@ -215,10 +225,21 @@ fn import_xlsx_inner(
     };
 
     let sheet_ids = derive_sheet_ids(&workbook_info.sheets, &mut report);
+    // Only worksheets are resolvable by label. A chart or dialog sheet is
+    // omitted below, so leaving it here would let a formula translate against
+    // a sheet that never reaches the destination: the report would claim the
+    // formula was translated while the workbook it produced could not be
+    // written back out. Leaving it unresolved instead lets the formula degrade
+    // to `#REF!`, which is what SPEC section 13.4 requires.
     let sheet_label_ids: BTreeMap<String, SheetId> = workbook_info
         .sheets
         .iter()
         .zip(&sheet_ids)
+        .filter(|(sheet, _)| {
+            relationship_map
+                .get(sheet.relationship.as_str())
+                .is_some_and(|relationship| relationship.kind.ends_with("/worksheet"))
+        })
         .map(|(sheet, id)| (sheet.label.to_lowercase(), id.clone()))
         .collect();
     let mut skipped_sheets = BTreeSet::<SheetId>::new();
@@ -1236,6 +1257,7 @@ fn parse_styles(
     let mut fills = Vec::<Option<Color>>::new();
     let mut xfs = Vec::<StyleProperties>::new();
     let mut unsupported = BTreeSet::new();
+    let mut clamped_decimals = false;
     prepared.record(
         "xlsx_style_unknown_content",
         "xlsx_style_unknown_content",
@@ -1301,7 +1323,7 @@ fn parse_styles(
                             .ok_or_else(|| resource(part, "base style count overflow"))?;
                     }
                     b"xf" if section == StyleSection::CellXfs => {
-                        current_xf = Some(xf_style(
+                        let (style, clamped) = xf_style(
                             &reader,
                             &element,
                             part,
@@ -1309,7 +1331,9 @@ fn parse_styles(
                             &fills,
                             &num_formats,
                             base_xfs,
-                        )?);
+                        )?;
+                        clamped_decimals |= clamped;
+                        current_xf = Some(style);
                     }
                     b"alignment" if section == StyleSection::CellXfs => {
                         if let Some(style) = &mut current_xf {
@@ -1359,7 +1383,7 @@ fn parse_styles(
                         .checked_add(1)
                         .ok_or_else(|| resource(part, "base style count overflow"))?;
                 } else if element_name == b"xf" && section == StyleSection::CellXfs {
-                    xfs.push(xf_style(
+                    let (style, clamped) = xf_style(
                         &reader,
                         &element,
                         part,
@@ -1367,7 +1391,9 @@ fn parse_styles(
                         &fills,
                         &num_formats,
                         base_xfs,
-                    )?);
+                    )?;
+                    clamped_decimals |= clamped;
+                    xfs.push(style);
                 } else if element_name == b"alignment" && section == StyleSection::CellXfs {
                     if let Some(style) = &mut current_xf {
                         read_alignment(&reader, &element, part, style)?;
@@ -1434,6 +1460,12 @@ fn parse_styles(
     validate_declared_style_count(expected_cell_styles, cell_styles, part, "cellStyles")?;
     if xfs.is_empty() {
         return Err(invalid(part, "styles part contains no cell formats"));
+    }
+    if clamped_decimals {
+        // A format declaring more decimal places than `@style` can express is
+        // narrowed rather than carried, so the workbook is not an exact
+        // carry-over and must not be reported as one.
+        unsupported.insert("xlsx_style_decimal_precision".to_owned());
     }
     Ok((xfs, unsupported))
 }
@@ -1513,7 +1545,7 @@ fn xf_style(
     fills: &[Option<Color>],
     num_formats: &BTreeMap<u32, String>,
     base_xfs: usize,
-) -> Result<StyleProperties, ConvertError> {
+) -> Result<(StyleProperties, bool), ConvertError> {
     let font_id = parse_usize_attribute(reader, element, b"fontId", part)?.unwrap_or(0);
     let fill_id = parse_usize_attribute(reader, element, b"fillId", part)?.unwrap_or(0);
     let number_id = parse_u32_attribute(reader, element, b"numFmtId", part)?.unwrap_or(0);
@@ -1538,8 +1570,14 @@ fn xf_style(
     if let Some(Some(fill)) = fills.get(fill_id) {
         style.fill = Some(fill.clone());
     }
-    apply_number_format(&mut style, number_id, num_formats.get(&number_id));
-    Ok(style)
+    let mut clamped_decimals = false;
+    apply_number_format(
+        &mut style,
+        number_id,
+        num_formats.get(&number_id),
+        &mut clamped_decimals,
+    );
+    Ok((style, clamped_decimals))
 }
 
 fn read_alignment(
@@ -1652,8 +1690,14 @@ fn currency_code(format: &str) -> Option<String> {
     }
 
     let symbol = symbol.trim();
+    // A three-letter run is only a currency code if it is actually one; the
+    // section can hold arbitrary literal text, so `[$ZZZ]` must not become
+    // `currency="ZZZ"`. SPEC section 15 requires an ISO 4217 code.
     if symbol.len() == 3 && symbol.bytes().all(|byte| byte.is_ascii_alphabetic()) {
-        return Some(symbol.to_ascii_uppercase());
+        let upper = symbol.to_ascii_uppercase();
+        if ISO_4217_CODES.contains(&upper.as_str()) {
+            return Some(upper);
+        }
     }
     match symbol {
         "£" => Some("GBP".to_owned()),
@@ -1666,7 +1710,12 @@ fn currency_code(format: &str) -> Option<String> {
     }
 }
 
-fn apply_number_format(style: &mut StyleProperties, id: u32, custom: Option<&String>) {
+fn apply_number_format(
+    style: &mut StyleProperties,
+    id: u32,
+    custom: Option<&String>,
+    clamped_decimals: &mut bool,
+) {
     match id {
         0 => {}
         1 => style.number = Some(NumberFormat::Integer),
@@ -1709,14 +1758,14 @@ fn apply_number_format(style: &mut StyleProperties, id: u32, custom: Option<&Str
             // serializer would reject. Real statistical workbooks do go past
             // it: the ONS inflation tables carry a 21-decimal format.
             style.decimals = lowercase.split_once('.').map(|(_, fraction)| {
-                u8::try_from(
-                    fraction
-                        .chars()
-                        .take_while(|character| *character == '0')
-                        .count()
-                        .min(MAX_STYLE_DECIMALS),
-                )
-                .unwrap_or(u8::MAX)
+                let declared = fraction
+                    .chars()
+                    .take_while(|character| *character == '0')
+                    .count();
+                if declared > MAX_STYLE_DECIMALS {
+                    *clamped_decimals = true;
+                }
+                u8::try_from(declared.min(MAX_STYLE_DECIMALS)).unwrap_or(u8::MAX)
             });
         }
     }
@@ -3958,17 +4007,85 @@ mod tests {
         }
     }
 
+    /// A ZIP record flagged as a directory can still declare a payload. It is
+    /// skipped only after being charged against the size and ratio budgets,
+    /// otherwise it smuggles an unbounded entry past them.
+    #[test]
+    fn directory_flagged_entries_are_still_charged_against_zip_budgets() {
+        let exported = export_xlsx(&basic_workbook(), ConversionLimits::default()).unwrap();
+        let mut archive = ZipArchive::new(Cursor::new(exported.value.clone())).unwrap();
+        let mut parts = Vec::new();
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            let mut content = Vec::new();
+            entry.read_to_end(&mut content).unwrap();
+            parts.push((entry.name().to_owned(), content));
+        }
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::DEFAULT.compression_method(CompressionMethod::Deflated);
+        for (name, content) in parts {
+            writer.start_file(name, options).unwrap();
+            writer.write_all(&content).unwrap();
+        }
+        // A valid part name carrying the payload, marked as a directory.
+        let limits = ConversionLimits::default();
+        let oversized =
+            vec![b'A'; usize::try_from(limits.max_zip_entry_uncompressed_bytes).unwrap() + 1];
+        writer
+            .start_file("customXml/item9.xml", options.unix_permissions(0o040_755))
+            .unwrap();
+        writer.write_all(&oversized).unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+
+        let error = import_xlsx(&bytes, limits).unwrap_err();
+        assert_eq!(error.error.code, ConvertErrorCode::ResourceLimit);
+    }
+
+    /// The `[$...]` section can hold arbitrary literal text, so a three-letter
+    /// run is only a currency code when it is genuinely ISO 4217.
+    #[test]
+    fn a_non_iso_three_letter_currency_section_is_not_a_currency() {
+        assert_eq!(currency_code("[$ZZZ]0.00"), None);
+        assert_eq!(currency_code("[$USD]0.00").as_deref(), Some("USD"));
+
+        let mut style = StyleProperties::default();
+        apply_number_format(&mut style, 210, Some(&"[$ZZZ]0.00".to_owned()), &mut false);
+        assert_eq!(style.number, Some(NumberFormat::Decimal));
+        assert_eq!(style.currency, None);
+    }
+
+    /// Narrowing a format's precision is a real loss and must not be reported
+    /// as an exact carry-over.
+    #[test]
+    fn clamping_decimal_precision_is_reported_as_lossy() {
+        let mut clamped = false;
+        let mut style = StyleProperties::default();
+        apply_number_format(
+            &mut style,
+            211,
+            Some(&"0.000000000000000000000".to_owned()),
+            &mut clamped,
+        );
+        assert_eq!(style.decimals, Some(15));
+        assert!(clamped, "a 21-decimal format must set the clamp flag");
+    }
+
     /// Draft 0.1 `@style` accepts 0..=15 decimals. Real statistical workbooks
     /// exceed that -- the ONS inflation tables carry a 21-decimal format -- so
     /// the count is clamped rather than carried into an unserializable style.
     #[test]
     fn decimal_places_are_clamped_to_what_a_style_can_express() {
         let mut style = StyleProperties::default();
-        apply_number_format(&mut style, 300, Some(&"0.000000000000000000000".to_owned()));
+        apply_number_format(
+            &mut style,
+            300,
+            Some(&"0.000000000000000000000".to_owned()),
+            &mut false,
+        );
         assert_eq!(style.decimals, Some(15));
 
         let mut style = StyleProperties::default();
-        apply_number_format(&mut style, 301, Some(&"0.00".to_owned()));
+        apply_number_format(&mut style, 301, Some(&"0.00".to_owned()), &mut false);
         assert_eq!(style.decimals, Some(2));
     }
 
@@ -4000,12 +4117,22 @@ mod tests {
     #[test]
     fn unidentifiable_currency_format_degrades_to_decimal() {
         let mut style = StyleProperties::default();
-        apply_number_format(&mut style, 200, Some(&"[$$]#,##0.00".to_owned()));
+        apply_number_format(
+            &mut style,
+            200,
+            Some(&"[$$]#,##0.00".to_owned()),
+            &mut false,
+        );
         assert_eq!(style.number, Some(NumberFormat::Decimal));
         assert_eq!(style.currency, None);
 
         let mut style = StyleProperties::default();
-        apply_number_format(&mut style, 201, Some(&"[$£-809]#,##0.00".to_owned()));
+        apply_number_format(
+            &mut style,
+            201,
+            Some(&"[$£-809]#,##0.00".to_owned()),
+            &mut false,
+        );
         assert_eq!(style.number, Some(NumberFormat::Currency));
         assert_eq!(style.currency.as_deref(), Some("GBP"));
     }
