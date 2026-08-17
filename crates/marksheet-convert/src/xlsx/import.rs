@@ -4698,12 +4698,43 @@ mod tests {
             ("Head\tOne", "Head&#9;One"),
             ("Head\rOne", "Head&#13;One"),
         ] {
-            let source = format!(
-                "#!marksheet 0.1\n@sheet data \"Data\"\n@table costs A1 csv\n\"{header}\",Other\n1,2\n@end\n"
-            );
-            let parsed = marksheet_syntax::parse(source.as_bytes());
-            assert!(!parsed.has_errors(), "{:?}", parsed.diagnostics);
-            let workbook = parsed.workbook.expect("source lowers to a workbook");
+            // Marksheet source has no spelling for a bare CR in a CSV field,
+            // so that case builds the same semantic workbook directly.
+            let workbook = if header.contains('\r') {
+                Workbook {
+                    sheets: vec![Sheet {
+                        id: SheetId::parse("data").unwrap(),
+                        label: "Data".to_owned(),
+                        items: vec![SheetItem::Table(Table {
+                            id: TableId::parse("costs").unwrap(),
+                            block: Block::new(
+                                Coordinate::parse("A1").unwrap(),
+                                vec![
+                                    vec![
+                                        Cell::new(Value::Text(header.to_owned())),
+                                        Cell::new(Value::Text("Other".to_owned())),
+                                    ],
+                                    vec![
+                                        Cell::new(Value::Number(1.0)),
+                                        Cell::new(Value::Number(2.0)),
+                                    ],
+                                ],
+                            )
+                            .unwrap(),
+                            origin: None,
+                        })],
+                        origin: None,
+                    }],
+                    ..Workbook::default()
+                }
+            } else {
+                let source = format!(
+                    "#!marksheet 0.1\n@sheet data \"Data\"\n@table costs A1 csv\n\"{header}\",Other\n1,2\n@end\n"
+                );
+                let parsed = marksheet_syntax::parse(source.as_bytes());
+                assert!(!parsed.has_errors(), "{:?}", parsed.diagnostics);
+                parsed.workbook.expect("source lowers to a workbook")
+            };
 
             let exported = export_xlsx(&workbook, ConversionLimits::default()).unwrap();
             assert!(
