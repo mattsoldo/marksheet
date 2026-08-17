@@ -2657,17 +2657,28 @@ fn remove_unchanged_patches(
     Ok(())
 }
 
-fn normalize_combined_patches(patches: Vec<SourcePatch>) -> Result<Vec<SourcePatch>, EditError> {
+fn normalize_combined_patches(
+    mut patches: Vec<SourcePatch>,
+) -> Result<Vec<SourcePatch>, EditError> {
+    // Sorting first turns the all-pairs comparison this used to do into a
+    // single linear scan against just the most recently accepted patch.
+    // Accepted patches are pairwise non-overlapping by construction, so once
+    // sorted by `patch_order` their `end` offsets are monotonically
+    // non-decreasing; a later patch can only conflict with the accepted span
+    // that has the greatest `end` so far, which is always the last one
+    // pushed. The sort is stable, so patches that land on the exact same
+    // span still merge in their original relative order.
+    patches.sort_by_key(patch_order);
     let mut normalized: Vec<SourcePatch> = Vec::with_capacity(patches.len());
-    'next_patch: for patch in patches {
-        for existing in &mut normalized {
-            if patch.span == existing.span {
+    for patch in patches {
+        if let Some(last) = normalized.last_mut() {
+            if patch.span == last.span {
                 if patch.span.is_empty() {
-                    existing.replacement.extend_from_slice(&patch.replacement);
-                    continue 'next_patch;
+                    last.replacement.extend_from_slice(&patch.replacement);
+                    continue;
                 }
-                if patch.replacement == existing.replacement {
-                    continue 'next_patch;
+                if patch.replacement == last.replacement {
+                    continue;
                 }
                 return Err(EditError::new(
                     EditErrorKind::UnsupportedOperationCombination,
@@ -2675,7 +2686,7 @@ fn normalize_combined_patches(patches: Vec<SourcePatch>) -> Result<Vec<SourcePat
                     "operations plan different replacements for the same source span",
                 ));
             }
-            if patch.span.overlaps(existing.span) {
+            if patch.span.overlaps(last.span) {
                 return Err(EditError::new(
                     EditErrorKind::UnsupportedOperationCombination,
                     None,
@@ -3661,6 +3672,85 @@ mod tests {
         .unwrap_err();
         assert_eq!(failure.kind, EditErrorKind::AbsentCell);
         assert_eq!(failure.operation_index, Some(1));
+    }
+
+    fn patch(start: u64, end: u64, replacement: impl Into<Vec<u8>>) -> SourcePatch {
+        SourcePatch::new(ByteSpan { start, end }, replacement)
+    }
+
+    #[test]
+    fn normalize_combined_patches_rejects_overlapping_spans() {
+        for patches in [
+            vec![patch(0, 5, b"a".to_vec()), patch(3, 8, b"b".to_vec())],
+            // Input order must not change the outcome.
+            vec![patch(3, 8, b"b".to_vec()), patch(0, 5, b"a".to_vec())],
+            // An insertion strictly inside a replacement overlaps it too.
+            vec![patch(0, 5, b"a".to_vec()), patch(2, 2, b"b".to_vec())],
+        ] {
+            let error = normalize_combined_patches(patches).unwrap_err();
+            assert_eq!(error.kind, EditErrorKind::UnsupportedOperationCombination);
+        }
+    }
+
+    #[test]
+    fn normalize_combined_patches_sorts_accepted_output_and_allows_adjacent_spans() {
+        let normalized = normalize_combined_patches(vec![
+            patch(10, 15, b"c".to_vec()),
+            patch(0, 5, b"a".to_vec()),
+            patch(5, 10, b"b".to_vec()),
+        ])
+        .unwrap();
+        assert_eq!(
+            normalized,
+            vec![
+                patch(0, 5, b"a".to_vec()),
+                patch(5, 10, b"b".to_vec()),
+                patch(10, 15, b"c".to_vec()),
+            ]
+        );
+
+        // An insertion at the exact start of a replacement is adjacent, not
+        // overlapping, and sorts before the replacement it shares a start with.
+        let normalized = normalize_combined_patches(vec![
+            patch(5, 10, b"replaced".to_vec()),
+            patch(5, 5, b"before".to_vec()),
+        ])
+        .unwrap();
+        assert_eq!(
+            normalized,
+            vec![
+                patch(5, 5, b"before".to_vec()),
+                patch(5, 10, b"replaced".to_vec())
+            ]
+        );
+    }
+
+    #[test]
+    fn normalize_combined_patches_merges_duplicate_insertions_in_input_order() {
+        let normalized = normalize_combined_patches(vec![
+            patch(5, 5, b"a".to_vec()),
+            patch(5, 5, b"b".to_vec()),
+            patch(5, 5, b"c".to_vec()),
+        ])
+        .unwrap();
+        assert_eq!(normalized, vec![patch(5, 5, b"abc".to_vec())]);
+    }
+
+    #[test]
+    fn normalize_combined_patches_dedupes_matching_replacements_and_rejects_conflicting_ones() {
+        let normalized = normalize_combined_patches(vec![
+            patch(0, 3, b"same".to_vec()),
+            patch(0, 3, b"same".to_vec()),
+        ])
+        .unwrap();
+        assert_eq!(normalized, vec![patch(0, 3, b"same".to_vec())]);
+
+        let error = normalize_combined_patches(vec![
+            patch(0, 3, b"one".to_vec()),
+            patch(0, 3, b"other".to_vec()),
+        ])
+        .unwrap_err();
+        assert_eq!(error.kind, EditErrorKind::UnsupportedOperationCombination);
     }
 
     #[test]
