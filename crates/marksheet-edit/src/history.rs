@@ -966,6 +966,26 @@ mod tests {
     }
 
     #[test]
+    fn an_n_edit_history_retains_exactly_n_plus_one_snapshots() {
+        let mut session = EditSession::new(sample());
+        let values = [10.0, 20.0, 30.0, 40.0, 50.0];
+        for value in values {
+            // Drop each `EditResult`, whose `source` is the caller's own copy,
+            // so only what history itself retains is counted.
+            drop(session.execute(set_a2(value)).unwrap());
+        }
+
+        let mut retained: Vec<*const Vec<u8>> = vec![Arc::as_ptr(&session.source)];
+        for entry in &session.undo {
+            retained.push(Arc::as_ptr(entry.forward.shared_base()));
+            retained.push(Arc::as_ptr(entry.inverse.shared_base()));
+        }
+        retained.sort_unstable();
+        retained.dedup();
+        assert_eq!(retained.len(), values.len() + 1);
+    }
+
+    #[test]
     fn undo_and_redo_keep_sharing_the_restored_snapshot() {
         let mut session = EditSession::new(sample());
         session.execute(set_a2(10.0)).unwrap();

@@ -131,6 +131,14 @@ impl PatchSet {
     /// inverse, so undo remains representable under this module's unambiguous
     /// insertion rule.
     ///
+    /// The returned bytes are an owned copy handed to the caller; the inverse
+    /// separately retains the shared rendered snapshot it is bound to. One
+    /// application therefore materializes the post-edit document twice: once
+    /// retained for undo, which every later patch set bound to that version
+    /// then shares, and once returned here for the caller to own. That second
+    /// buffer is the caller's result rather than history overhead, so it is
+    /// released as soon as the caller drops it.
+    ///
     /// # Errors
     ///
     /// Returns the same errors as [`Self::apply`], including a base-snapshot
@@ -212,8 +220,10 @@ impl PatchSet {
 
         result.extend_from_slice(&source[source_cursor..]);
 
-        // The inverse shares the rendered snapshot it is bound to, so building
-        // undo data never copies the resulting document.
+        // Binding the inverse to the rendered buffer is a refcount bump, not a
+        // copy, so undo data costs nothing beyond its patch list. Callers that
+        // need owned bytes back still pay one copy at the API boundary; see
+        // `apply_with_inverse`.
         let result = Arc::new(result);
         let inverse = inverse_patches
             .map(|patches| {

@@ -220,6 +220,13 @@ pub struct EditResult {
     pub inverse_transaction: InverseTransaction,
     /// Exact inverse patches retained for fixture and API compatibility.
     pub inverse: PatchSet,
+    /// Exact resulting source bytes, owned by the caller.
+    ///
+    /// This is a distinct buffer from the shared post-edit snapshot that
+    /// `inverse` retains and that [`crate::history::EditSession`] adopts, so an edit
+    /// materializes its result twice: once retained for undo and reused by
+    /// every later patch set bound to that document version, and once handed
+    /// over here. Dropping this field leaves the single retained snapshot.
     pub source: Vec<u8>,
     pub workbook: Workbook,
     pub diagnostics: Vec<Diagnostic>,
