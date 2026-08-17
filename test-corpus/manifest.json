@@ -1,0 +1,399 @@
+[
+  {
+    "file": "01_empty_workbook.xlsx",
+    "tier": "1-minimal",
+    "title": "Empty workbook",
+    "description": "One sheet, zero cells. Lower bound for a workbook the importer must still accept cleanly.",
+    "features": [
+      "empty sheet"
+    ]
+  },
+  {
+    "file": "02_single_cell.xlsx",
+    "tier": "1-minimal",
+    "title": "Single cell",
+    "description": "One sheet, one literal number in A1.",
+    "features": [
+      "scalar cell"
+    ]
+  },
+  {
+    "file": "03_scalar_values_no_formulas.xlsx",
+    "tier": "1-minimal",
+    "title": "Scalar values, no formulas",
+    "description": "Every literal scalar type (int, negative, decimal, text, blank, bool, date, datetime, currency/percent number formats) with no formulas at all, plus a sparse gap before a trailing value.",
+    "features": [
+      "scalar types",
+      "number formats",
+      "sparse rows"
+    ]
+  },
+  {
+    "file": "04_personal_budget.xlsx",
+    "tier": "2-simple",
+    "title": "Personal monthly budget",
+    "description": "Classic budget sheet: SUM totals, a per-row subtraction formula, currency formatting.",
+    "features": [
+      "SUM",
+      "subtraction formula",
+      "currency format"
+    ]
+  },
+  {
+    "file": "05_grade_book.xlsx",
+    "tier": "2-simple",
+    "title": "Class grade book",
+    "description": "AVERAGE per student, nested IF letter grading, and MAX/MIN/COUNT class statistics -- every one of these functions is inside Marksheet's portable-a1@1 profile.",
+    "features": [
+      "AVERAGE",
+      "nested IF",
+      "MAX",
+      "MIN",
+      "COUNT"
+    ]
+  },
+  {
+    "file": "06_todo_checklist.xlsx",
+    "tier": "2-simple",
+    "title": "To-do checklist",
+    "description": "Dropdown data validation, conditional-formatting highlight, and two functions outside the portable profile (TODAY, COUNTIF) alongside a supported IF.",
+    "features": [
+      "data validation list",
+      "conditional formatting",
+      "TODAY (unsupported)",
+      "COUNTIF (unsupported)"
+    ]
+  },
+  {
+    "file": "07_invoice.xlsx",
+    "tier": "2-simple",
+    "title": "Client invoice",
+    "description": "Merged header, a line-item table with per-row multiplication, SUM subtotal, tax formula, and grand total. Borders and currency formatting throughout.",
+    "features": [
+      "merged cells",
+      "multiplication formula",
+      "SUM",
+      "borders"
+    ]
+  },
+  {
+    "file": "08_unit_conversion.xlsx",
+    "tier": "2-simple",
+    "title": "Unit conversion table",
+    "description": "A single workbook-scoped defined name (km_to_miles) referenced by ten independent formulas -- tests one-to-many defined-name fan-out.",
+    "features": [
+      "defined name",
+      "multiplication formula"
+    ]
+  },
+  {
+    "file": "09_loan_payment_calculator.xlsx",
+    "tier": "2-simple",
+    "title": "Loan payment calculator",
+    "description": "Single-sheet amortization inputs feeding a PMT() financial formula -- PMT is outside the portable-a1@1 profile, so this exercises the lossy/replaced formula path.",
+    "features": [
+      "PMT (unsupported)",
+      "percent format",
+      "chained scalar formulas"
+    ]
+  },
+  {
+    "file": "10_multi_sheet_sales_report.xlsx",
+    "tier": "3-intermediate",
+    "title": "Multi-sheet sales report",
+    "description": "Five sheets (RawData + 3 region sheets + Summary) chained by cross-sheet references, SUMIF/COUNTIF/AVERAGEIF per region, then a Summary sheet that reads each region sheet's own formula result.",
+    "features": [
+      "5 sheets",
+      "cross-sheet refs",
+      "SUMIF/COUNTIF/AVERAGEIF (unsupported)",
+      "SUM"
+    ]
+  },
+  {
+    "file": "11_lookup_directory.xlsx",
+    "tier": "3-intermediate",
+    "title": "Employee lookup directory",
+    "description": "Two sheets: an Employees table and a Lookups sheet exercising VLOOKUP, HLOOKUP, INDEX+MATCH (both in the portable profile), and XLOOKUP (not) against it.",
+    "features": [
+      "VLOOKUP (unsupported)",
+      "HLOOKUP (unsupported)",
+      "INDEX",
+      "MATCH",
+      "XLOOKUP (unsupported)"
+    ]
+  },
+  {
+    "file": "12_named_ranges_tax_calc.xlsx",
+    "tier": "3-intermediate",
+    "title": "Named-range tax calculator",
+    "description": "Two workbook-scoped defined names (tax_rate, standard_deduction) resolved inside ordinary arithmetic formulas. (Sheet-scoped names are exercised separately in 32_sheet_scoped_defined_name.xlsx.)",
+    "features": [
+      "workbook-scoped defined names",
+      "arithmetic formulas"
+    ]
+  },
+  {
+    "file": "13_excel_table_orders.xlsx",
+    "tier": "3-intermediate",
+    "title": "Excel Table with calculated column",
+    "description": "A real Excel Table (ListObject) named 'Orders' with a calculated column driven by structured references ([@Qty]*[@Price]).",
+    "features": [
+      "Excel Table",
+      "structured references",
+      "calculated column"
+    ]
+  },
+  {
+    "file": "14_conditional_formatting_dashboard.xlsx",
+    "tier": "3-intermediate",
+    "title": "KPI dashboard with conditional formatting",
+    "description": "Color scale, data bar, icon set, and a formula-based cell rule stacked on the same KPI table, alongside a plain division formula.",
+    "features": [
+      "color scale",
+      "data bar",
+      "icon set",
+      "cell-value rule",
+      "division formula"
+    ]
+  },
+  {
+    "file": "15_data_validation_form.xlsx",
+    "tier": "3-intermediate",
+    "title": "Data validation form",
+    "description": "One cell each for list, whole-number range, decimal range, date range, text-length, and custom-formula data validation rules.",
+    "features": [
+      "list validation",
+      "whole/decimal range validation",
+      "date validation",
+      "custom formula validation"
+    ]
+  },
+  {
+    "file": "16_frozen_panes_large_grid.xlsx",
+    "tier": "3-intermediate",
+    "title": "Frozen-pane large grid",
+    "description": "200x14 numeric grid with a frozen header row/column, explicit column widths, a color-scale heat map, and SUM column totals.",
+    "features": [
+      "freeze panes",
+      "column widths",
+      "color scale",
+      "SUM",
+      "200 rows"
+    ]
+  },
+  {
+    "file": "17_financial_model_3_statement.xlsx",
+    "tier": "4-complex",
+    "title": "Three-statement financial model",
+    "description": "Assumptions + Income Statement + Balance Sheet + Cash Flow, chained with defined-name driven formulas across sheets, plus NPV and IRR.",
+    "features": [
+      "4 sheets",
+      "defined names",
+      "cross-sheet chains",
+      "NPV (unsupported)",
+      "IRR (unsupported)"
+    ]
+  },
+  {
+    "file": "18_large_dataset_2000_rows.xlsx",
+    "tier": "4-complex",
+    "title": "Large transaction dataset",
+    "description": "2000 rows of transactional data plus a 16-row SUMIFS/COUNTIFS/AVERAGEIFS cross-tab summary reading the full range -- a scale/performance stress case.",
+    "features": [
+      "2000 rows",
+      "SUMIFS/COUNTIFS/AVERAGEIFS (unsupported)",
+      "cross-sheet range refs"
+    ]
+  },
+  {
+    "file": "19_array_and_dynamic_formulas.xlsx",
+    "tier": "4-complex",
+    "title": "Array and dynamic-array formulas",
+    "description": "Legacy CSE-style array formulas (SUMPRODUCT, array-entered SUM/IF) next to modern dynamic-array functions (FILTER, SORT, SORTBY, UNIQUE, SEQUENCE) and a spill reference.",
+    "features": [
+      "SUMPRODUCT (unsupported)",
+      "array formula",
+      "FILTER/SORT/UNIQUE/SEQUENCE (unsupported)",
+      "spill reference"
+    ]
+  },
+  {
+    "file": "20_error_handling_showcase.xlsx",
+    "tier": "4-complex",
+    "title": "Every Excel runtime error, deliberately triggered",
+    "description": "One row per error class SPEC.md section 13 actually requires (#DIV/0!, #N/A, #VALUE!, #REF!, #NAME?, #NUM!) plus the matching IFERROR/IFNA-wrapped version and ISERROR/ISNA checks. (#NULL! is out of scope for portable-a1@1 and is exercised separately in 33_null_error_token.xlsx.)",
+    "features": [
+      "#DIV/0!",
+      "#N/A",
+      "#VALUE!",
+      "#REF!",
+      "#NAME?",
+      "#NUM!",
+      "IFERROR",
+      "IFNA",
+      "ISERROR"
+    ]
+  },
+  {
+    "file": "21_circular_reference.xlsx",
+    "tier": "4-complex",
+    "title": "Circular references",
+    "description": "A mutual two-cell circular pair, a single self-loop, and a downstream formula that depends on the circular pair -- SPEC.md requires every cell in the strongly connected component (and its dependents) to resolve to #CIRC!.",
+    "features": [
+      "mutual circular reference",
+      "self-loop",
+      "#CIRC! propagation"
+    ]
+  },
+  {
+    "file": "22_charts.xlsx",
+    "tier": "4-complex",
+    "title": "Embedded charts",
+    "description": "A bar chart, line chart, and pie chart embedded alongside their source data -- exercises the Chart/Unsupported import path (crates/marksheet-convert import.rs treats any xl/charts/* part as outside the initial import profile).",
+    "features": [
+      "bar chart",
+      "line chart",
+      "pie chart"
+    ]
+  },
+  {
+    "file": "23_pivot_table_source.xlsx",
+    "tier": "4-complex",
+    "title": "Pivot table (stub) over source data",
+    "description": "Real source data plus a minimal, hand-authored xl/pivotCache + xl/pivotTables part pair -- enough to exercise Marksheet's PivotTable/Unsupported detection, though it is not a substitute for a real Excel-authored pivot table (see README.md).",
+    "features": [
+      "pivot table (synthetic stub)",
+      "source data table"
+    ]
+  },
+  {
+    "file": "24_unicode_and_special_characters.xlsx",
+    "tier": "5-edge-case",
+    "title": "Unicode and special characters",
+    "description": "Emoji, CJK, RTL Arabic/Hebrew, accented Latin, a doubled-double-quote escape sequence, and a unicode sheet name referenced from a formula.",
+    "features": [
+      "unicode text",
+      "RTL text",
+      "unicode sheet name",
+      "escaped quotes in formula"
+    ]
+  },
+  {
+    "file": "25_many_sheets.xlsx",
+    "tier": "5-edge-case",
+    "title": "Many sheets",
+    "description": "51 sheets total, each formula-chained to the previous one (Sheet02!A1 = Sheet01!A1+1, and so on), read back from an Index sheet.",
+    "features": [
+      "51 sheets",
+      "sheet-to-sheet formula chain"
+    ]
+  },
+  {
+    "file": "26_merged_cells_comments_hyperlinks.xlsx",
+    "tier": "5-edge-case",
+    "title": "Merged cells, comments, and hyperlinks",
+    "description": "A merged title band, a 2x2 merged block, two cell comments, an internal same-sheet hyperlink, and a hidden column. (An external hyperlink is exercised separately in 34_external_hyperlink.xlsx -- see its notes.)",
+    "features": [
+      "merged cells",
+      "cell comments",
+      "internal hyperlink",
+      "hidden column"
+    ]
+  },
+  {
+    "file": "27_macro_enabled.xlsm",
+    "tier": "5-edge-case",
+    "title": "Macro-enabled workbook",
+    "description": "Package-level content type flipped to macroEnabled.main plus a placeholder xl/vbaProject.bin part -- exercises is_macro_enabled() and the vbaproject-name detection path in crates/marksheet-convert/src/xlsx/import.rs.",
+    "features": [
+      "macro-enabled content type",
+      "vbaProject.bin stub"
+    ]
+  },
+  {
+    "file": "28_number_formats_and_styles.xlsx",
+    "tier": "5-edge-case",
+    "title": "Number formats and styles matrix",
+    "description": "Currency (3 locales), accounting, percentage, scientific, fraction, a custom parenthesized-negative format, four date/time formats, and a custom text wrapper, plus a second sheet of font/fill/border styling and row/column outline (grouping) levels. (A '[Red]'-colored negative format is exercised separately in 35_custom_format_date_false_positive.xlsx -- see its notes.)",
+    "features": [
+      "currency formats",
+      "accounting format",
+      "scientific/fraction formats",
+      "custom formats",
+      "borders",
+      "outline grouping"
+    ]
+  },
+  {
+    "file": "29_external_links_and_name_errors.xlsx",
+    "tier": "5-edge-case",
+    "title": "External workbook links and #NAME? errors",
+    "description": "A formula authored against another workbook ('[Budget-2023.xlsx]Summary'!$B$2), a stub xl/externalLinks/ part exercising the ExternalLink/Unsupported path, and a reference to an undefined name (#NAME?).",
+    "features": [
+      "external workbook reference (stub)",
+      "#NAME? via undefined name"
+    ]
+  },
+  {
+    "file": "30_formula_function_showcase.xlsx",
+    "tier": "5-edge-case",
+    "title": "Every Excel function, one row each",
+    "description": "531 formula rows across 14 category sheets covering 514 distinct Excel function names (Math & Trig, Statistical, Lookup & Reference, Text, Logical, Date & Time, Financial, Information, Engineering, Database, Web, Dynamic Array, Cube, and legacy Compatibility aliases) -- the direct \"every Excel formula represented\" file.",
+    "features": [
+      "531 formulas",
+      "514 unique functions",
+      "14 category sheets"
+    ]
+  },
+  {
+    "file": "31_openpyxl_absolute_relationship_targets.xlsx",
+    "tier": "6-regression",
+    "title": "Regression: openpyxl's absolute relationship targets",
+    "description": "Left exactly as openpyxl wrote it (every other file in this corpus has this normalized away). openpyxl always emits package-absolute relationship targets (Target=\"/xl/worksheets/sheet1.xml\") for worksheets/tables/charts/comments. crates/marksheet-convert/src/xlsx/package.rs's resolve_target() rejects any target starting with \"/\" outright (MS4105, 'relationship target is absolute, external, or malformed'), which used to fail this file outright. Since openpyxl is one of the most common tools people use to generate .xlsx programmatically, this was a real compatibility gap rather than a contrived edge case. Now fixed; kept as the regression fixture, with the original targets preserved rather than normalized.",
+    "features": [
+      "absolute OPC relationship targets",
+      "MS4105",
+      "fixed"
+    ]
+  },
+  {
+    "file": "32_sheet_scoped_defined_name.xlsx",
+    "tier": "6-regression",
+    "title": "Sheet-scoped (local) defined name",
+    "description": "A single defined name scoped to one sheet rather than the workbook. crates/marksheet-convert used to reject the whole file for this (\"sheet-local defined names are outside the initial profile\", MS4105). Now fixed; kept as the regression fixture.",
+    "features": [
+      "sheet-scoped defined name",
+      "fixed"
+    ]
+  },
+  {
+    "file": "33_null_error_token.xlsx",
+    "tier": "5-edge-case",
+    "title": "#NULL! / space-intersection formula",
+    "description": "A range-intersection formula (space operator) that evaluates to #NULL! in real Excel. SPEC.md section 13's required runtime-failure table does not include #NULL! (or #SPILL!) -- verified behavior: the importer does NOT reject the file for this, it gracefully substitutes the formula (\"unsupported Excel formula was replaced with #NAME?\", a normal lossy/approximated outcome), unlike the true rejection cases in the 6-regression tier below.",
+    "features": [
+      "#NULL! / space-intersection formula",
+      "graceful lossy substitution"
+    ]
+  },
+  {
+    "file": "34_external_hyperlink.xlsx",
+    "tier": "6-regression",
+    "title": "External hyperlink relationship",
+    "description": "One ordinary external hyperlink (TargetMode=\"External\"). crates/marksheet-convert/src/xlsx/package.rs rejects any package relationship with TargetMode=\"External\" during its upfront package-wide relationship validation, before per-feature handling runs (\"external OOXML relationships are rejected\", MS4105) -- so an external hyperlink anywhere in the workbook used to take down the entire import, not just that cell's link. Now fixed; kept as the regression fixture. Internal same-sheet hyperlinks were always unaffected -- see 26_merged_cells_comments_hyperlinks.xlsx.",
+    "features": [
+      "external hyperlink",
+      "fixed"
+    ]
+  },
+  {
+    "file": "35_custom_format_date_false_positive.xlsx",
+    "tier": "6-regression",
+    "title": "Custom number format false-positives as a date",
+    "description": "A negative number under the extremely common \"0.00;[Red]-0.00\" custom format (red negatives, no color scale). crates/marksheet-convert/src/xlsx/import.rs's apply_number_format classified any custom format code containing the letter \"y\" or \"d\" as Date/DateTime -- and \"[Red]\" contains a \"d\", so this ordinary format was misread as a date and the negative value rejected outright (\"negative Excel date serial is outside the initial profile\", MS4105). Now fixed; kept as the regression fixture.",
+    "features": [
+      "custom number format date misclassification",
+      "fixed"
+    ]
+  }
+]

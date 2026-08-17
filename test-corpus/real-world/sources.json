@@ -1,0 +1,144 @@
+{
+  "poi": {
+    "repo": "apache/poi",
+    "sha": "cfc76edcc3a416cadb006083d53c54c285eb62b5",
+    "path": "test-data/spreadsheet",
+    "license": "Apache-2.0",
+    "files": [
+      "poc-xmlbomb.xlsx",
+      "clusterfuzz-testcase-minimized-XLSX2CSVFuzzer-5636439151607808.xlsx",
+      "MalformedSSTCount.xlsx",
+      "xlsx-corrupted.xlsx",
+      "link-external-workbook-a.xlsx",
+      "link-external-workbook-b.xlsx",
+      "unicodeSheetName.xlsx",
+      "NewlineInFormulas.xlsx",
+      "shared_formulas.xlsx",
+      "ExcelPivotTableSample.xlsx",
+      "WithTwoCharts.xlsx",
+      "SimpleMacro.xlsm",
+      "workbookProtection-workbook_password-2013.xlsx",
+      "SimpleStrict.xlsx",
+      "SampleSS.strict.xlsx",
+      "WithConditionalFormatting.xlsx",
+      "NewStyleConditionalFormattings.xlsx",
+      "55406_Conditional_formatting_sample.xlsx",
+      "conditional_formatting_multiple_ranges.xlsx",
+      "61060-conditional-number-formatting.xlsx",
+      "FormatConditionTests.xlsx",
+      "DataValidations-49244.xlsx",
+      "DataValidationEvaluations.xlsx",
+      "DateFormatTests.xlsx",
+      "DateFormatNumberTests.xlsx",
+      "decimal-format.xlsx",
+      "FormatKM.xlsx",
+      "ExcelTables.xlsx",
+      "TablesWithDifferentHeaders.xlsx",
+      "tableStyle.xlsx",
+      "simple-table-named-range.xlsx",
+      "evaluate_formula_with_structured_table_references.xlsx",
+      "comments.xlsx",
+      "sharedhyperlink.xlsx",
+      "testNames.xlsm",
+      "FormulaSheetRange.xlsx",
+      "55906-MultiSheetRefs.xlsx",
+      "SheetTabColors.xlsx",
+      "TwoSheetsOneHidden.xlsx",
+      "noSharedStringTable.xlsx",
+      "styles.xlsx",
+      "Formatting.xlsx",
+      "style-alternate-content.xlsx",
+      "HeaderFooterComplexFormats.xlsx",
+      "duplicate-filename-case-insensitive.xlsx",
+      "WithTextBox.xlsx",
+      "chart_sheet.xlsx"
+    ]
+  },
+  "calamine": {
+    "repo": "tafia/calamine",
+    "sha": "263762c8e98ef25da8511d9c5ea1783493e3bf6d",
+    "path": "tests",
+    "license": "MIT",
+    "files": [
+      "table_with_absolute_paths.xlsx",
+      "hyperlinks.xlsx",
+      "merged_range.xlsx",
+      "errors.xlsx",
+      "date_1904.xlsx",
+      "pivots.xlsx",
+      "vba.xlsm",
+      "strict_iso_paths.xlsx",
+      "pass_protected.xlsx"
+    ]
+  },
+  "xlnt": {
+    "repo": "tfussell/xlnt",
+    "sha": "297b331435d6dee09bf89c8a5ad974b01f18039b",
+    "path": "tests/data",
+    "license": "MIT",
+    "files": [
+      "2_minimal.xlsx",
+      "4_every_style.xlsx",
+      "10_comments_hyperlinks_formulae.xlsx",
+      "11_print_settings.xlsx",
+      "12_advanced_properties.xlsx",
+      "15_phonetics.xlsx",
+      "17_xlsm.xlsm",
+      "18_formulae.xlsx",
+      "19_defined_names.xlsx",
+      "9_unicode_\u039b_\ud83d\ude07.xlsx"
+    ]
+  },
+  "pandas": {
+    "repo": "pandas-dev/pandas",
+    "sha": "4c6a78448cecd77e004bd2af7c20b6a245c40c07",
+    "path": "pandas/tests/io/data/excel",
+    "license": "BSD-3-Clause",
+    "files": [
+      "dimension_missing.xlsx",
+      "dimension_small.xlsx",
+      "dimension_large.xlsx",
+      "times_1904.xlsx",
+      "times_1900.xlsx",
+      "test_spaces.xlsm"
+    ]
+  },
+  "excelize": {
+    "repo": "qax-os/excelize",
+    "sha": "46a5eb289448e40fbc7d3294589b03861fb822f0",
+    "path": "test",
+    "license": "BSD-3-Clause",
+    "files": [
+      "SharedStrings.xlsx",
+      "MergeCell.xlsx",
+      "CalcChain.xlsx",
+      "BadWorkbook.xlsx",
+      "OverflowNumericCell.xlsx"
+    ]
+  },
+  "phpspreadsheet": {
+    "repo": "PHPOffice/PhpSpreadsheet",
+    "sha": "930293a32a58beb792f4dbc61d6b161f42608d8c",
+    "path": "samples/templates",
+    "license": "MIT",
+    "files": [
+      "ConditionalFormattingConditions.xlsx",
+      "ColourScale.xlsx",
+      "31docproperties.xlsx",
+      "TableFormat.xlsx",
+      "26template.xlsx"
+    ]
+  },
+  "closedxml": {
+    "repo": "ClosedXML/ClosedXML",
+    "sha": "6762b849342809be95467cdfbe426a64ad11d2bd",
+    "path": "ClosedXML.Tests/Resource/Examples",
+    "license": "MIT",
+    "files": [
+      "Comments/AddingComments.xlsx",
+      "ConditionalFormatting/CFDataBarNegative.xlsx",
+      "ConditionalFormatting/CFColorScaleLowMidHigh.xlsx",
+      "AutoFilter/RegularAutoFilter.xlsx"
+    ]
+  }
+}

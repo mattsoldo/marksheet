@@ -4,3 +4,5 @@ node_modules/
 .claude/
 __pycache__/
 .DS_Store
+test-corpus/xlsx/
+test-corpus/.venv/

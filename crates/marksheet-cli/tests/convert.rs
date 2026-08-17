@@ -261,6 +261,97 @@ fn conversion_refuses_a_symbolic_link_destination() {
     assert_eq!(fs::read(target).expect("read target"), b"target sentinel");
 }
 
+/// A circular reference and an unresolved name evaluate to `#CIRC!` and
+/// `#NAME?` per SPEC section 13, so conversion carries them and reports the
+/// loss. `--strict` is the opt-in that refuses them instead.
+#[test]
+fn evaluation_error_formulas_convert_by_default_and_are_refused_under_strict() {
+    let temporary = TempDirectory::new("strict-evaluation-errors");
+    let source = temporary.path().join("errors.ms");
+    fs::write(
+        &source,
+        "#!marksheet 0.1\n\n@sheet data \"Data\"\n@block A1 csv\n=B1+1\n@end\n@block B1 csv\n=A1+1\n@end\n@block A3 csv\n=missing_name*2\n@end\n",
+    )
+    .expect("write source");
+
+    let lenient = convert(&source, "xlsx", &["--output", out(&temporary, "a.xlsx")]);
+    assert!(
+        lenient.status.success(),
+        "stderr: {}",
+        text(&lenient.stderr)
+    );
+
+    let strict = convert(
+        &source,
+        "xlsx",
+        &["--strict", "--output", out(&temporary, "b.xlsx")],
+    );
+    assert!(!strict.status.success(), "--strict must refuse");
+    let detail = report(&strict)["outcomes"][0]["detail"]
+        .as_str()
+        .expect("detail")
+        .to_owned();
+    assert!(
+        detail.contains("MS2303") || detail.contains("MS2103"),
+        "{detail}"
+    );
+}
+
+/// Import `--strict` refuses any source the report already calls lossy, which
+/// is most real workbooks: it is a gate for callers that need an exact carry.
+#[test]
+fn strict_import_refuses_a_lossy_source() {
+    let temporary = TempDirectory::new("strict-import");
+    let source = temporary.path().join("advanced.ms");
+    fs::copy(fixture("sources/advanced.ms"), &source).expect("copy fixture");
+    let xlsx = out(&temporary, "advanced.xlsx");
+    assert!(
+        convert(&source, "xlsx", &["--output", xlsx])
+            .status
+            .success()
+    );
+
+    let xlsx_path = temporary.path().join("advanced.xlsx");
+    let lenient = convert(
+        &xlsx_path,
+        "marksheet",
+        &["--output", out(&temporary, "a.ms")],
+    );
+    assert!(
+        lenient.status.success(),
+        "stderr: {}",
+        text(&lenient.stderr)
+    );
+    assert_eq!(report(&lenient)["fidelity"], "lossy");
+
+    let strict = convert(
+        &xlsx_path,
+        "marksheet",
+        &["--strict", "--output", out(&temporary, "b.ms")],
+    );
+    assert!(
+        !strict.status.success(),
+        "--strict must refuse a lossy import"
+    );
+    assert_eq!(report(&strict)["fidelity"], "lossy");
+    assert!(
+        !temporary.path().join("b.ms").exists(),
+        "--strict must not write an artifact"
+    );
+}
+
+fn out(temporary: &TempDirectory, name: &str) -> &'static str {
+    Box::leak(
+        temporary
+            .path()
+            .join(name)
+            .to_str()
+            .expect("UTF-8 path")
+            .to_owned()
+            .into_boxed_str(),
+    )
+}
+
 #[test]
 fn convert_refuses_to_overwrite_input_spelled_relative_to_absolute() {
     let temporary = TempDirectory::new("overwrite-guard-relative");

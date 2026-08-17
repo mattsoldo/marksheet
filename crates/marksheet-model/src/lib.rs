@@ -305,6 +305,41 @@ typed_identifier!(TableId, "A workbook-scoped table identifier.");
 typed_identifier!(NameId, "A workbook-scoped named-reference identifier.");
 typed_identifier!(StyleId, "A workbook-scoped style identifier.");
 
+/// Reports whether an identifier would read as an A1 or R1C1 cell address
+/// rather than a name, compared case-insensitively, per SPEC section 4.1.
+///
+/// This deliberately matches [`Coordinate::parse`], which is unbounded, rather
+/// than the smaller grid a spreadsheet GUI can address. The formula layer
+/// resolves any A1-shaped word to a reference using that same unbounded parse,
+/// so a name allowed outside the GUI's grid would be shadowed by a reference in
+/// every formula that used it: `@name xfe1` would parse, and `=xfe1` would then
+/// read cell `XFE1` instead of the name and silently evaluate to Blank. The
+/// rule must therefore stay a superset of whatever the formula layer can read
+/// as an address.
+///
+/// Every producer and consumer of identifiers shares this one definition. An
+/// importer that minted a name the serializer rejects leaves a workbook that
+/// imports but cannot be written back out; XLSX names that trip this rule are
+/// renamed on import instead, with the approximation reported.
+#[must_use]
+pub fn resembles_cell_address(value: &str) -> bool {
+    Coordinate::parse(value).is_ok() || resembles_r1c1_address(value)
+}
+
+fn resembles_r1c1_address(value: &str) -> bool {
+    let upper = value.to_ascii_uppercase();
+    let Some(rest) = upper.strip_prefix('R') else {
+        return false;
+    };
+    let Some((row, column)) = rest.split_once('C') else {
+        return false;
+    };
+    !row.is_empty()
+        && !column.is_empty()
+        && row.bytes().all(|byte| byte.is_ascii_digit())
+        && column.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 /// A concrete one-based spreadsheet coordinate.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Coordinate {
@@ -1560,6 +1595,34 @@ mod tests {
             LineColumn { line: 2, column: 3 }
         );
     }
+    #[test]
+    fn cell_address_resemblance_covers_everything_the_formula_layer_reads_as_a_reference() {
+        // Anything `Coordinate::parse` accepts is a reference to the formula
+        // layer, so all of it must be refused as a name -- including addresses
+        // beyond the grid a GUI can display. `@name xfe1` previously parsed,
+        // and `=xfe1` then read cell XFE1 and evaluated to Blank.
+        for address in [
+            "a1",
+            "A1",
+            "q4",
+            "XFD1048576",
+            "r1c1",
+            "R1C1",
+            "rc1",
+            "xfe1",
+            "sales2024",
+            "chartrange2",
+            "a1048577",
+            "r0c0",
+        ] {
+            assert!(resembles_cell_address(address), "{address}");
+        }
+        // Not addresses in any shape.
+        for name in ["total", "q", "_hidden", "a", "r1c", "a0", "x_1"] {
+            assert!(!resembles_cell_address(name), "{name}");
+        }
+    }
+
     #[test]
     fn coordinates_round_trip_and_check_limits() {
         for (source, column, row) in [

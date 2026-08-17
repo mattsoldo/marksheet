@@ -474,7 +474,7 @@ impl Lowerer<'_> {
                 .push(error("MS1201", "invalid name identifier", id_span));
             return;
         };
-        if Coordinate::parse(id_raw).is_ok() || looks_like_r1c1(id_raw) {
+        if marksheet_model::resembles_cell_address(id_raw) {
             self.diagnostics.push(error(
                 "MS1201",
                 "a name cannot resemble a cell address",
@@ -1148,20 +1148,6 @@ fn parse_json_number(value: &str) -> Option<f64> {
         .ok()?
         .as_f64()
         .filter(|number| number.is_finite())
-}
-
-fn looks_like_r1c1(value: &str) -> bool {
-    let upper = value.to_ascii_uppercase();
-    let Some(rest) = upper.strip_prefix('R') else {
-        return false;
-    };
-    let Some((row, column)) = rest.split_once('C') else {
-        return false;
-    };
-    !row.is_empty()
-        && !column.is_empty()
-        && row.bytes().all(|byte| byte.is_ascii_digit())
-        && column.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn parse_bracket_target(value: &str) -> Option<(&str, String)> {

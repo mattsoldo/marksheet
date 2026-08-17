@@ -53,11 +53,8 @@ impl Package {
                     "encrypted XLSX entries are not accepted",
                 ));
             }
-            if file.is_dir() || file.is_symlink() {
-                return Err(invalid(
-                    file.name(),
-                    "directory and symlink ZIP entries are not accepted",
-                ));
+            if file.is_symlink() {
+                return Err(invalid(file.name(), "symlink ZIP entries are not accepted"));
             }
             if !matches!(
                 file.compression(),
@@ -76,13 +73,10 @@ impl Package {
                     )
                 })?
                 .to_owned();
-            validate_part_name(&raw_name)?;
-            if file.enclosed_name().is_none() {
-                return Err(invalid(&raw_name, "ZIP entry name is not safely enclosed"));
-            }
-            if !folded_names.insert(raw_name.to_ascii_lowercase()) {
-                return Err(invalid(&raw_name, "duplicate or case-alias ZIP entry name"));
-            }
+            // Budgets are charged against every record, including directory
+            // entries: a "directory" can still declare a payload, and skipping
+            // it before this point would smuggle an unbounded one past the
+            // size, total-size and compression-ratio limits.
             if file.size() > limits.max_zip_entry_uncompressed_bytes {
                 return Err(resource(
                     &raw_name,
@@ -109,6 +103,20 @@ impl Package {
                     "ZIP entry compression ratio exceeds the configured limit",
                 ));
             }
+            // Explicit directory entries are ordinary, valid ZIP records that
+            // many writers emit (Java's, and therefore Apache POI's, among
+            // them). They carry no part content and their names are not part
+            // names, so they are skipped once charged above.
+            if file.is_dir() {
+                continue;
+            }
+            validate_part_name(&raw_name)?;
+            if file.enclosed_name().is_none() {
+                return Err(invalid(&raw_name, "ZIP entry name is not safely enclosed"));
+            }
+            if !folded_names.insert(raw_name.to_ascii_lowercase()) {
+                return Err(invalid(&raw_name, "duplicate or case-alias ZIP entry name"));
+            }
             let declared_size = file.size();
             let capacity = usize::try_from(declared_size)
                 .map_err(|_| resource(&raw_name, "ZIP entry does not fit addressable memory"))?;
@@ -133,6 +141,14 @@ impl Package {
         let mut hardened = BTreeSet::new();
         for (name, content) in &parts {
             if has_xml_part_name(name) {
+                // OOXML allows a part to be UTF-16, and Office writes custom-XML
+                // and metadata parts that way. Only the parts this converter
+                // actually reads have to be UTF-8; validating an auxiliary part
+                // it never opens must not fail an otherwise sound package. The
+                // ZIP-level size and ratio budgets still bound those bytes.
+                if !is_consumed_part(name) && starts_with_utf16_bom(content) {
+                    continue;
+                }
                 validate_xml(name, content, limits)?;
                 hardened.insert(name.clone());
             }
@@ -188,16 +204,34 @@ impl Package {
                 .is_some_and(|content_type| {
                     content_type.eq_ignore_ascii_case(
                         "application/vnd.ms-excel.sheet.macroEnabled.main+xml",
+                    ) || content_type.eq_ignore_ascii_case(
+                        "application/vnd.ms-excel.template.macroEnabled.main+xml",
                     )
                 });
         Ok(package)
     }
 
-    fn part(&self, name: &str) -> Result<&[u8], ConvertError> {
-        self.parts
-            .get(name)
+    pub(super) fn part(&self, name: &str) -> Result<&[u8], ConvertError> {
+        self.resolve_part_name(name)
+            .and_then(|actual| self.parts.get(&actual))
             .map(Vec::as_slice)
             .ok_or_else(|| invalid(name, "referenced OOXML part is missing"))
+    }
+
+    /// Resolves a part name the way OPC compares them: exactly where possible,
+    /// otherwise ASCII case-insensitively. Writers do disagree on case —
+    /// excelize stores `xl/SharedStrings.xml` and then points a relationship at
+    /// `sharedStrings.xml` — and an exact-only lookup would reject the package.
+    /// Case-aliased entries are already refused when the archive is read, so at
+    /// most one part can match.
+    fn resolve_part_name(&self, name: &str) -> Option<String> {
+        if self.parts.contains_key(name) {
+            return Some(name.to_owned());
+        }
+        self.parts
+            .keys()
+            .find(|candidate| candidate.eq_ignore_ascii_case(name))
+            .cloned()
     }
 
     /// Returns a part that is about to be parsed as XML, hardening it first.
@@ -207,13 +241,18 @@ impl Package {
     /// package author chooses. The name-based pass in [`Package::open`] would
     /// skip such a part entirely, so hardening runs again here, at the point
     /// the part is claimed for parsing, for anything `open` did not cover.
+    /// The hardened set stores names as the archive spells them, so the claim
+    /// name is resolved the same way `part` resolves it before the check.
     pub(super) fn xml_part(
         &self,
         name: &str,
         limits: ConversionLimits,
     ) -> Result<&[u8], ConvertError> {
         let content = self.part(name)?;
-        if !self.hardened.contains(name) {
+        if !self
+            .resolve_part_name(name)
+            .is_some_and(|actual| self.hardened.contains(&actual))
+        {
             validate_xml(name, content, limits)?;
         }
         Ok(content)
@@ -273,27 +312,65 @@ impl Package {
                     if relationships.len() >= limits.max_relationships {
                         return Err(resource(rels_part, "relationship count exceeds the limit"));
                     }
-                    if attribute(&reader, &element, b"TargetMode", rels_part)?
-                        .is_some_and(|mode| mode.eq_ignore_ascii_case("external"))
-                    {
-                        return Err(ConvertError::new(
-                            ConvertErrorCode::UnsupportedPackage,
-                            "external OOXML relationships are rejected",
+                    let external = attribute(&reader, &element, b"TargetMode", rels_part)?
+                        .is_some_and(|mode| mode.eq_ignore_ascii_case("external"));
+                    // OPC requires Id and Target, but writers emit relationships
+                    // missing them -- Google Sheets ships a pivot-cache
+                    // relationship carrying only Type and TargetMode. When the
+                    // owning part is one this converter never opens, the entry
+                    // is skipped instead of failing the package; a malformed
+                    // relationship on a part we do read is still an error.
+                    let tolerate_malformed = !is_consumed_part(source_part);
+                    let Some(id) = attribute(&reader, &element, b"Id", rels_part)? else {
+                        if tolerate_malformed {
+                            continue;
+                        }
+                        return Err(invalid(
+                            rels_part,
+                            "element Relationship is missing attribute Id",
                         ));
-                    }
-                    let id = required_attribute(&reader, &element, b"Id", rels_part)?;
+                    };
                     if relationships
                         .iter()
                         .any(|candidate: &Relationship| candidate.id == id)
                     {
                         return Err(invalid(rels_part, "duplicate relationship identifier"));
                     }
-                    let target = required_attribute(&reader, &element, b"Target", rels_part)?;
-                    let target = resolve_target(source_part, &target)
-                        .map_err(|message| invalid(rels_part, message))?;
-                    if !self.parts.contains_key(&target) {
-                        return Err(invalid(rels_part, "relationship target part is missing"));
-                    }
+                    let Some(target) = attribute(&reader, &element, b"Target", rels_part)? else {
+                        if tolerate_malformed {
+                            continue;
+                        }
+                        return Err(invalid(
+                            rels_part,
+                            "element Relationship is missing attribute Target",
+                        ));
+                    };
+                    // External targets are arbitrary URIs, not package-relative paths: they
+                    // cannot be resolved against source_part or checked for existence in the
+                    // package. Per-feature handling downstream omits whatever consumed them
+                    // (e.g. hyperlinks) rather than failing the whole package parse.
+                    let target = if external {
+                        target
+                    } else {
+                        let resolved = resolve_target(source_part, &target)
+                            .map_err(|message| invalid(rels_part, message))?;
+                        match self.resolve_part_name(&resolved) {
+                            Some(actual) => actual,
+                            // A relationship may point at a part that is not in
+                            // the package. That is only fatal for a part this
+                            // converter would open: an unconsumed one (a
+                            // `calcChain` calculation cache, say) is dropped by
+                            // a spreadsheet GUI too, and is reported as an
+                            // unconsumed relationship rather than refused.
+                            None if !is_consumed_part(&resolved) => resolved,
+                            None => {
+                                return Err(invalid(
+                                    rels_part,
+                                    "relationship target part is missing",
+                                ));
+                            }
+                        }
+                    };
                     relationships.push(Relationship {
                         id,
                         kind: required_attribute(&reader, &element, b"Type", rels_part)?,
@@ -325,6 +402,7 @@ impl ContentTypes {
         let part = "[Content_Types].xml";
         let mut reader = Reader::from_reader(bytes);
         let mut content_types = Self::default();
+        let mut folded_overrides = BTreeSet::new();
         let mut entries = 0_usize;
         loop {
             match reader.read_event() {
@@ -361,6 +439,15 @@ impl ContentTypes {
                             validate_part_name(name)?;
                             let value =
                                 required_attribute(&reader, &element, b"ContentType", part)?;
+                            // Part names compare case-insensitively, so two
+                            // overrides differing only by case would make a
+                            // part's declared type depend on spelling.
+                            if !folded_overrides.insert(name.to_ascii_lowercase()) {
+                                return Err(invalid(
+                                    part,
+                                    "duplicate or case-alias override content type",
+                                ));
+                            }
                             if content_types
                                 .overrides
                                 .insert(name.to_owned(), value)
@@ -389,13 +476,25 @@ impl ContentTypes {
     }
 
     fn content_type(&self, part: &str) -> Option<&str> {
-        self.overrides.get(part).map(String::as_str).or_else(|| {
-            std::path::Path::new(part)
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .and_then(|extension| self.defaults.get(&extension.to_ascii_lowercase()))
-                .map(String::as_str)
-        })
+        self.overrides
+            .get(part)
+            .map(String::as_str)
+            // An Override part name is compared case-insensitively, like every
+            // other OPC part name, so a writer may declare the override under a
+            // different case than the relationship spells.
+            .or_else(|| {
+                self.overrides
+                    .iter()
+                    .find(|(candidate, _)| candidate.eq_ignore_ascii_case(part))
+                    .map(|(_, content_type)| content_type.as_str())
+            })
+            .or_else(|| {
+                std::path::Path::new(part)
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .and_then(|extension| self.defaults.get(&extension.to_ascii_lowercase()))
+                    .map(String::as_str)
+            })
     }
 
     fn validate_relationship(
@@ -407,6 +506,8 @@ impl ContentTypes {
             &[
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml",
                 "application/vnd.ms-excel.sheet.macroEnabled.main+xml",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml",
+                "application/vnd.ms-excel.template.macroEnabled.main+xml",
             ]
         } else if relationship.kind.ends_with("/worksheet") {
             &["application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"]
@@ -456,6 +557,32 @@ pub(super) fn relationships_part(source_part: &str) -> String {
     }
 }
 
+/// Whether the importer opens this part for spreadsheet content, as opposed to
+/// carrying it as unconsumed package content in the fidelity report.
+fn is_consumed_part(name: &str) -> bool {
+    // Folded, because part names resolve case-insensitively: a worksheet stored
+    // as `xl/Worksheets/Sheet1.xml` is still opened, so it must not take the
+    // relaxed path meant for parts this converter never reads.
+    let folded = name.to_ascii_lowercase();
+    folded == "[content_types].xml"
+        || std::path::Path::new(&folded)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("rels"))
+        || matches!(
+            folded.as_str(),
+            "xl/workbook.xml" | "xl/styles.xml" | "xl/sharedstrings.xml"
+        )
+        || folded.starts_with("xl/worksheets/")
+        || folded.starts_with("xl/tables/")
+}
+
+fn starts_with_utf16_bom(content: &[u8]) -> bool {
+    matches!(
+        content.first_chunk::<2>(),
+        Some([0xFF, 0xFE] | [0xFE, 0xFF])
+    )
+}
+
 fn has_xml_part_name(name: &str) -> bool {
     std::path::Path::new(name).extension().is_some_and(|value| {
         value.eq_ignore_ascii_case("xml") || value.eq_ignore_ascii_case("rels")
@@ -489,18 +616,26 @@ fn validate_part_name(name: &str) -> Result<(), ConvertError> {
 
 fn resolve_target(source_part: &str, target: &str) -> Result<String, &'static str> {
     if target.is_empty()
-        || target.starts_with('/')
         || target.contains('\\')
         || target.contains(':')
         || target.contains('?')
         || target.contains('#')
     {
-        return Err("relationship target is absolute, external, or malformed");
+        return Err("relationship target is external or malformed");
     }
-    let mut components: Vec<&str> = source_part
-        .rsplit_once('/')
-        .map_or_else(Vec::new, |(directory, _)| directory.split('/').collect());
-    for component in target.split('/') {
+    // A leading "/" makes the target package-absolute (resolved from the package
+    // root) rather than relative to source_part. This is valid per the OPC spec,
+    // and is what openpyxl and other common tools always emit.
+    let (mut components, relative) = match target.strip_prefix('/') {
+        Some(rest) => (Vec::new(), rest),
+        None => (
+            source_part
+                .rsplit_once('/')
+                .map_or_else(Vec::new, |(directory, _)| directory.split('/').collect()),
+            target,
+        ),
+    };
+    for component in relative.split('/') {
         match component {
             "" | "." => {}
             ".." => {
@@ -568,7 +703,22 @@ mod tests {
     }
 
     #[test]
-    fn rejects_external_relationships() {
+    fn resolves_package_absolute_targets() {
+        // openpyxl (and other common tools) always write worksheet/table/chart/comment
+        // relationships as package-absolute targets, e.g. Target="/xl/worksheets/sheet1.xml".
+        assert_eq!(
+            resolve_target("xl/workbook.xml", "/xl/worksheets/sheet1.xml").unwrap(),
+            "xl/worksheets/sheet1.xml"
+        );
+        assert_eq!(
+            resolve_target("xl/worksheets/sheet1.xml", "/xl/tables/table1.xml").unwrap(),
+            "xl/tables/table1.xml"
+        );
+        assert!(resolve_target("xl/workbook.xml", "/").is_err());
+    }
+
+    #[test]
+    fn rejects_external_officedocument_relationship() {
         let external = "<Relationships><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"https://example.com/workbook.xml\" TargetMode=\"External\"/></Relationships>";
         let bytes = package(&[
             ("[Content_Types].xml", CONTENT_TYPES),
@@ -576,7 +726,28 @@ mod tests {
             ("xl/workbook.xml", "<workbook/>"),
         ]);
         let error = Package::open(&bytes, ConversionLimits::default()).unwrap_err();
-        assert_eq!(error.code, ConvertErrorCode::UnsupportedPackage);
+        assert_eq!(error.code, ConvertErrorCode::InvalidPackage);
+    }
+
+    #[test]
+    fn accepts_external_relationships_outside_the_officedocument_kind() {
+        // An ordinary external hyperlink shouldn't take down the whole package -- it's up to
+        // per-feature handling downstream to decide whether it can represent it.
+        let with_hyperlink = "<Relationships><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink\" Target=\"https://example.com/\" TargetMode=\"External\"/></Relationships>";
+        let bytes = package(&[
+            ("[Content_Types].xml", CONTENT_TYPES),
+            ("_rels/.rels", with_hyperlink),
+            ("xl/workbook.xml", "<workbook/>"),
+        ]);
+        let package = Package::open(&bytes, ConversionLimits::default()).unwrap();
+        let relationships = package
+            .relationships("_rels/.rels", "", ConversionLimits::default())
+            .unwrap();
+        let hyperlink = relationships
+            .iter()
+            .find(|relationship| relationship.id == "rId2")
+            .unwrap();
+        assert_eq!(hyperlink.target, "https://example.com/");
     }
 
     #[test]
@@ -616,6 +787,31 @@ mod tests {
         ]);
         let error = Package::open(&bytes, ConversionLimits::default()).unwrap_err();
         assert_eq!(error.code, ConvertErrorCode::InvalidPackage);
+    }
+
+    #[test]
+    fn accepts_template_workbook_content_types_and_detects_template_macros() {
+        for (content_type, macro_enabled) in [
+            (
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml",
+                false,
+            ),
+            (
+                "application/vnd.ms-excel.template.macroEnabled.main+xml",
+                true,
+            ),
+        ] {
+            let types = format!(
+                "<?xml version=\"1.0\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Override PartName=\"/xl/workbook.xml\" ContentType=\"{content_type}\"/></Types>"
+            );
+            let bytes = package(&[
+                ("[Content_Types].xml", &types),
+                ("_rels/.rels", ROOT_RELS),
+                ("xl/workbook.xml", "<workbook/>"),
+            ]);
+            let package = Package::open(&bytes, ConversionLimits::default()).unwrap();
+            assert_eq!(package.is_macro_enabled(), macro_enabled, "{content_type}");
+        }
     }
 
     #[test]

@@ -14,8 +14,8 @@ pub mod graph;
 pub mod prepare;
 
 pub use engine::{
-    CalcEngine, CalcLimits, CalcStats, CalculatedCell, CalculationRequest, CalculationResult,
-    ChangeError, ChangeSet, DirtySet, PrepareReport, PreparedCalculation, ReferenceCalcEngine,
-    WorkLimits,
+    CALC_RESOURCE_LIMIT_DIAGNOSTIC, CalcEngine, CalcLimits, CalcStats, CalculatedCell,
+    CalculationRequest, CalculationResult, ChangeError, ChangeSet, DirtySet,
+    FORMULA_CYCLE_DIAGNOSTIC, PrepareReport, PreparedCalculation, ReferenceCalcEngine, WorkLimits,
 };
-pub use prepare::{PrepareError, PrepareLimits, PreparedWorkbook};
+pub use prepare::{PrepareError, PrepareLimits, PreparedWorkbook, UNRESOLVED_REFERENCE_DIAGNOSTIC};
