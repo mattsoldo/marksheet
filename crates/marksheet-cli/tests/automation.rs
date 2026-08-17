@@ -330,6 +330,72 @@ fn committed_edit_reports_post_edit_extension_failures() {
     assert_eq!(repeated["valid"], false);
 }
 
+#[test]
+fn json_format_still_formats_a_workbook_with_a_failing_assertion() {
+    // A failed trusted assertion is an authoring outcome, not a formatter
+    // defect: it holds identically before and after the rewrite, so the
+    // result guard must not refuse to format the workbook.
+    let source = b"#!marksheet 0.1\n@use assertions@1\n@sheet inputs \"Inputs\"\n@block A1 csv\nValue,Text\n5,hello\n@end\n@extension assertions@1 \"checks\"\nassert A2 > 9\n@end\n";
+    let workbook = TempFile::write("automation-format-assertion.ms", source);
+
+    let format = marksheet()
+        .args(["fmt", "--format", "json"])
+        .arg(workbook.path())
+        .output()
+        .expect("CLI executes");
+    let format: serde_json::Value =
+        serde_json::from_slice(&format.stdout).expect("valid format JSON");
+    assert_eq!(format["status"], "ok");
+    assert_eq!(format["changed"], true);
+    assert_eq!(format["error"], serde_json::Value::Null);
+    // The assertion still fails, and the envelope must keep saying so.
+    assert_eq!(format["valid"], false);
+    assert_ne!(
+        fs::read(workbook.path()).expect("read formatted source"),
+        source
+    );
+
+    // The same document already canonical must reach the same verdict; a
+    // validity claim may not depend on whether formatting changed bytes.
+    let again = marksheet()
+        .args(["fmt", "--format", "json"])
+        .arg(workbook.path())
+        .output()
+        .expect("CLI executes");
+    let again: serde_json::Value =
+        serde_json::from_slice(&again.stdout).expect("valid format JSON");
+    assert_eq!(again["status"], "ok");
+    assert_eq!(again["changed"], false);
+    assert_eq!(again["valid"], false);
+}
+
+#[test]
+fn json_format_locates_diagnostics_in_the_source_it_reports() {
+    // The undeclared-instance warning sits after the blank line canonical
+    // formatting inserts, so a stale line index reports a position that
+    // belongs to neither the original nor the formatted workbook.
+    let source = b"#!marksheet 0.1\n@book locale=\"en-US\" timezone=\"UTC\" formula-profile=\"portable-a1@1\"\n@sheet s \"S\"\n@block A1 csv\nValue\n5\n@end\n\n@extension assertions@1 \"checks\"\nassert A2 >= 0\n@end\n";
+    let workbook = TempFile::write("automation-format-spans.ms", source);
+
+    let format = marksheet()
+        .args(["fmt", "--format", "json"])
+        .arg(workbook.path())
+        .output()
+        .expect("CLI executes");
+    let format: serde_json::Value =
+        serde_json::from_slice(&format.stdout).expect("valid format JSON");
+    assert_eq!(format["changed"], true);
+
+    let check = marksheet()
+        .args(["check", "--format", "json"])
+        .arg(workbook.path())
+        .output()
+        .expect("CLI executes");
+    let check: serde_json::Value = serde_json::from_slice(&check.stdout).expect("valid check JSON");
+
+    assert_eq!(format["diagnostics"], check["diagnostics"]);
+}
+
 fn marksheet() -> Command {
     Command::new(env!("CARGO_BIN_EXE_marksheet"))
 }

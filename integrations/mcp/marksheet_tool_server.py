@@ -42,7 +42,12 @@ class ToolError(Exception):
 
 class ToolServer:
     def __init__(self, workspace: Path, marksheet: str) -> None:
-        self.workspace = workspace.resolve(strict=True)
+        try:
+            self.workspace = workspace.resolve(strict=True)
+        except OSError as error:
+            raise ToolError(
+                "invalid_workspace", f"cannot resolve workspace {workspace}: {error}"
+            ) from error
         if not self.workspace.is_dir():
             raise ToolError("invalid_workspace", "workspace must be a directory")
         self.marksheet = marksheet

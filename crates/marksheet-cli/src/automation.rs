@@ -268,6 +268,20 @@ fn apply_format(
             "formatted source cannot fit in the bounded exact-patch response",
         );
     }
+    // Formatting must preserve admissibility: the canonical result has to pass
+    // the same gate the base source passed to reach this point. Failing that is
+    // a formatter defect rather than an authoring problem, and unlike a
+    // non-idempotent append it can be retried safely, so refuse the rewrite
+    // instead of committing it and reporting validity never checked.
+    let applied_diagnostics = if would_change {
+        let revalidated = revalidate(formatted);
+        if !revalidated.admissible {
+            return print_format_regression(source, formatted, &revalidated.diagnostics);
+        }
+        revalidated.diagnostics
+    } else {
+        diagnostics.to_vec()
+    };
     if would_change && !commands::replace_atomically_if_current(path, formatted, source)? {
         let after = match commands::read_source_bounded(path, MAX_AUTOMATION_SOURCE_BYTES)? {
             Some(current) => SourceVersion::new(&current),
@@ -302,7 +316,7 @@ fn apply_format(
         check_only: false,
         changed: would_change,
         would_change,
-        valid: !diagnostics
+        valid: !applied_diagnostics
             .iter()
             .any(|diagnostic| diagnostic.severity == Severity::Error),
         before: SourceVersion::new(source),
@@ -317,11 +331,78 @@ fn apply_format(
         } else {
             Vec::new()
         },
-        diagnostics: json_diagnostics(formatted, diagnostics),
+        // `formatted` is the source these diagnostics were derived from, and
+        // when nothing changed it is byte-identical to `source`, so spans and
+        // line index always describe the same bytes.
+        diagnostics: json_diagnostics(formatted, &applied_diagnostics),
         error: None,
     };
     print_json(&output)?;
     Ok(ExitCode::SUCCESS)
+}
+
+/// Candidate source reparsed through the pipeline that admitted the base
+/// workbook, so a mutating command can report the state it actually produced.
+struct Revalidated {
+    /// Whether the source would pass the same admission gate the base source
+    /// passed: parseable, capability-complete, and free of formula errors.
+    admissible: bool,
+    diagnostics: Vec<Diagnostic>,
+}
+
+/// Rechecks candidate source against the admission gate exactly.
+///
+/// Trusted extension diagnostics are deliberately excluded, because admission
+/// excludes them too. A failed assertion is an authoring outcome that
+/// formatting neither causes nor repairs, so treating it as a formatter defect
+/// would refuse to format a workbook that was already failing that assertion
+/// before and after the rewrite.
+fn revalidate(source: &[u8]) -> Revalidated {
+    let document = commands::parse_with_extensions(source);
+    let mut diagnostics = document.diagnostics.clone();
+    let mut formula_errors = false;
+    if let Some(workbook) = document.parsed.workbook.as_ref() {
+        let formula_diagnostics = commands::validate_formulas(workbook);
+        formula_errors = formula_diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error);
+        diagnostics.extend(formula_diagnostics);
+    }
+    commands::sort_and_deduplicate_diagnostics(&mut diagnostics);
+    Revalidated {
+        admissible: !document.parsed.has_errors()
+            && document.capabilities_complete
+            && !formula_errors,
+        diagnostics,
+    }
+}
+
+fn print_format_regression(
+    source: &[u8],
+    formatted: &[u8],
+    diagnostics: &[Diagnostic],
+) -> Result<ExitCode, commands::CliError> {
+    let before = SourceVersion::new(source);
+    let output = FormatOutput {
+        version: "marksheet-format@1",
+        profile: "portable-a1@1",
+        status: "invalid",
+        check_only: false,
+        changed: false,
+        would_change: true,
+        valid: false,
+        after: before.clone(),
+        before,
+        proposed: Some(SourceVersion::new(formatted)),
+        patches: Vec::new(),
+        diagnostics: json_diagnostics(formatted, diagnostics),
+        error: Some(AutomationError {
+            kind: "invalid_result",
+            message: "canonical formatting would produce an invalid workbook; no write performed",
+        }),
+    };
+    print_json(&output)?;
+    Ok(ExitCode::from(1))
 }
 
 fn get_cells(
