@@ -554,12 +554,49 @@ The XLSX converter should initially target:
 Macros, external links, unsupported formula functions, advanced conditional
 formatting, pivots, and charts must appear in the conversion report.
 
+A defined name whose target Marksheet cannot express — a whole-column or
+whole-row range, a multi-area target, a reference to an unknown sheet or table,
+or any other non-finite A1 shape — is an omission of that one name, not a
+package-level failure: the rest of the workbook still imports, and the omitted
+name gets its own `named_ranges` omission entry. Because the portable evaluator
+would resolve a reference to a name that no longer exists as `#NAME?`, and an
+unresolved name reference cannot be written back to XLSX, a formula that reaches
+an omitted name is replaced with `#NAME?` — a cell formula becomes the typed
+error value and a fill becomes `=#NAME?` — with a `portable_formulas` replaced
+outcome per affected cell, table column, or fill range. That replacement is the
+only formula outcome the affected location keeps: names resolve after every
+sheet has been read, so the substitution retracts the translation the first pass
+recorded for the same formula rather than leaving the report claiming both.
+Package-level defects such as malformed XML, duplicate case-insensitive names,
+or a name that collides with a table identifier after normalization remain
+conversion failures — the collision is a property of the identifier namespace,
+so it is fatal even when that name's own target is unimportable.
+
+Reaching a name at all requires rewriting the formula body. Excel spells sheet
+labels and defined names case-insensitively, while portable-a1@1 requires the
+exact lowercase identifier, so importing a formula translates both to the
+identifiers the importer assigned — including for a name whose target was
+omitted, which keeps owning its identifier so its callers can be recognized. A
+word that opens a call or a structured selector is a function or a table, not a
+name reference, and is left alone. A calculated-column body that still cannot be
+parsed as portable-a1@1 costs that column its `@fill` and nothing else: the
+column keeps the values Excel cached, and the import records a
+`portable_formulas` replaced outcome, the same treatment as a body that parses
+but leaves the portable profile.
+
 CSV export requires the caller to select one sheet and range or one named table.
 There is no honest default that flattens an arbitrary workbook into one CSV.
 
 The concrete public report is `marksheet-conversion@1`. It distinguishes
 `exact`, `approximated`, `omitted`, and `unsupported` feature outcomes and
-derives `lossless`, `lossy`, or `unsupported` fidelity from them. XLSX package
+derives `lossless`, `lossy`, or `unsupported` fidelity from them. A report never
+states two outcomes for the same feature at the same location: a converter that
+learns only in a later pass that an earlier decision no longer holds — a formula
+first translated, then destroyed once a defined name turned out to be
+unimportable — retracts the superseded outcome and its diagnostic before
+recording the replacement, and fidelity is rederived from what survives. The
+finalized report sorts `exact` ahead of `approximated`, so a stale claim left
+next to a true one would be the first a consumer reads. XLSX package
 writers use deterministic ZIP/XML construction (fixed order, timestamps,
 relationship IDs, and attributes) so reproducibility is testable. Import
 limits cover compressed and expanded archive size, members, XML nesting,
