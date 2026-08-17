@@ -20,7 +20,10 @@ than prompt snapshots.
 record is well formed and matches the current corpus version, and prints each
 recorded verdict. It deliberately does not assert that the run passed: the
 record is release evidence rather than a hermetic test outcome, so a failed
-live run must remain committable.
+live run must remain committable. Each harness result has its own UTC
+`verified_at` date, so rerunning one client cannot refresh the other client's
+evidence. A failed client invocation or acceptance check is recorded with
+`passed:false` before `live.py` exits nonzero.
 
 Staleness is reported as a warning rather than a failure, because age advances
 with no code change and only someone with hosted-model credentials could

@@ -74,8 +74,8 @@ def utc_today() -> datetime.date:
     return datetime.datetime.now(datetime.timezone.utc).date()
 
 
-def live_record_age(live: dict[str, Any]) -> datetime.timedelta:
-    return utc_today() - datetime.date.fromisoformat(live["verified_at"])
+def live_result_age(result: dict[str, Any]) -> datetime.timedelta:
+    return utc_today() - datetime.date.fromisoformat(result["verified_at"])
 
 
 def validate_manifest(
@@ -126,45 +126,49 @@ def validate_live_record(
     it to an error for the release step that owns refreshing it.
     """
     live = read_json(HERE / "live-results.json")
-    assert set(live) == {"version", "verified_at", "corpus", "results"}
+    assert set(live) == {"version", "corpus", "results"}
     assert live["version"] == "marksheet-live-harness@1"
     assert live["corpus"] == manifest["version"]
-    verified_at = datetime.date.fromisoformat(live["verified_at"])
-    age = utc_today() - verified_at
-    # A future date can only come from a bad record, never from elapsed time,
-    # so it stays a hard failure.
-    assert age >= datetime.timedelta(), (
-        f"live results dated {verified_at} are in the future relative to UTC "
-        f"today; check the clock on the machine that recorded them"
-    )
-    assert not (require_fresh and age > MAX_LIVE_RESULT_AGE), (
-        f"live results dated {verified_at} are older than "
-        f"{MAX_LIVE_RESULT_AGE.days} days; rerun live.py --record "
-        f"tests/harness/live-results.json"
-    )
     assert [result["harness"] for result in live["results"]] == manifest["harnesses"]
     assert all(
-        set(result) == {"harness", "client", "tasks", "passed"}
+        set(result) == {"harness", "client", "tasks", "passed", "verified_at"}
         and result["tasks"] == 7
         and isinstance(result["passed"], bool)
         and isinstance(result["client"], str)
         and result["client"]
         for result in live["results"]
     )
+    for result in live["results"]:
+        verified_at = datetime.date.fromisoformat(result["verified_at"])
+        age = live_result_age(result)
+        # A future date can only come from a bad record, never from elapsed
+        # time, so it stays a hard failure.
+        assert age >= datetime.timedelta(), (
+            f"{result['harness']} live results dated {verified_at} are in the "
+            "future relative to UTC today; check the recorder's clock"
+        )
+        assert not (require_fresh and age > MAX_LIVE_RESULT_AGE), (
+            f"{result['harness']} live results dated {verified_at} are older "
+            f"than {MAX_LIVE_RESULT_AGE.days} days; rerun live.py --record "
+            "tests/harness/live-results.json"
+        )
     return live
 
 
 def report_live_record(live: dict[str, Any]) -> None:
     """Surface the recorded verdicts last, so a failure is the closing word."""
-    print(f"live acceptance record {live['verified_at']} (evidence, not a CI verdict):")
+    print("live acceptance record (evidence, not a CI verdict):")
     for result in live["results"]:
         verdict = "passed" if result["passed"] else "FAILED"
-        print(f"  {result['harness']}: {verdict} ({result['client']})")
-    if live_record_age(live) > MAX_LIVE_RESULT_AGE:
         print(
-            f"  WARNING: recorded more than {MAX_LIVE_RESULT_AGE.days} days ago; "
-            f"rerun live.py --record tests/harness/live-results.json"
+            f"  {result['harness']}: {verdict} ({result['client']}; "
+            f"verified {result['verified_at']})"
         )
+        if live_result_age(result) > MAX_LIVE_RESULT_AGE:
+            print(
+                f"    WARNING: recorded more than {MAX_LIVE_RESULT_AGE.days} "
+                "days ago; rerun live.py --record tests/harness/live-results.json"
+            )
 
 
 def validate_harness(name: str) -> dict[str, Any]:
