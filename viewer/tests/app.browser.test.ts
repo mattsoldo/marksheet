@@ -473,13 +473,31 @@ describe("viewer browser shell", () => {
       label: "text that looks like a date",
       value: { kind: "text", value: "2024-01-01" },
       calculated: { kind: "text", value: "2024-01-01" },
-      expectedSource: "2024-01-01",
+      expectedSource: "'2024-01-01",
+    },
+    {
+      label: "text that looks like a datetime",
+      value: { kind: "text", value: "2024-01-01T12:30:00Z" },
+      calculated: { kind: "text", value: "2024-01-01T12:30:00Z" },
+      expectedSource: "'2024-01-01T12:30:00Z",
+    },
+    {
+      label: "text that looks like an error",
+      value: { kind: "text", value: "#REF!" },
+      calculated: { kind: "text", value: "#REF!" },
+      expectedSource: "'#REF!",
     },
     {
       label: "plain text",
       value: { kind: "text", value: "hello" },
       calculated: { kind: "text", value: "hello" },
       expectedSource: "hello",
+    },
+    {
+      label: "empty text",
+      value: { kind: "text", value: "" },
+      calculated: { kind: "text", value: "" },
+      expectedSource: "'",
     },
     {
       label: "boolean",
@@ -494,12 +512,42 @@ describe("viewer browser shell", () => {
       expectedSource: "42",
     },
     {
+      label: "date",
+      value: { kind: "date", value: "2024-01-01" },
+      calculated: { kind: "date", value: "2024-01-01" },
+      expectedSource: "2024-01-01",
+    },
+    {
+      label: "datetime",
+      value: { kind: "date_time", value: "2024-01-01T12:30:00Z" },
+      calculated: { kind: "date_time", value: "2024-01-01T12:30:00Z" },
+      expectedSource: "2024-01-01T12:30:00Z",
+    },
+    {
+      label: "datetime with a non-UTC offset",
+      value: { kind: "date_time", value: "2024-01-01T12:30:00-05:00" },
+      calculated: { kind: "date_time", value: "2024-01-01T12:30:00-05:00" },
+      expectedSource: "2024-01-01T12:30:00-05:00",
+    },
+    {
+      label: "error",
+      value: { kind: "error", value: "#REF!" },
+      calculated: { kind: "error", value: "#REF!" },
+      expectedSource: "#REF!",
+    },
+    {
       label: "formula",
       value: { kind: "formula", value: "=SUM(A1)" },
       calculated: { kind: "number", value: 4 },
       expectedSource: "=SUM(A1)",
     },
   ];
+
+  it("exercises every authored value kind in the formula-bar round trip", () => {
+    expect(new Set(roundTripCases.map((testCase) => testCase.value.kind))).toEqual(
+      new Set(["blank", "text", "number", "boolean", "date", "date_time", "formula", "error"]),
+    );
+  });
 
   it.each(roundTripCases)(
     "round-trips an authored $label value through the formula bar unchanged",
