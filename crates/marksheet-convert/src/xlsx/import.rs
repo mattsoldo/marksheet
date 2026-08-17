@@ -208,6 +208,15 @@ fn import_xlsx_inner(
         .zip(&sheet_ids)
         .map(|(sheet, id)| (sheet.label.to_lowercase(), id.clone()))
         .collect();
+    // Defined names are numbered before any sheet is read because formula
+    // bodies have to be translated to the Marksheet spelling of the name they
+    // reach, and worksheets are parsed first. `import_names` reuses this
+    // assignment, so the two views of a name can never disagree.
+    let name_ids = assign_name_identifiers(&workbook_info.names)?;
+    let formula_names = FormulaNames {
+        sheets: &sheet_label_ids,
+        names: &name_ids,
+    };
     let mut table_ids = BTreeSet::new();
     let mut table_name_map = BTreeMap::<String, TableId>::new();
     let mut table_headers = BTreeMap::<TableId, BTreeSet<String>>::new();
@@ -232,7 +241,7 @@ fn import_xlsx_inner(
             shared_strings: &shared_strings,
             styles: &style_definitions,
             sheet_id: &sheet_ids[sheet_index],
-            sheet_labels: &sheet_label_ids,
+            formula_names,
             date_1904: workbook_info.date_1904,
             limits,
         };
@@ -407,13 +416,27 @@ fn import_xlsx_inner(
                     );
                     continue;
                 }
-                let translated = translate_excel_formula(formula, &sheet_label_ids);
-                let parsed = parse_portable_formula(&translated, limits).map_err(|error| {
-                    invalid(
-                        &part,
-                        &format!("invalid calculated-column formula: {error}"),
-                    )
-                })?;
+                let translated = translate_excel_formula(formula, formula_names);
+                // A calculated-column body Marksheet cannot parse is unsupported
+                // content in one column, not a broken package: the column keeps
+                // the values Excel cached and only the @fill is dropped, exactly
+                // as for a body that parses but leaves the portable profile.
+                let parsed = match parse_portable_formula(&translated, limits) {
+                    Ok(parsed) => parsed,
+                    Err(error) => {
+                        report.approximate(
+                            ConversionEvent::new(
+                                ConversionFeature::Formula,
+                                format!(
+                                    "calculated-column formula is outside portable-a1@1 syntax ({error}) and was not converted to @fill"
+                                ),
+                            )
+                            .formula(FormulaDisposition::Replaced)
+                            .at(xlsx_location(&part, Some(header))),
+                        );
+                        continue;
+                    }
+                };
                 if !formula_references_in_xlsx_grid(&parsed.expression) {
                     return Err(invalid(
                         &part,
@@ -542,6 +565,7 @@ fn import_xlsx_inner(
         .collect::<Result<Vec<_>, ConvertError>>()?;
     let ImportedNames { names, omitted } = import_names(
         &workbook_info.names,
+        &name_ids,
         &workbook_info.sheets,
         &sheet_ids,
         &table_name_map,
@@ -1544,9 +1568,18 @@ struct WorksheetParseContext<'a> {
     shared_strings: &'a [String],
     styles: &'a [StyleProperties],
     sheet_id: &'a SheetId,
-    sheet_labels: &'a BTreeMap<String, SheetId>,
+    formula_names: FormulaNames<'a>,
     date_1904: bool,
     limits: ConversionLimits,
+}
+
+/// The spellings an Excel formula body has to be rewritten to: sheet labels and
+/// defined names both become their assigned Marksheet identifiers, which are
+/// lowercase and may differ from what the XLSX says.
+#[derive(Clone, Copy, Debug)]
+struct FormulaNames<'a> {
+    sheets: &'a BTreeMap<String, SheetId>,
+    names: &'a BTreeMap<String, NameId>,
 }
 
 fn parse_worksheet(
@@ -1850,7 +1883,7 @@ fn parse_worksheet(
                                 .unwrap_or(&StyleProperties::default()),
                             context.shared_strings,
                             context.sheet_id,
-                            context.sheet_labels,
+                            context.formula_names,
                             context.date_1904,
                             coordinate,
                             part,
@@ -1892,7 +1925,7 @@ fn cell_value(
     style: &StyleProperties,
     shared_strings: &[String],
     sheet: &SheetId,
-    sheet_labels: &BTreeMap<String, SheetId>,
+    formula_names: FormulaNames<'_>,
     date_1904: bool,
     coordinate: Coordinate,
     part: &str,
@@ -1900,7 +1933,7 @@ fn cell_value(
     report: &mut ConversionReport,
 ) -> Result<Value, ConvertError> {
     if !formula.is_empty() {
-        let source = translate_excel_formula(formula, sheet_labels);
+        let source = translate_excel_formula(formula, formula_names);
         let parsed = parse_portable_formula(&source, limits);
         if parsed
             .as_ref()
@@ -2315,20 +2348,54 @@ struct ImportedNames {
     omitted: BTreeSet<NameId>,
 }
 
+/// True for the `_xlnm.` built-ins (print areas, print titles, filter
+/// databases) that Marksheet never represents as workbook names.
+fn is_builtin_defined_name(name: &str) -> bool {
+    name.to_ascii_lowercase().starts_with("_xlnm.")
+}
+
+/// Chooses the Marksheet identifier for every defined name that can become a
+/// workbook name, keyed by the case-folded XLSX spelling a formula body uses to
+/// reach it.
+///
+/// Identifiers are claimed in workbook order, and also for names whose target
+/// later turns out to be unsupported, so an omitted name still owns the
+/// spelling its callers were translated to. Built-ins are skipped, and so is
+/// the second half of a case-insensitive duplicate — `import_names` rejects
+/// that package outright, so no identifier is owed to it.
+fn assign_name_identifiers(
+    names: &[DefinedName],
+) -> Result<BTreeMap<String, NameId>, ConvertError> {
+    let mut used = BTreeSet::new();
+    let mut assigned = BTreeMap::new();
+    for source in names {
+        if is_builtin_defined_name(&source.name) {
+            continue;
+        }
+        let folded = source.name.to_lowercase();
+        if assigned.contains_key(&folded) {
+            continue;
+        }
+        let id = unique_identifier::<NameId>(&source.name, "xlsx_name", &mut used)?;
+        assigned.insert(folded, id);
+    }
+    Ok(assigned)
+}
+
 fn import_names(
     names: &[DefinedName],
+    name_ids: &BTreeMap<String, NameId>,
     source_sheets: &[WorkbookSheet],
     sheet_ids: &[SheetId],
     tables: &BTreeMap<String, TableId>,
     table_headers: &BTreeMap<TableId, BTreeSet<String>>,
     report: &mut ConversionReport,
 ) -> Result<ImportedNames, ConvertError> {
-    let mut used = BTreeSet::new();
     let table_ids: BTreeSet<_> = tables.values().map(|id| id.as_str().to_owned()).collect();
     let mut source_names = BTreeSet::new();
     let mut result = ImportedNames::default();
     for source in names {
-        if source.name.to_ascii_lowercase().starts_with("_xlnm.") {
+        if is_builtin_defined_name(&source.name) {
             report.omit(
                 ConversionEvent::new(
                     ConversionFeature::Name,
@@ -2354,7 +2421,15 @@ fn import_names(
         // The identifier is claimed even when the target turns out to be
         // unsupported, so a later name cannot silently occupy the spelling an
         // existing formula body uses for the omitted one.
-        let id = unique_identifier::<NameId>(&source.name, "xlsx_name", &mut used)?;
+        let id = name_ids.get(&folded).cloned().ok_or_else(|| {
+            ConvertError::new(
+                ConvertErrorCode::Internal,
+                format!(
+                    "defined name {:?} was not assigned an identifier",
+                    source.name
+                ),
+            )
+        })?;
         let target =
             match resolve_name_target(source, source_sheets, sheet_ids, tables, table_headers) {
                 Ok(target) => target,
@@ -2366,9 +2441,9 @@ fn import_names(
                         )
                         .at(xlsx_location("xl/workbook.xml", Some(&source.name))),
                     );
-                    if let Ok(id) = NameId::parse(&source.name) {
-                        result.omitted.insert(id);
-                    }
+                    // Keyed by the assigned identifier, not the XLSX spelling:
+                    // that is what a translated formula body now says.
+                    result.omitted.insert(id);
                     continue;
                 }
             };
@@ -3230,7 +3305,13 @@ fn split_sheet_reference(expression: &str) -> Option<(String, String)> {
     Some((sheet, range.to_owned()))
 }
 
-fn translate_excel_formula(formula: &str, sheet_labels: &BTreeMap<String, SheetId>) -> String {
+/// Rewrites an Excel formula body into portable-a1@1 source, replacing sheet
+/// labels and defined-name references with the identifiers the importer
+/// assigned them. Excel spells both case-insensitively while portable-a1@1
+/// requires the exact lowercase identifier, so a body that is not rewritten
+/// would fail to parse — even when the name it reaches was imported.
+fn translate_excel_formula(formula: &str, names: FormulaNames<'_>) -> String {
+    let sheet_labels = names.sheets;
     let mut output = String::from("=");
     let bytes = formula.as_bytes();
     let mut index = 0_usize;
@@ -3306,7 +3387,15 @@ fn translate_excel_formula(formula: &str, sheet_labels: &BTreeMap<String, SheetI
                     continue;
                 }
             }
-            output.push_str(&formula[start..index]);
+            let word = &formula[start..index];
+            // A word that opens a call or a structured selector is a function
+            // or a table, never a defined-name reference, even when a name
+            // happens to share its spelling.
+            let renamed = names
+                .names
+                .get(&word.to_lowercase())
+                .filter(|_| !word_opens_call_or_selector(bytes, index));
+            output.push_str(renamed.map_or(word, NameId::as_str));
             continue;
         }
         let character = formula[index..]
@@ -3318,6 +3407,16 @@ fn translate_excel_formula(formula: &str, sheet_labels: &BTreeMap<String, SheetI
     }
     output
 }
+
+/// True when the token that follows the word ending at `index` makes that word
+/// a function call or a structured reference.
+fn word_opens_call_or_selector(bytes: &[u8], index: usize) -> bool {
+    bytes[index..]
+        .iter()
+        .find(|byte| !byte.is_ascii_whitespace())
+        .is_some_and(|byte| matches!(byte, b'(' | b'['))
+}
+
 fn parse_structured_name(expression: &str) -> Option<(String, String)> {
     let (table, header) = expression.split_once('[')?;
     let header = header.strip_suffix(']')?.replace("]]", "]");
@@ -3473,6 +3572,38 @@ mod tests {
         let mut content = String::new();
         entry.read_to_string(&mut content).unwrap();
         content
+    }
+
+    /// A workbook with no sheet labels or defined names to rewrite.
+    static NO_SHEET_LABELS: BTreeMap<String, SheetId> = BTreeMap::new();
+    static NO_DEFINED_NAMES: BTreeMap<String, NameId> = BTreeMap::new();
+    const fn no_formula_names() -> FormulaNames<'static> {
+        FormulaNames {
+            sheets: &NO_SHEET_LABELS,
+            names: &NO_DEFINED_NAMES,
+        }
+    }
+
+    /// Runs the two halves of defined-name import the way `import_xlsx` does:
+    /// identifiers are assigned first, then targets are resolved against them.
+    fn import_defined_names(
+        names: &[DefinedName],
+        source_sheets: &[WorkbookSheet],
+        sheet_ids: &[SheetId],
+        tables: &BTreeMap<String, TableId>,
+        table_headers: &BTreeMap<TableId, BTreeSet<String>>,
+        report: &mut ConversionReport,
+    ) -> Result<ImportedNames, ConvertError> {
+        let name_ids = assign_name_identifiers(names)?;
+        import_names(
+            names,
+            &name_ids,
+            source_sheets,
+            sheet_ids,
+            tables,
+            table_headers,
+            report,
+        )
     }
 
     fn basic_workbook() -> Workbook {
@@ -3719,7 +3850,7 @@ mod tests {
             &StyleProperties::default(),
             &[],
             &SheetId::parse("data").unwrap(),
-            &BTreeMap::new(),
+            no_formula_names(),
             false,
             Coordinate::parse("A1").unwrap(),
             "xl/worksheets/sheet1.xml",
@@ -3745,7 +3876,7 @@ mod tests {
                 &StyleProperties::default(),
                 &[],
                 &SheetId::parse("data").unwrap(),
-                &BTreeMap::new(),
+                no_formula_names(),
                 false,
                 Coordinate::parse("A1").unwrap(),
                 "xl/worksheets/sheet1.xml",
@@ -3770,7 +3901,7 @@ mod tests {
             &StyleProperties::default(),
             &[],
             &SheetId::parse("data").unwrap(),
-            &BTreeMap::new(),
+            no_formula_names(),
             false,
             Coordinate::parse("A1").unwrap(),
             "xl/worksheets/sheet1.xml",
@@ -3803,7 +3934,7 @@ mod tests {
             &StyleProperties::default(),
             &[],
             &sheet,
-            &BTreeMap::new(),
+            no_formula_names(),
             false,
             coordinate,
             "xl/worksheets/sheet1.xml",
@@ -3827,7 +3958,7 @@ mod tests {
             &StyleProperties::default(),
             &[],
             &sheet,
-            &BTreeMap::new(),
+            no_formula_names(),
             false,
             coordinate,
             "xl/worksheets/sheet1.xml",
@@ -3859,11 +3990,15 @@ mod tests {
         let styles = vec![StyleProperties::default()];
         let sheet_id = SheetId::parse("data").unwrap();
         let labels = BTreeMap::new();
+        let defined_names = BTreeMap::new();
         let context = WorksheetParseContext {
             shared_strings: &[],
             styles: &styles,
             sheet_id: &sheet_id,
-            sheet_labels: &labels,
+            formula_names: FormulaNames {
+                sheets: &labels,
+                names: &defined_names,
+            },
             date_1904: false,
             limits: ConversionLimits::default(),
         };
@@ -3991,7 +4126,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_calculated_column_formula_rejects_import() {
+    fn unparsable_calculated_column_formula_drops_only_the_fill() {
         let source = Workbook {
             sheets: vec![Sheet {
                 id: SheetId::parse("data").unwrap(),
@@ -4020,7 +4155,33 @@ mod tests {
         );
         assert_ne!(changed, table_xml);
         let bytes = rewrite_package(&exported.value, &[("xl/tables/table1.xml", &changed)], &[]);
-        assert!(import_xlsx(&bytes, ConversionLimits::default()).is_err());
+        let imported = import_xlsx(&bytes, ConversionLimits::default()).unwrap();
+
+        // The column keeps the values Excel cached; only the @fill is lost.
+        let table = imported.value.sheets[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                SheetItem::Table(table) => Some(table),
+                _ => None,
+            })
+            .expect("the table still imports");
+        assert_eq!(table.block.cells[1][0].value, Value::Number(2.0));
+        assert!(
+            !imported.value.sheets[0]
+                .items
+                .iter()
+                .any(|item| matches!(item, SheetItem::Fill(_)))
+        );
+        assert!(imported.report.outcomes().iter().any(|outcome| {
+            outcome.feature == "portable_formulas"
+                && outcome.formula == Some(FormulaDisposition::Replaced)
+                && outcome
+                    .detail
+                    .as_deref()
+                    .is_some_and(|detail| detail.contains("outside portable-a1@1 syntax"))
+        }));
+        assert!(!imported.report.is_lossless());
     }
 
     #[test]
@@ -4285,11 +4446,15 @@ mod tests {
         let styles = vec![StyleProperties::default()];
         let sheet_id = SheetId::parse("data").unwrap();
         let labels = BTreeMap::new();
+        let defined_names = BTreeMap::new();
         let context = WorksheetParseContext {
             shared_strings: &[],
             styles: &styles,
             sheet_id: &sheet_id,
-            sheet_labels: &labels,
+            formula_names: FormulaNames {
+                sheets: &labels,
+                names: &defined_names,
+            },
             date_1904: false,
             limits: ConversionLimits::default(),
         };
@@ -4431,7 +4596,7 @@ mod tests {
             expression: "Data!A1".to_owned(),
         };
         assert!(
-            import_names(
+            import_defined_names(
                 &[name],
                 &[WorkbookSheet {
                     label: "Data".to_owned(),
@@ -4450,7 +4615,7 @@ mod tests {
 
         let mut builtin_report =
             ConversionReport::new(FormatDescriptor::xlsx(), FormatDescriptor::marksheet_ir());
-        let builtins = import_names(
+        let builtins = import_defined_names(
             &[DefinedName {
                 name: "_xlnm.Print_Area".to_owned(),
                 expression: "Data!A1".to_owned(),
@@ -4552,11 +4717,15 @@ mod tests {
         let styles = vec![StyleProperties::default()];
         let sheet_id = SheetId::parse("data").unwrap();
         let labels = BTreeMap::new();
+        let defined_names = BTreeMap::new();
         let context = WorksheetParseContext {
             shared_strings: &[],
             styles: &styles,
             sheet_id: &sheet_id,
-            sheet_labels: &labels,
+            formula_names: FormulaNames {
+                sheets: &labels,
+                names: &defined_names,
+            },
             date_1904: false,
             limits: ConversionLimits::default(),
         };
@@ -4698,7 +4867,8 @@ mod tests {
         let mut report =
             ConversionReport::new(FormatDescriptor::xlsx(), FormatDescriptor::marksheet_ir());
         let imported =
-            import_names(&names, &sheets, &sheet_ids, &tables, &headers, &mut report).unwrap();
+            import_defined_names(&names, &sheets, &sheet_ids, &tables, &headers, &mut report)
+                .unwrap();
 
         assert_eq!(imported.names.len(), 1);
         assert_eq!(imported.names[0].id.as_str(), "supported");
@@ -4803,9 +4973,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn calculated_column_reaching_an_omitted_name_is_replaced() {
-        let source = Workbook {
+    /// A table whose `Share` column is computed from the `total` named range —
+    /// the shape Excel writes as a calculated column referencing a defined name.
+    fn calculated_column_named_workbook() -> Workbook {
+        Workbook {
             names: vec![Name {
                 id: NameId::parse("total").unwrap(),
                 target: NameTarget::Range(SheetRange {
@@ -4846,13 +5017,12 @@ mod tests {
                 origin: None,
             }],
             ..Workbook::default()
-        };
-        let exported = export_xlsx(&source, ConversionLimits::default()).unwrap();
-        let workbook = package_text(&exported.value, "xl/workbook.xml")
-            .replace("'Data'!$A$2:$A$3", "'Data'!$A:$A");
-        let bytes = rewrite_package(&exported.value, &[("xl/workbook.xml", &workbook)], &[]);
-        let imported = import_xlsx(&bytes, ConversionLimits::default()).unwrap();
+        }
+    }
 
+    /// Asserts the calculated column survived import as a reported `#NAME?`
+    /// fill instead of taking the whole package down with it.
+    fn assert_calculated_column_degraded(imported: &Conversion<Workbook>) {
         let fills: Vec<_> = imported.value.sheets[0]
             .items
             .iter()
@@ -4862,6 +5032,8 @@ mod tests {
             })
             .collect();
         assert_eq!(fills, vec!["=#NAME?".to_owned()]);
+        assert!(imported.value.names.is_empty());
+        assert_eq!(omitted_name_details(&imported.report).len(), 1);
         assert!(imported.report.outcomes().iter().any(|outcome| {
             outcome.feature == "portable_formulas"
                 && outcome
@@ -4872,5 +5044,205 @@ mod tests {
         export_xlsx(&imported.value, ConversionLimits::default()).unwrap();
         let text = marksheet_syntax::serialize_workbook(&imported.value).unwrap();
         assert!(!marksheet_syntax::parse(&text).has_errors());
+    }
+
+    #[test]
+    fn calculated_column_reaching_an_omitted_name_is_replaced() {
+        let exported = export_xlsx(
+            &calculated_column_named_workbook(),
+            ConversionLimits::default(),
+        )
+        .unwrap();
+        let workbook = package_text(&exported.value, "xl/workbook.xml")
+            .replace("'Data'!$A$2:$A$3", "'Data'!$A:$A");
+        let bytes = rewrite_package(&exported.value, &[("xl/workbook.xml", &workbook)], &[]);
+
+        assert_calculated_column_degraded(
+            &import_xlsx(&bytes, ConversionLimits::default()).unwrap(),
+        );
+    }
+
+    /// Excel authors defined names in whatever case they like, and writes that
+    /// spelling into every formula that reaches them. The importer has to
+    /// rewrite those references to the identifier it assigned the name, or a
+    /// calculated column referencing an omitted name fails to parse and takes
+    /// the whole package down instead of degrading to `#NAME?`.
+    #[test]
+    fn calculated_column_reaching_an_omitted_mixed_case_name_is_replaced() {
+        let exported = export_xlsx(
+            &calculated_column_named_workbook(),
+            ConversionLimits::default(),
+        )
+        .unwrap();
+        let workbook = package_text(&exported.value, "xl/workbook.xml")
+            .replace("name=\"total\"", "name=\"Total\"")
+            .replace("'Data'!$A$2:$A$3", "'Data'!$A:$A");
+        let table = package_text(&exported.value, "xl/tables/table1.xml")
+            .replace("SUM(total)", "SUM(Total)");
+        assert!(workbook.contains("name=\"Total\""), "{workbook}");
+        assert!(table.contains("SUM(Total)"), "{table}");
+        let bytes = rewrite_package(
+            &exported.value,
+            &[
+                ("xl/workbook.xml", &workbook),
+                ("xl/tables/table1.xml", &table),
+            ],
+            &[],
+        );
+
+        assert_calculated_column_degraded(
+            &import_xlsx(&bytes, ConversionLimits::default()).unwrap(),
+        );
+    }
+
+    /// A cell formula reaching an Excel-cased omitted name has to be replaced
+    /// through the omitted-name path, which names the cause, rather than by the
+    /// generic fallback for bodies that simply fail to parse.
+    #[test]
+    fn cell_formula_reaching_an_omitted_mixed_case_name_is_reported_as_such() {
+        let exported = export_xlsx(
+            &named_range_workbook("=SUM(total)"),
+            ConversionLimits::default(),
+        )
+        .unwrap();
+        let workbook = package_text(&exported.value, "xl/workbook.xml")
+            .replace("name=\"total\"", "name=\"Total\"")
+            .replace("'Data'!$A$1:$A$2", "'Data'!$A:$A");
+        let sheet = package_text(&exported.value, "xl/worksheets/sheet1.xml")
+            .replace("SUM(total)", "SUM(Total)");
+        assert!(sheet.contains("SUM(Total)"), "{sheet}");
+        let bytes = rewrite_package(
+            &exported.value,
+            &[
+                ("xl/workbook.xml", &workbook),
+                ("xl/worksheets/sheet1.xml", &sheet),
+            ],
+            &[],
+        );
+        let imported = import_xlsx(&bytes, ConversionLimits::default()).unwrap();
+
+        let values: Vec<_> = imported.value.sheets[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                SheetItem::Block(block) => Some(block.cells[0][0].value.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            values.contains(&Value::Error(CellError::Name)),
+            "{values:?}"
+        );
+        let details: Vec<_> = imported
+            .report
+            .outcomes()
+            .iter()
+            .filter(|outcome| outcome.feature == "portable_formulas")
+            .filter_map(|outcome| outcome.detail.as_deref())
+            .collect();
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail.contains("omitted defined name")),
+            "{details:?}"
+        );
+        assert!(
+            !details
+                .iter()
+                .any(|detail| detail.contains("outside portable-a1@1 syntax")),
+            "{details:?}"
+        );
+    }
+
+    /// The omitted set is keyed by the identifier a translated formula body
+    /// spells, which for an Excel-cased name is not the XLSX spelling.
+    #[test]
+    fn omitted_names_are_keyed_by_their_assigned_identifier() {
+        let mut report =
+            ConversionReport::new(FormatDescriptor::xlsx(), FormatDescriptor::marksheet_ir());
+        let imported = import_defined_names(
+            &[DefinedName {
+                name: "Total".to_owned(),
+                expression: "Data!$A:$A".to_owned(),
+            }],
+            &[WorkbookSheet {
+                label: "Data".to_owned(),
+                relationship: "rId1".to_owned(),
+            }],
+            &[SheetId::parse("data").unwrap()],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &mut report,
+        )
+        .unwrap();
+
+        assert!(imported.names.is_empty());
+        assert_eq!(
+            imported.omitted,
+            BTreeSet::from([NameId::parse("total").unwrap()])
+        );
+        assert_eq!(omitted_name_details(&report.finish()).len(), 1);
+    }
+
+    /// A supported name spelled in Excel's casing still has to be reachable:
+    /// its references are rewritten rather than degraded to `#NAME?`.
+    #[test]
+    fn mixed_case_name_references_are_rewritten_to_the_assigned_identifier() {
+        let exported = export_xlsx(
+            &named_range_workbook("=SUM(total)"),
+            ConversionLimits::default(),
+        )
+        .unwrap();
+        let workbook = package_text(&exported.value, "xl/workbook.xml")
+            .replace("name=\"total\"", "name=\"Total\"");
+        let sheet = package_text(&exported.value, "xl/worksheets/sheet1.xml")
+            .replace("SUM(total)", "SUM(Total)");
+        assert!(sheet.contains("SUM(Total)"), "{sheet}");
+        let bytes = rewrite_package(
+            &exported.value,
+            &[
+                ("xl/workbook.xml", &workbook),
+                ("xl/worksheets/sheet1.xml", &sheet),
+            ],
+            &[],
+        );
+        let imported = import_xlsx(&bytes, ConversionLimits::default()).unwrap();
+
+        assert_eq!(imported.value.names.len(), 1);
+        assert_eq!(imported.value.names[0].id.as_str(), "total");
+        let formulas: Vec<_> = imported.value.sheets[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                SheetItem::Block(block) => match &block.cells[0][0].value {
+                    Value::Formula(formula) => Some(formula.as_str().to_owned()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(formulas, vec!["=SUM(total)".to_owned()]);
+    }
+
+    #[test]
+    fn function_and_table_spellings_are_not_mistaken_for_defined_names() {
+        let names = BTreeMap::from([
+            ("sum".to_owned(), NameId::parse("sum_range").unwrap()),
+            ("sales".to_owned(), NameId::parse("sales_name").unwrap()),
+            ("total".to_owned(), NameId::parse("grand_total").unwrap()),
+        ]);
+        let sheets = BTreeMap::new();
+        let translated = translate_excel_formula(
+            "SUM (Total)+Sales[Amount]+\"Total\"",
+            FormulaNames {
+                sheets: &sheets,
+                names: &names,
+            },
+        );
+
+        assert_eq!(
+            translated,
+            "=SUM (grand_total)+Sales[Amount]+\"Total\"".to_owned()
+        );
     }
 }

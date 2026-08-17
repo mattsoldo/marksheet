@@ -567,6 +567,18 @@ outcome per affected cell, table column, or fill range. Package-level defects
 such as malformed XML, duplicate case-insensitive names, or a name that collides
 with a table identifier remain conversion failures.
 
+Reaching a name at all requires rewriting the formula body. Excel spells sheet
+labels and defined names case-insensitively, while portable-a1@1 requires the
+exact lowercase identifier, so importing a formula translates both to the
+identifiers the importer assigned — including for a name whose target was
+omitted, which keeps owning its identifier so its callers can be recognized. A
+word that opens a call or a structured selector is a function or a table, not a
+name reference, and is left alone. A calculated-column body that still cannot be
+parsed as portable-a1@1 costs that column its `@fill` and nothing else: the
+column keeps the values Excel cached, and the import records a
+`portable_formulas` replaced outcome, the same treatment as a body that parses
+but leaves the portable profile.
+
 CSV export requires the caller to select one sheet and range or one named table.
 There is no honest default that flattens an arbitrary workbook into one CSV.
 
