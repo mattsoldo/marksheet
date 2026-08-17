@@ -2,7 +2,10 @@
 name = "marksheet-calc-formualizer"
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.85"
+# Formualizer's current parser dependency uses stabilized let-chains. Keep this
+# external feasibility probe on its upstream-supported toolchain boundary;
+# Marksheet's production workspace continues to target Rust 1.85.
+rust-version = "1.88"
 publish = false
 license = "MIT"
 description = "Isolated Formualizer feasibility probe for Marksheet calculation"

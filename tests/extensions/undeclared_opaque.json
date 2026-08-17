@@ -1,0 +1,15 @@
+{
+  "protocol": "marksheet-extension-fixture@1",
+  "registry": [],
+  "source": "undeclared_opaque.ms",
+  "expect": {
+    "capabilities_complete": true,
+    "calculation_complete": true,
+    "rendering_complete": true,
+    "validation_complete": true,
+    "valid": true,
+    "diagnostics": [{"code": "MS3103", "severity": "warning", "line": 8}],
+    "opaque_instances": ["vendor_data@1:opaque"],
+    "instance_outcomes": [{"capability": "vendor_data@1", "name": "opaque", "scope": "sheet:inputs", "outcome": "skipped_undeclared"}]
+  }
+}

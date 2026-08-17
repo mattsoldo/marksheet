@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://marksheet.dev/schema/extensions-fixtures-1.json",
+  "title": "Marksheet extension registry fixture corpus",
+  "type": "object",
+  "required": ["protocol", "registry", "source", "expect"],
+  "additionalProperties": false,
+  "properties": {
+    "protocol": {"const": "marksheet-extension-fixture@1"},
+    "registry": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*@[1-9][0-9]*$"}
+    },
+    "source": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*\\.(?:ms|inline)$"},
+    "original_source_base64": {"type": "string", "contentEncoding": "base64"},
+    "lossless_output_base64": {"type": "string", "contentEncoding": "base64"},
+    "canonical_output_base64": {"type": "string", "contentEncoding": "base64"},
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_payload_bytes": {"type": "integer", "minimum": 1},
+        "max_lines": {"type": "integer", "minimum": 1},
+        "max_targets": {"type": "integer", "minimum": 1},
+        "max_diagnostics": {"type": "integer", "minimum": 1}
+      }
+    },
+    "expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": ["registry_error"],
+          "maxProperties": 1
+        },
+        {
+          "required": ["capabilities_complete", "calculation_complete", "rendering_complete", "validation_complete", "valid", "diagnostics", "opaque_instances", "instance_outcomes"],
+          "not": {"required": ["registry_error"]}
+        }
+      ],
+      "properties": {
+        "capabilities_complete": {"type": "boolean"},
+        "calculation_complete": {"type": "boolean"},
+        "rendering_complete": {"type": "boolean"},
+        "validation_complete": {"type": "boolean"},
+        "valid": {"type": "boolean"},
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["code", "severity", "line"],
+            "additionalProperties": false,
+            "properties": {
+              "code": {"type": "string", "pattern": "^MS[0-9]{4}$"},
+              "severity": {"enum": ["warning", "error"]},
+              "line": {"type": "integer", "minimum": 1}
+            }
+          }
+        },
+        "opaque_instances": {"type": "array", "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*@[1-9][0-9]*:.+$"}},
+        "instance_outcomes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["capability", "name", "scope", "outcome"],
+            "additionalProperties": false,
+            "properties": {
+              "capability": {"type": "string", "pattern": "^[a-z][a-z0-9_]*@[1-9][0-9]*$"},
+              "name": {"type": "string", "minLength": 1},
+              "scope": {"type": "string", "pattern": "^(?:workbook|sheet:[a-z][a-z0-9_]*)$"},
+              "outcome": {"enum": ["processed", "skipped_unavailable", "skipped_undeclared", "rejected_duplicate", "rejected_by_limit"]}
+            }
+          }
+        },
+        "registry_error": {"const": "duplicate_exact_id"}
+      }
+    }
+  }
+}

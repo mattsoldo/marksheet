@@ -1,0 +1,15 @@
+{
+  "protocol": "marksheet-extension-fixture@1",
+  "registry": [],
+  "source": "required_unavailable.ms",
+  "expect": {
+    "capabilities_complete": false,
+    "calculation_complete": false,
+    "rendering_complete": false,
+    "validation_complete": true,
+    "valid": false,
+    "diagnostics": [{"code": "MS3101", "severity": "error", "line": 2}],
+    "opaque_instances": [],
+    "instance_outcomes": []
+  }
+}

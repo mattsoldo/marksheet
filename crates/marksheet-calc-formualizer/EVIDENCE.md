@@ -2,6 +2,10 @@
 
 Observed against `formualizer` **0.8.4** on 2026-08-16.
 
+The isolated probe uses Rust 1.88 or newer because Formualizer's current parser
+dependency uses stabilized let-chains. This does not change the production
+Marksheet workspace's Rust 1.85 minimum.
+
 | Concern | Evidence | Result |
 | --- | --- | --- |
 | Pinned, clock-free dependency profile | `Cargo.toml` pins `=0.8.4`, sets `default-features = false`, and enables only `portable-wasm`. `cargo tree -e features` contained `portable-wasm` but no `system-clock` or `js-runtime` feature. | Pass |
@@ -17,9 +21,9 @@ Observed against `formualizer` **0.8.4** on 2026-08-16.
 Verification run:
 
 ```text
-cargo fmt --manifest-path crates/marksheet-calc-formualizer/Cargo.toml --check
-cargo test --manifest-path crates/marksheet-calc-formualizer/Cargo.toml --features calc-link
-cargo clippy --manifest-path crates/marksheet-calc-formualizer/Cargo.toml --all-targets --features calc-link -- -D warnings
+cargo +stable fmt --manifest-path crates/marksheet-calc-formualizer/Cargo.toml --check
+cargo +stable test --manifest-path crates/marksheet-calc-formualizer/Cargo.toml --features calc-link
+cargo +stable clippy --manifest-path crates/marksheet-calc-formualizer/Cargo.toml --all-targets --features calc-link -- -D warnings
 
 8 passed; 0 failed
 ```

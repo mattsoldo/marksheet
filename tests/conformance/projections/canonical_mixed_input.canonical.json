@@ -1,0 +1,188 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 77,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          16
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          17
+        ]
+      },
+      {
+        "content_span": [
+          17,
+          35
+        ],
+        "ending": "lf",
+        "span": [
+          17,
+          36
+        ]
+      },
+      {
+        "content_span": [
+          36,
+          49
+        ],
+        "ending": "lf",
+        "span": [
+          36,
+          50
+        ]
+      },
+      {
+        "content_span": [
+          50,
+          61
+        ],
+        "ending": "lf",
+        "span": [
+          50,
+          62
+        ]
+      },
+      {
+        "content_span": [
+          62,
+          71
+        ],
+        "ending": "lf",
+        "span": [
+          62,
+          72
+        ]
+      },
+      {
+        "content_span": [
+          72,
+          76
+        ],
+        "ending": "lf",
+        "span": [
+          72,
+          77
+        ]
+      }
+    ],
+    "sha256": "da5b4a301fc12638760de9cf261852a665e6df1dabbca7057c21dfd64c714083"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [],
+    "extensions": [],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "main",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              50,
+              72
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "text",
+                    "span": [
+                      50,
+                      54
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "text"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "number",
+                    "span": [
+                      55,
+                      61
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "number"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "plain",
+                    "span": [
+                      62,
+                      67
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "plain"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "001",
+                    "span": [
+                      68,
+                      71
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "001"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              36,
+              49
+            ]
+          }
+        ],
+        "label": "Main",
+        "span": [
+          17,
+          35
+        ]
+      }
+    ],
+    "styles": []
+  }
+}

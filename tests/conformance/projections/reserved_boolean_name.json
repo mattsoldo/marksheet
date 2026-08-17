@@ -1,0 +1,212 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [
+    {
+      "code": "MS1201",
+      "severity": "error",
+      "span": [
+        16,
+        36
+      ]
+    },
+    {
+      "code": "MS1201",
+      "severity": "error",
+      "span": [
+        37,
+        58
+      ]
+    }
+  ],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 103,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          36
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          37
+        ]
+      },
+      {
+        "content_span": [
+          37,
+          58
+        ],
+        "ending": "lf",
+        "span": [
+          37,
+          59
+        ]
+      },
+      {
+        "content_span": [
+          59,
+          59
+        ],
+        "ending": "lf",
+        "span": [
+          59,
+          60
+        ]
+      },
+      {
+        "content_span": [
+          60,
+          78
+        ],
+        "ending": "lf",
+        "span": [
+          60,
+          79
+        ]
+      },
+      {
+        "content_span": [
+          79,
+          92
+        ],
+        "ending": "lf",
+        "span": [
+          79,
+          93
+        ]
+      },
+      {
+        "content_span": [
+          93,
+          94
+        ],
+        "ending": "lf",
+        "span": [
+          93,
+          95
+        ]
+      },
+      {
+        "content_span": [
+          95,
+          96
+        ],
+        "ending": "lf",
+        "span": [
+          95,
+          97
+        ]
+      },
+      {
+        "content_span": [
+          97,
+          101
+        ],
+        "ending": "lf",
+        "span": [
+          97,
+          102
+        ]
+      },
+      {
+        "content_span": [
+          102,
+          102
+        ],
+        "ending": "lf",
+        "span": [
+          102,
+          103
+        ]
+      }
+    ],
+    "sha256": "3a843ab7c5f0a532cc6167c90cfb7fa5cbd82cbd2761cd93a91bfa25fcf7b89c"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [],
+    "extensions": [],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "data",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              93,
+              97
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "1",
+                    "span": [
+                      93,
+                      94
+                    ]
+                  },
+                  "value": {
+                    "kind": "number",
+                    "value": "1"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "2",
+                    "span": [
+                      95,
+                      96
+                    ]
+                  },
+                  "value": {
+                    "kind": "number",
+                    "value": "2"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              79,
+              92
+            ]
+          }
+        ],
+        "label": "Data",
+        "span": [
+          60,
+          78
+        ]
+      }
+    ],
+    "styles": []
+  }
+}

@@ -1,0 +1,134 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [
+    {
+      "code": "MS1102",
+      "severity": "error",
+      "span": [
+        35,
+        48
+      ]
+    }
+  ],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 68,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          34
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          35
+        ]
+      },
+      {
+        "content_span": [
+          35,
+          48
+        ],
+        "ending": "lf",
+        "span": [
+          35,
+          49
+        ]
+      },
+      {
+        "content_span": [
+          49,
+          62
+        ],
+        "ending": "lf",
+        "span": [
+          49,
+          63
+        ]
+      },
+      {
+        "content_span": [
+          63,
+          67
+        ],
+        "ending": "lf",
+        "span": [
+          63,
+          68
+        ]
+      }
+    ],
+    "sha256": "4533be90d16d0edfcba0f1ad43e188022e17b0b2b05a4118b13bf3763b0d19d9"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [],
+    "extensions": [],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "main",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              49,
+              68
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "\"unterminated\n@end\n",
+                    "span": [
+                      49,
+                      68
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "unterminated\n@end\n"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              35,
+              48
+            ]
+          }
+        ],
+        "label": "Main",
+        "span": [
+          16,
+          34
+        ]
+      }
+    ],
+    "styles": []
+  }
+}

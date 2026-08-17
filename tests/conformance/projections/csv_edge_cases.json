@@ -1,0 +1,265 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 166,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "crlf",
+        "span": [
+          0,
+          17
+        ]
+      },
+      {
+        "content_span": [
+          17,
+          44
+        ],
+        "ending": "crlf",
+        "span": [
+          17,
+          46
+        ]
+      },
+      {
+        "content_span": [
+          46,
+          59
+        ],
+        "ending": "crlf",
+        "span": [
+          46,
+          61
+        ]
+      },
+      {
+        "content_span": [
+          61,
+          76
+        ],
+        "ending": "crlf",
+        "span": [
+          61,
+          78
+        ]
+      },
+      {
+        "content_span": [
+          78,
+          125
+        ],
+        "ending": "crlf",
+        "span": [
+          78,
+          127
+        ]
+      },
+      {
+        "content_span": [
+          127,
+          139
+        ],
+        "ending": "crlf",
+        "span": [
+          127,
+          141
+        ]
+      },
+      {
+        "content_span": [
+          141,
+          158
+        ],
+        "ending": "crlf",
+        "span": [
+          141,
+          160
+        ]
+      },
+      {
+        "content_span": [
+          160,
+          164
+        ],
+        "ending": "crlf",
+        "span": [
+          160,
+          166
+        ]
+      }
+    ],
+    "sha256": "05f8fb3b1b5c6bc2920b3dbe6afea2c6b969d632a1885cb287cee0c083332fff"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [],
+    "extensions": [],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "csv",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              61,
+              160
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "Name",
+                    "span": [
+                      61,
+                      65
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Name"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "Value",
+                    "span": [
+                      66,
+                      71
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Value"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "Note",
+                    "span": [
+                      72,
+                      76
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Note"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "\"comma, value\"",
+                    "span": [
+                      78,
+                      92
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "comma, value"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "\"embedded \"\"quote\"\"\"",
+                    "span": [
+                      93,
+                      113
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "embedded \"quote\""
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "\"first line\r\nsecond line\"",
+                    "span": [
+                      114,
+                      139
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "first line\nsecond line"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "literal",
+                    "span": [
+                      141,
+                      148
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "literal"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "\"@end\"",
+                    "span": [
+                      149,
+                      155
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "@end"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "\"\"",
+                    "span": [
+                      156,
+                      158
+                    ]
+                  },
+                  "value": {
+                    "kind": "blank"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              46,
+              59
+            ]
+          }
+        ],
+        "label": "CSV edge cases",
+        "span": [
+          17,
+          44
+        ]
+      }
+    ],
+    "styles": []
+  }
+}

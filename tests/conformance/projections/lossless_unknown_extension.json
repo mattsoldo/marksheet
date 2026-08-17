@@ -1,0 +1,286 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [
+    {
+      "code": "MS3102",
+      "severity": "warning",
+      "span": [
+        49,
+        67
+      ]
+    }
+  ],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 221,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          48
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          49
+        ]
+      },
+      {
+        "content_span": [
+          49,
+          67
+        ],
+        "ending": "lf",
+        "span": [
+          49,
+          68
+        ]
+      },
+      {
+        "content_span": [
+          68,
+          68
+        ],
+        "ending": "lf",
+        "span": [
+          68,
+          69
+        ]
+      },
+      {
+        "content_span": [
+          69,
+          90
+        ],
+        "ending": "lf",
+        "span": [
+          69,
+          91
+        ]
+      },
+      {
+        "content_span": [
+          91,
+          124
+        ],
+        "ending": "lf",
+        "span": [
+          91,
+          125
+        ]
+      },
+      {
+        "content_span": [
+          125,
+          138
+        ],
+        "ending": "lf",
+        "span": [
+          125,
+          139
+        ]
+      },
+      {
+        "content_span": [
+          139,
+          148
+        ],
+        "ending": "lf",
+        "span": [
+          139,
+          149
+        ]
+      },
+      {
+        "content_span": [
+          149,
+          170
+        ],
+        "ending": "lf",
+        "span": [
+          149,
+          171
+        ]
+      },
+      {
+        "content_span": [
+          171,
+          175
+        ],
+        "ending": "lf",
+        "span": [
+          171,
+          176
+        ]
+      },
+      {
+        "content_span": [
+          176,
+          176
+        ],
+        "ending": "lf",
+        "span": [
+          176,
+          177
+        ]
+      },
+      {
+        "content_span": [
+          177,
+          190
+        ],
+        "ending": "lf",
+        "span": [
+          177,
+          191
+        ]
+      },
+      {
+        "content_span": [
+          191,
+          196
+        ],
+        "ending": "lf",
+        "span": [
+          191,
+          197
+        ]
+      },
+      {
+        "content_span": [
+          197,
+          215
+        ],
+        "ending": "lf",
+        "span": [
+          197,
+          216
+        ]
+      },
+      {
+        "content_span": [
+          216,
+          220
+        ],
+        "ending": "lf",
+        "span": [
+          216,
+          221
+        ]
+      }
+    ],
+    "sha256": "51e1f75f59618a98d46bcc5a76bfbd8d6b0734e728ef31e75bad8c28c59700e1"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [
+      {
+        "id": "vendor_data@3",
+        "required": false,
+        "span": [
+          49,
+          67
+        ]
+      }
+    ],
+    "extensions": [
+      {
+        "id": "vendor_data@3",
+        "name": "opaque",
+        "payload": {
+          "byte_length": 46,
+          "sha256": "8faf1d57176fe0fdc7f48e1feb8dc2e6e78f50cb92bfa806173e6530b0715c51",
+          "span": [
+            125,
+            171
+          ]
+        },
+        "scope": "raw",
+        "span": [
+          91,
+          124
+        ]
+      }
+    ],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "raw",
+        "items": [
+          {
+            "anchor": {
+              "column": 2,
+              "row": 2
+            },
+            "body_span": [
+              191,
+              216
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "value",
+                    "span": [
+                      191,
+                      196
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "value"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "\"text, with comma\"",
+                    "span": [
+                      197,
+                      215
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "text, with comma"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              177,
+              190
+            ]
+          }
+        ],
+        "label": "Raw data",
+        "span": [
+          69,
+          90
+        ]
+      }
+    ],
+    "styles": []
+  }
+}

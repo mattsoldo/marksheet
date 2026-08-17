@@ -366,21 +366,21 @@ impl PatchSet {
                 second: patch.span,
             });
         }
-        if let Some((previous, _)) = self.0.range(..patch.span).next_back()
-            && previous.end > patch.span.start
-        {
-            return Err(FormulaRewriteError::OverlappingPatches {
-                first: *previous,
-                second: patch.span,
-            });
+        if let Some((previous, _)) = self.0.range(..patch.span).next_back() {
+            if previous.end > patch.span.start {
+                return Err(FormulaRewriteError::OverlappingPatches {
+                    first: *previous,
+                    second: patch.span,
+                });
+            }
         }
-        if let Some((next, _)) = self.0.range(patch.span..).next()
-            && patch.span.end > next.start
-        {
-            return Err(FormulaRewriteError::OverlappingPatches {
-                first: patch.span,
-                second: *next,
-            });
+        if let Some((next, _)) = self.0.range(patch.span..).next() {
+            if patch.span.end > next.start {
+                return Err(FormulaRewriteError::OverlappingPatches {
+                    first: patch.span,
+                    second: *next,
+                });
+            }
         }
         self.0.insert(patch.span, patch.replacement);
         Ok(())
@@ -479,20 +479,20 @@ fn collect_reference_patches(
             }
         }
         Reference::Structured(structured) => {
-            if let Some(table) = structured_table(structured)
-                && let Some(replacement) = plan.tables.get(table)
-            {
-                let token = first_token_at(span.start, tokens)
-                    .expect("parsed structured references start at their table token");
-                debug_assert!(matches!(token.kind, TokenKind::Word(_)));
-                insert_changed_patch(
-                    source,
-                    patches,
-                    FormulaPatch {
-                        span: token.span,
-                        replacement: replacement.as_str().to_owned(),
-                    },
-                )?;
+            if let Some(table) = structured_table(structured) {
+                if let Some(replacement) = plan.tables.get(table) {
+                    let token = first_token_at(span.start, tokens)
+                        .expect("parsed structured references start at their table token");
+                    debug_assert!(matches!(token.kind, TokenKind::Word(_)));
+                    insert_changed_patch(
+                        source,
+                        patches,
+                        FormulaPatch {
+                            span: token.span,
+                            replacement: replacement.as_str().to_owned(),
+                        },
+                    )?;
+                }
             }
         }
     }
@@ -555,16 +555,17 @@ fn rewrite_a1s(
         .iter()
         .map(|address| transform_a1(address, reference_sheet, transform))
         .collect::<Result<Vec<_>, _>>()?;
-    if matches!(transform, A1Transform::Move(_))
-        && let [original_start, original_end] = addresses
-        && let [rewritten_start, rewritten_end] = adjusted.as_slice()
-    {
-        ensure_range_order(
-            original_start.coordinate,
-            original_end.coordinate,
-            rewritten_start.coordinate,
-            rewritten_end.coordinate,
-        )?;
+    if matches!(transform, A1Transform::Move(_)) {
+        if let ([original_start, original_end], [rewritten_start, rewritten_end]) =
+            (addresses, adjusted.as_slice())
+        {
+            ensure_range_order(
+                original_start.coordinate,
+                original_end.coordinate,
+                rewritten_start.coordinate,
+                rewritten_end.coordinate,
+            )?;
+        }
     }
     for ((token, _parsed), adjusted) in cells.into_iter().zip(&adjusted) {
         insert_changed_patch(
