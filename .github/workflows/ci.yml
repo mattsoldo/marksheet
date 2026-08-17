@@ -23,10 +23,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust 1.85
-        uses: dtolnay/rust-toolchain@1
+      - name: Install Rust 1.97.1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.85"
+          toolchain: "1.97.1"
           components: rustfmt, clippy
 
       - name: Cache Cargo dependencies and build artifacts
@@ -36,9 +36,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-rust-1.85-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-rust-1.97.1-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-rust-1.85-
+            ${{ runner.os }}-rust-1.97.1-
 
       - name: Check formatting
         run: cargo fmt --check
@@ -131,10 +131,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust 1.85
-        uses: dtolnay/rust-toolchain@1
+      - name: Install Rust 1.97.1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.85"
+          toolchain: "1.97.1"
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
 
@@ -150,9 +150,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             bindings/wasm/target
-          key: ${{ runner.os }}-wasm-rust-1.85-${{ hashFiles('Cargo.lock', 'bindings/wasm/Cargo.lock') }}
+          key: ${{ runner.os }}-wasm-rust-1.97.1-${{ hashFiles('Cargo.lock', 'bindings/wasm/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-wasm-rust-1.85-
+            ${{ runner.os }}-wasm-rust-1.97.1-
 
       - name: Cache wasm-bindgen CLI 0.2.127
         uses: actions/cache@v4
@@ -200,10 +200,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust 1.85
-        uses: dtolnay/rust-toolchain@1
+      - name: Install Rust 1.97.1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.85"
+          toolchain: "1.97.1"
           targets: wasm32-unknown-unknown
 
       - name: Set up Node
@@ -220,9 +220,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             bindings/wasm/target
-          key: ${{ runner.os }}-viewer-wasm-rust-1.85-${{ hashFiles('Cargo.lock', 'bindings/wasm/Cargo.lock') }}
+          key: ${{ runner.os }}-viewer-wasm-rust-1.97.1-${{ hashFiles('Cargo.lock', 'bindings/wasm/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-viewer-wasm-rust-1.85-
+            ${{ runner.os }}-viewer-wasm-rust-1.97.1-
 
       - name: Cache wasm-bindgen CLI 0.2.127
         uses: actions/cache@v4
