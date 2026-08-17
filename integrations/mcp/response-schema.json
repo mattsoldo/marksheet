@@ -275,7 +275,7 @@
     },
     "format": {
       "type": "object",
-      "required": ["version", "profile", "status", "check_only", "changed", "would_change", "valid", "before", "after", "proposed", "patches", "diagnostics", "error"],
+      "required": ["version", "profile", "status", "check_only", "changed", "would_change", "valid", "before", "after", "proposed", "patches", "proposal_patches", "diagnostics_source", "diagnostics", "error"],
       "properties": {
         "version": { "const": "marksheet-format@1" },
         "profile": { "$ref": "#/$defs/profile" },
@@ -288,6 +288,8 @@
         "after": { "$ref": "#/$defs/source_version" },
         "proposed": { "anyOf": [{ "$ref": "#/$defs/source_version" }, { "type": "null" }] },
         "patches": { "type": "array", "items": { "$ref": "#/$defs/patch" } },
+        "proposal_patches": { "type": "array", "items": { "$ref": "#/$defs/patch" } },
+        "diagnostics_source": { "enum": ["before", "after", "proposed"] },
         "diagnostics": { "$ref": "#/$defs/diagnostics" },
         "error": { "$ref": "#/$defs/error" }
       },

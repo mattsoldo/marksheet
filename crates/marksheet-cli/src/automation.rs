@@ -215,10 +215,26 @@ pub(crate) fn format(path: &Path, check: bool) -> Result<ExitCode, commands::Cli
             );
         }
     };
-    if check {
-        return print_format_check(&source, &formatted, &diagnostics);
+    let would_change = source != formatted;
+    if would_change && json_string_encoded_len(&formatted) > MAX_FORMAT_REPLACEMENT_JSON_BYTES {
+        return print_format_failure(
+            &source,
+            check,
+            &diagnostics,
+            "resource_limit",
+            "formatted source cannot fit in the bounded exact-patch response",
+        );
     }
-    apply_format(path, &source, &formatted, &diagnostics)
+    let formatted_diagnostics = match validate_format_candidate(&source, &formatted, &diagnostics) {
+        Ok(diagnostics) => diagnostics,
+        Err(diagnostics) => {
+            return print_format_regression(&source, &formatted, check, &diagnostics);
+        }
+    };
+    if check {
+        return print_format_check(&source, &formatted, &formatted_diagnostics);
+    }
+    apply_format(path, &source, &formatted, &formatted_diagnostics)
 }
 
 fn print_format_check(
@@ -241,7 +257,13 @@ fn print_format_check(
         after: SourceVersion::new(source),
         proposed: would_change.then(|| SourceVersion::new(formatted)),
         patches: Vec::new(),
-        diagnostics: json_diagnostics(source, diagnostics),
+        proposal_patches: replacement_patch(source, formatted),
+        diagnostics_source: if would_change {
+            FormatDiagnosticsSource::Proposed
+        } else {
+            FormatDiagnosticsSource::Before
+        },
+        diagnostics: json_diagnostics(if would_change { formatted } else { source }, diagnostics),
         error: None,
     };
     print_json(&output)?;
@@ -259,15 +281,6 @@ fn apply_format(
     diagnostics: &[Diagnostic],
 ) -> Result<ExitCode, commands::CliError> {
     let would_change = source != formatted;
-    if would_change && json_string_encoded_len(formatted) > MAX_FORMAT_REPLACEMENT_JSON_BYTES {
-        return print_format_failure(
-            source,
-            false,
-            diagnostics,
-            "resource_limit",
-            "formatted source cannot fit in the bounded exact-patch response",
-        );
-    }
     if would_change && !commands::replace_atomically_if_current(path, formatted, source)? {
         let after = match commands::read_source_bounded(path, MAX_AUTOMATION_SOURCE_BYTES)? {
             Some(current) => SourceVersion::new(&current),
@@ -285,7 +298,9 @@ fn apply_format(
             after,
             proposed: Some(SourceVersion::new(formatted)),
             patches: Vec::new(),
-            diagnostics: json_diagnostics(source, diagnostics),
+            proposal_patches: replacement_patch(source, formatted),
+            diagnostics_source: FormatDiagnosticsSource::Proposed,
+            diagnostics: json_diagnostics(formatted, diagnostics),
             error: Some(AutomationError {
                 kind: "conflict",
                 message: "source bytes changed after formatting was planned",
@@ -317,11 +332,101 @@ fn apply_format(
         } else {
             Vec::new()
         },
+        proposal_patches: Vec::new(),
+        diagnostics_source: FormatDiagnosticsSource::After,
+        // `formatted` is the source these diagnostics were derived from, and
+        // when nothing changed it is byte-identical to `source`, so spans and
+        // line index always describe the same bytes.
         diagnostics: json_diagnostics(formatted, diagnostics),
         error: None,
     };
     print_json(&output)?;
     Ok(ExitCode::SUCCESS)
+}
+
+/// Candidate source reparsed through the pipeline that admitted the base
+/// workbook, so a mutating command can report the state it actually produced.
+struct Revalidated {
+    /// Whether the source would pass the same admission gate the base source
+    /// passed: parseable, capability-complete, and free of formula errors.
+    admissible: bool,
+    diagnostics: Vec<Diagnostic>,
+}
+
+/// Rechecks candidate source against the admission gate exactly.
+///
+/// Trusted extension diagnostics are deliberately excluded, because admission
+/// excludes them too. A failed assertion is an authoring outcome that
+/// formatting neither causes nor repairs, so treating it as a formatter defect
+/// would refuse to format a workbook that was already failing that assertion
+/// before and after the rewrite.
+fn revalidate(source: &[u8]) -> Revalidated {
+    let document = commands::parse_with_extensions(source);
+    let mut diagnostics = document.diagnostics.clone();
+    let mut formula_errors = false;
+    if let Some(workbook) = document.parsed.workbook.as_ref() {
+        let formula_diagnostics = commands::validate_formulas(workbook);
+        formula_errors = formula_diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error);
+        diagnostics.extend(formula_diagnostics);
+    }
+    commands::sort_and_deduplicate_diagnostics(&mut diagnostics);
+    Revalidated {
+        admissible: !document.parsed.has_errors()
+            && document.capabilities_complete
+            && !formula_errors,
+        diagnostics,
+    }
+}
+
+/// Applies the result-admission gate before either check-only reporting or a
+/// write is allowed to describe the canonical candidate.
+fn validate_format_candidate(
+    source: &[u8],
+    formatted: &[u8],
+    diagnostics: &[Diagnostic],
+) -> Result<Vec<Diagnostic>, Vec<Diagnostic>> {
+    if source == formatted {
+        return Ok(diagnostics.to_vec());
+    }
+    let revalidated = revalidate(formatted);
+    if revalidated.admissible {
+        Ok(revalidated.diagnostics)
+    } else {
+        Err(revalidated.diagnostics)
+    }
+}
+
+fn print_format_regression(
+    source: &[u8],
+    formatted: &[u8],
+    check: bool,
+    diagnostics: &[Diagnostic],
+) -> Result<ExitCode, commands::CliError> {
+    let before = SourceVersion::new(source);
+    let output = FormatOutput {
+        version: "marksheet-format@1",
+        profile: "portable-a1@1",
+        status: "invalid",
+        check_only: check,
+        changed: false,
+        would_change: true,
+        valid: false,
+        after: before.clone(),
+        before,
+        proposed: Some(SourceVersion::new(formatted)),
+        patches: Vec::new(),
+        proposal_patches: replacement_patch(source, formatted),
+        diagnostics_source: FormatDiagnosticsSource::Proposed,
+        diagnostics: json_diagnostics(formatted, diagnostics),
+        error: Some(AutomationError {
+            kind: "invalid_result",
+            message: "canonical formatting would produce an invalid workbook; no write performed",
+        }),
+    };
+    print_json(&output)?;
+    Ok(ExitCode::from(1))
 }
 
 fn get_cells(
@@ -795,6 +900,8 @@ fn print_format_failure(
         after: version,
         proposed: None,
         patches: Vec::new(),
+        proposal_patches: Vec::new(),
+        diagnostics_source: FormatDiagnosticsSource::Before,
         diagnostics: json_diagnostics(source, diagnostics),
         error: Some(AutomationError { kind, message }),
     };
@@ -816,6 +923,8 @@ fn print_format_resource_failure(path: &Path, check: bool) -> Result<ExitCode, c
         after: version,
         proposed: None,
         patches: Vec::new(),
+        proposal_patches: Vec::new(),
+        diagnostics_source: FormatDiagnosticsSource::Before,
         diagnostics: Vec::new(),
         error: Some(AutomationError {
             kind: "resource_limit",
@@ -1193,6 +1302,8 @@ struct FormatOutput<'a> {
     after: SourceVersion,
     proposed: Option<SourceVersion>,
     patches: Vec<JsonPatch>,
+    proposal_patches: Vec<JsonPatch>,
+    diagnostics_source: FormatDiagnosticsSource,
     diagnostics: Vec<render::JsonDiagnostic>,
     error: Option<AutomationError<'a>>,
 }
@@ -1272,6 +1383,26 @@ struct JsonPatch {
     replacement: String,
 }
 
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum FormatDiagnosticsSource {
+    Before,
+    After,
+    Proposed,
+}
+
+fn replacement_patch(source: &[u8], replacement: &[u8]) -> Vec<JsonPatch> {
+    if source == replacement {
+        Vec::new()
+    } else {
+        vec![JsonPatch {
+            start: 0,
+            end: u64::try_from(source.len()).expect("automation source limit fits u64"),
+            replacement: String::from_utf8_lossy(replacement).into_owned(),
+        }]
+    }
+}
+
 #[derive(Clone, Serialize)]
 struct SourceVersion {
     byte_length: u64,
@@ -1302,4 +1433,37 @@ impl SourceVersion {
 struct AutomationError<'a> {
     kind: &'static str,
     message: &'a str,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changed_format_candidate_must_pass_admission() {
+        let diagnostics = validate_format_candidate(
+            b"#!marksheet 0.1\n",
+            b"#!marksheet 0.1\n@sheet broken\n",
+            &[],
+        )
+        .expect_err("an invalid changed candidate must be refused in every mode");
+
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity == Severity::Error)
+        );
+    }
+
+    #[test]
+    fn proposal_patch_reconstructs_the_diagnostic_source() {
+        let source = b"before";
+        let proposed = b"proposed";
+        let patches = replacement_patch(source, proposed);
+
+        assert_eq!(patches.len(), 1);
+        assert_eq!(patches[0].start, 0);
+        assert_eq!(patches[0].end, source.len() as u64);
+        assert_eq!(patches[0].replacement.as_bytes(), proposed);
+    }
 }
