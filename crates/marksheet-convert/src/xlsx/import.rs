@@ -21,7 +21,10 @@ use crate::{
 
 use super::{
     package::{Package, relationships_part},
-    xml::{attribute, invalid, local_name, required_attribute, resource, xlsx_location},
+    xml::{
+        attribute, invalid, is_xml_character, local_name, required_attribute, resource,
+        xlsx_location,
+    },
 };
 
 #[derive(Clone, Debug)]
@@ -644,6 +647,9 @@ fn parse_workbook(bytes: &[u8], limits: ConversionLimits) -> Result<WorkbookInfo
             Ok(Event::Text(text)) if current_name.is_some() => {
                 append_text(&mut name_text, &text, part, limits)?;
             }
+            Ok(Event::GeneralRef(reference)) if current_name.is_some() => {
+                append_reference(&mut name_text, &reference, part, limits)?;
+            }
             Ok(Event::End(element)) if local_name(element.name().as_ref()) == b"definedName" => {
                 let name = current_name
                     .take()
@@ -756,6 +762,11 @@ fn parse_shared_strings(
             Ok(Event::Text(text)) if inside_text => {
                 if let Some(current) = &mut current {
                     append_text(current, &text, part, limits)?;
+                }
+            }
+            Ok(Event::GeneralRef(reference)) if inside_text => {
+                if let Some(current) = &mut current {
+                    append_reference(current, &reference, part, limits)?;
                 }
             }
             Ok(Event::End(element)) if local_name(element.name().as_ref()) == b"t" => {
@@ -1795,6 +1806,27 @@ fn parse_worksheet(
                     }
                 }
             }
+            Ok(Event::GeneralRef(reference)) => {
+                if let Some(cell) = &mut cell {
+                    match cell.text_state {
+                        CellTextState::None => {}
+                        CellTextState::Value => {
+                            append_reference(&mut cell.value, &reference, part, context.limits)?;
+                        }
+                        CellTextState::Formula => {
+                            append_reference(&mut cell.formula, &reference, part, context.limits)?;
+                        }
+                        CellTextState::Inline => {
+                            append_reference(
+                                &mut cell.inline_text,
+                                &reference,
+                                part,
+                                context.limits,
+                            )?;
+                        }
+                    }
+                }
+            }
             Ok(Event::End(element)) => match local_name(element.name().as_ref()) {
                 b"v" | b"f" | b"t" => {
                     if let Some(cell) = &mut cell {
@@ -2147,6 +2179,9 @@ fn parse_table(
             }
             Ok(Event::Text(text)) if inside_calculated => {
                 append_text(&mut current_formula, &text, part, limits)?;
+            }
+            Ok(Event::GeneralRef(reference)) if inside_calculated => {
+                append_reference(&mut current_formula, &reference, part, limits)?;
             }
             Ok(Event::End(element))
                 if local_name(element.name().as_ref()) == b"calculatedColumnFormula" =>
@@ -3030,14 +3065,63 @@ fn append_text(
         .map_err(|error| invalid(part, &format!("invalid text encoding: {error}")))?;
     let decoded = unescape(&decoded)
         .map_err(|error| invalid(part, &format!("invalid XML entity: {error}")))?;
+    append_bounded(output, &decoded, part, limits)
+}
+
+/// Appends the character an entity or character reference stands for.
+///
+/// quick-xml reports every `&...;` in character data as its own event rather
+/// than folding it into the surrounding text, so a reader that only handles
+/// [`Event::Text`] silently drops the referenced character.
+fn append_reference(
+    output: &mut String,
+    reference: &quick_xml::events::BytesRef<'_>,
+    part: &str,
+    limits: ConversionLimits,
+) -> Result<(), ConvertError> {
+    let resolved = if let Some(character) = reference
+        .resolve_char_ref()
+        .map_err(|error| invalid(part, &format!("invalid XML character reference: {error}")))?
+    {
+        character
+    } else {
+        let name = reference
+            .decode()
+            .map_err(|error| invalid(part, &format!("invalid text encoding: {error}")))?;
+        // OOXML parts declare no DTD, so only the five predefined general
+        // entities can appear.
+        match name.as_ref() {
+            "amp" => '&',
+            "lt" => '<',
+            "gt" => '>',
+            "apos" => '\'',
+            "quot" => '"',
+            _ => return Err(invalid(part, &format!("unknown XML entity &{name};"))),
+        }
+    };
+    if !is_xml_character(resolved) {
+        return Err(invalid(
+            part,
+            "XML character reference resolves to a character XML forbids",
+        ));
+    }
+    append_bounded(output, resolved.encode_utf8(&mut [0_u8; 4]), part, limits)
+}
+
+fn append_bounded(
+    output: &mut String,
+    value: &str,
+    part: &str,
+    limits: ConversionLimits,
+) -> Result<(), ConvertError> {
     let length = output
         .len()
-        .checked_add(decoded.len())
+        .checked_add(value.len())
         .ok_or_else(|| resource(part, "text length overflow"))?;
     if length > limits.max_string_bytes {
         return Err(resource(part, "text exceeds the configured string limit"));
     }
-    output.push_str(&decoded);
+    output.push_str(value);
     Ok(())
 }
 
@@ -4508,5 +4592,85 @@ mod tests {
             import_xlsx(&exported.value, limits).unwrap_err().code,
             ConvertErrorCode::ResourceLimit
         );
+    }
+
+    #[test]
+    fn sheet_labels_keep_xml_whitespace_across_the_round_trip() {
+        for (label, reference) in [
+            ("Line\nTwo", "Line&#10;Two"),
+            ("Tab\tTwo", "Tab&#9;Two"),
+            ("Cr\rTwo", "Cr&#13;Two"),
+        ] {
+            let mut source = basic_workbook();
+            source.sheets[0].label = label.to_owned();
+            let exported = export_xlsx(&source, ConversionLimits::default()).unwrap();
+            // A literal tab, line feed, or carriage return in an attribute
+            // value becomes a space under XML 1.0 attribute-value
+            // normalization, so only a character reference survives a parse.
+            assert!(
+                package_text(&exported.value, "xl/workbook.xml")
+                    .contains(&format!("<sheet name=\"{reference}\"")),
+                "sheet label {label:?} must be written as {reference}"
+            );
+            let imported = import_xlsx(&exported.value, ConversionLimits::default()).unwrap();
+            assert_eq!(imported.value.sheets[0].label, label);
+        }
+    }
+
+    #[test]
+    fn quoted_csv_table_headers_keep_xml_whitespace_across_the_round_trip() {
+        for (header, reference) in [
+            ("Head\nOne", "Head&#10;One"),
+            ("Head\tOne", "Head&#9;One"),
+            ("Head\rOne", "Head&#13;One"),
+        ] {
+            let source = format!(
+                "#!marksheet 0.1\n@sheet data \"Data\"\n@table costs A1 csv\n\"{header}\",Other\n1,2\n@end\n"
+            );
+            let parsed = marksheet_syntax::parse(source.as_bytes());
+            assert!(!parsed.has_errors(), "{:?}", parsed.diagnostics);
+            let workbook = parsed.workbook.expect("source lowers to a workbook");
+
+            let exported = export_xlsx(&workbook, ConversionLimits::default()).unwrap();
+            assert!(
+                package_text(&exported.value, "xl/tables/table1.xml")
+                    .contains(&format!("name=\"{reference}\"")),
+                "table column {header:?} must be written as {reference}"
+            );
+            let imported = import_xlsx(&exported.value, ConversionLimits::default())
+                .expect("the exported package must be importable");
+            let headers = imported.value.sheets[0]
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    SheetItem::Table(table) => Some(table.block.cells[0].clone()),
+                    _ => None,
+                })
+                .expect("imported table");
+            assert_eq!(headers[0].value, Value::Text(header.to_owned()));
+        }
+    }
+
+    #[test]
+    fn escaped_text_references_are_decoded_rather_than_dropped() {
+        let mut source = basic_workbook();
+        source.sheets[0].items = vec![SheetItem::Block(
+            Block::new(
+                Coordinate::parse("A1").unwrap(),
+                vec![vec![Cell::new(Value::Text("a&b<c>d\re".to_owned()))]],
+            )
+            .unwrap(),
+        )];
+        let exported = export_xlsx(&source, ConversionLimits::default()).unwrap();
+        let imported = import_xlsx(&exported.value, ConversionLimits::default()).unwrap();
+        let value = imported.value.sheets[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                SheetItem::Block(block) => Some(block.cells[0][0].value.clone()),
+                _ => None,
+            })
+            .expect("imported block");
+        assert_eq!(value, Value::Text("a&b<c>d\re".to_owned()));
     }
 }
