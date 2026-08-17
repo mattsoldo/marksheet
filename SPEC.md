@@ -1441,12 +1441,11 @@ validity. Trusted extension assertions are outside it, because a failed
 assertion holds identically before and after a rewrite and is therefore an
 authoring outcome rather than a formatting defect; formatting such a workbook
 succeeds and continues to report `valid:false`. Diagnostics in a mutating
-envelope are reported against the bytes identified by `diagnostics_source`.
-`marksheet-format@1` distinguishes exact `patches` that were applied from
-`proposal_patches` that reconstruct an uncommitted canonical candidate from
-`before`. When candidate-relative diagnostics are returned without a write,
-the envelope MUST identify `diagnostics_source:"proposed"` and include the
-exact proposal patch so clients can interpret and verify every position.
+envelope are reported against the bytes the command produced. Because
+`marksheet-format@1` does not carry the bytes of an uncommitted proposal, a
+refused format MUST NOT report source positions relative to that proposal;
+diagnostics remain scoped to the unchanged input and `error.kind` identifies
+an `invalid_result` formatter defect.
 
 The optional `marksheet-tools@1` local server exposes `check`, `inspect`,
 `get`, `set`, `append_table_row`, `calculate`, `format`, `convert`, and

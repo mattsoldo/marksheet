@@ -266,10 +266,9 @@ fn json_format_reports_its_own_exact_guarded_patch() {
     assert_eq!(check["status"], "needs_format");
     assert_eq!(check["changed"], false);
     assert_eq!(check["would_change"], true);
-    assert_eq!(check["diagnostics_source"], "proposed");
+    assert!(check.get("proposal_patches").is_none());
+    assert!(check.get("diagnostics_source").is_none());
     assert_eq!(check["patches"].as_array().map(Vec::len), Some(0));
-    assert_eq!(check["proposal_patches"][0]["start"], 0);
-    assert_eq!(check["proposal_patches"][0]["end"], source.len());
     assert_eq!(fs::read(workbook.path()).expect("read source"), source);
 
     let format = marksheet()
@@ -282,8 +281,8 @@ fn json_format_reports_its_own_exact_guarded_patch() {
         serde_json::from_slice(&format.stdout).expect("valid format JSON");
     assert_eq!(format["status"], "ok");
     assert_eq!(format["changed"], true);
-    assert_eq!(format["diagnostics_source"], "after");
-    assert_eq!(format["proposal_patches"].as_array().map(Vec::len), Some(0));
+    assert!(format.get("proposal_patches").is_none());
+    assert!(format.get("diagnostics_source").is_none());
     assert_eq!(format["patches"][0]["start"], 0);
     assert_eq!(format["patches"][0]["end"], source.len());
     assert_eq!(
@@ -295,10 +294,6 @@ fn json_format_reports_its_own_exact_guarded_patch() {
                 .expect("read formatted source")
                 .as_slice()
         )
-    );
-    assert_eq!(
-        check["proposal_patches"][0]["replacement"],
-        format["patches"][0]["replacement"]
     );
 }
 
