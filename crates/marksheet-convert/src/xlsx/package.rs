@@ -16,6 +16,7 @@ use super::xml::{attribute, invalid, local_name, required_attribute, resource, v
 #[derive(Clone, Debug)]
 pub(super) struct Package {
     parts: BTreeMap<String, Vec<u8>>,
+    hardened: BTreeSet<String>,
     macro_enabled: bool,
 }
 
@@ -129,14 +130,11 @@ impl Package {
             }
         }
 
+        let mut hardened = BTreeSet::new();
         for (name, content) in &parts {
-            let extension = std::path::Path::new(name).extension();
-            if extension.is_some_and(|value| {
-                value.eq_ignore_ascii_case("xml") || value.eq_ignore_ascii_case("rels")
-            }) || name == "[Content_Types].xml"
-                || name == "_rels/.rels"
-            {
+            if has_xml_part_name(name) {
                 validate_xml(name, content, limits)?;
+                hardened.insert(name.clone());
             }
         }
         for required in ["[Content_Types].xml", "_rels/.rels", "xl/workbook.xml"] {
@@ -147,6 +145,7 @@ impl Package {
 
         let mut package = Self {
             parts,
+            hardened,
             macro_enabled: false,
         };
         let content_types = ContentTypes::parse(package.part("[Content_Types].xml")?, limits)?;
@@ -194,11 +193,30 @@ impl Package {
         Ok(package)
     }
 
-    pub(super) fn part(&self, name: &str) -> Result<&[u8], ConvertError> {
+    fn part(&self, name: &str) -> Result<&[u8], ConvertError> {
         self.parts
             .get(name)
             .map(Vec::as_slice)
             .ok_or_else(|| invalid(name, "referenced OOXML part is missing"))
+    }
+
+    /// Returns a part that is about to be parsed as XML, hardening it first.
+    ///
+    /// Parts are selected by relationship target rather than by name, so a
+    /// worksheet, styles, sharedStrings, or table part may carry any name the
+    /// package author chooses. The name-based pass in [`Package::open`] would
+    /// skip such a part entirely, so hardening runs again here, at the point
+    /// the part is claimed for parsing, for anything `open` did not cover.
+    pub(super) fn xml_part(
+        &self,
+        name: &str,
+        limits: ConversionLimits,
+    ) -> Result<&[u8], ConvertError> {
+        let content = self.part(name)?;
+        if !self.hardened.contains(name) {
+            validate_xml(name, content, limits)?;
+        }
+        Ok(content)
     }
 
     pub(super) fn names(&self) -> impl Iterator<Item = &str> {
@@ -244,7 +262,7 @@ impl Package {
         source_part: &str,
         limits: ConversionLimits,
     ) -> Result<Vec<Relationship>, ConvertError> {
-        let bytes = self.part(rels_part)?;
+        let bytes = self.xml_part(rels_part, limits)?;
         let mut reader = Reader::from_reader(bytes);
         let mut relationships = Vec::new();
         loop {
@@ -436,6 +454,13 @@ pub(super) fn relationships_part(source_part: &str) -> String {
         Some((directory, file)) => format!("{directory}/_rels/{file}.rels"),
         None => format!("_rels/{source_part}.rels"),
     }
+}
+
+fn has_xml_part_name(name: &str) -> bool {
+    std::path::Path::new(name).extension().is_some_and(|value| {
+        value.eq_ignore_ascii_case("xml") || value.eq_ignore_ascii_case("rels")
+    }) || name == "[Content_Types].xml"
+        || name == "_rels/.rels"
 }
 
 fn validate_part_name(name: &str) -> Result<(), ConvertError> {
