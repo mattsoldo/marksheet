@@ -2679,8 +2679,10 @@ fn replace_formulas_referencing_omitted_names(
                                 report.retract(ConversionFeature::Formula, |candidate| {
                                     recorded.covers(candidate)
                                 });
+                                recorded.location.clone()
+                            } else {
+                                ConversionLocation::table_on_sheet(sheet_id.clone(), table.clone())
                             }
-                            ConversionLocation::table_on_sheet(sheet_id.clone(), table.clone())
                         }
                     };
                     report.approximate(omitted_name_reference_event().at(location));
@@ -3538,7 +3540,49 @@ fn translate_excel_formula(formula: &str, names: FormulaNames<'_>) -> String {
             output.push_str(&formula[start..index]);
             continue;
         }
-        if bytes[index].is_ascii_alphabetic() || bytes[index] == b'_' {
+        // Structured selectors contain exact header data, not formula name
+        // tokens. Copy the selector spelling wholesale so an identically
+        // spelled defined name cannot rewrite its header.
+        if bytes[index] == b'[' {
+            let start = index;
+            index += 1;
+            while index < bytes.len() {
+                if bytes[index] == b']' {
+                    if bytes.get(index + 1) == Some(&b']') {
+                        index += 2;
+                        continue;
+                    }
+                    index += 1;
+                    break;
+                }
+                index += 1;
+            }
+            output.push_str(&formula[start..index]);
+            continue;
+        }
+        // Error literals have word-shaped bodies (`#REF!`, `#NAME?`, ...),
+        // but those bodies are never defined-name references.
+        if bytes[index] == b'#' {
+            let start = index;
+            index += 1;
+            while index < bytes.len()
+                && (bytes[index].is_ascii_alphanumeric() || matches!(bytes[index], b'_' | b'/'))
+            {
+                index += 1;
+            }
+            if matches!(bytes.get(index), Some(b'!' | b'?')) {
+                index += 1;
+            }
+            output.push_str(&formula[start..index]);
+            continue;
+        }
+        let starts_name = bytes[index].is_ascii_alphabetic()
+            || bytes[index] == b'_'
+            || (bytes[index] == b'\\'
+                && bytes
+                    .get(index + 1)
+                    .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_'));
+        if starts_name {
             let start = index;
             index += 1;
             while index < bytes.len()
@@ -5389,6 +5433,89 @@ mod tests {
         assert_calculated_column_degraded(&calculated_column_import_with_omitted_name());
     }
 
+    #[test]
+    fn omitted_name_replacements_keep_each_calculated_column_location() {
+        let sheet_id = SheetId::parse("data").unwrap();
+        let table_id = TableId::parse("sales").unwrap();
+        let left_location = xlsx_location("xl/tables/table1.xml", Some("Left"));
+        let right_location = xlsx_location("xl/tables/table1.xml", Some("Right"));
+        let mut sheets = vec![Sheet {
+            id: sheet_id.clone(),
+            label: "Data".to_owned(),
+            items: vec![
+                SheetItem::Fill(Fill {
+                    target: FillTarget::TableColumn {
+                        table: table_id.clone(),
+                        header: "Left".to_owned(),
+                    },
+                    formula: FormulaSource::new("=SUM(total)").unwrap(),
+                    origin: None,
+                }),
+                SheetItem::Fill(Fill {
+                    target: FillTarget::TableColumn {
+                        table: table_id.clone(),
+                        header: "Right".to_owned(),
+                    },
+                    formula: FormulaSource::new("=SUM(total)").unwrap(),
+                    origin: None,
+                }),
+            ],
+            origin: None,
+        }];
+        let fill_outcomes = BTreeMap::from([
+            (
+                (table_id.clone(), "Left".to_owned()),
+                FillOutcome {
+                    location: left_location.clone(),
+                    sheet: sheet_id.clone(),
+                    body: Range::parse("A2:A3").unwrap(),
+                },
+            ),
+            (
+                (table_id, "Right".to_owned()),
+                FillOutcome {
+                    location: right_location.clone(),
+                    sheet: sheet_id,
+                    body: Range::parse("B2:B3").unwrap(),
+                },
+            ),
+        ]);
+        let mut report =
+            ConversionReport::new(FormatDescriptor::xlsx(), FormatDescriptor::marksheet_ir());
+        for location in [left_location.clone(), right_location.clone()] {
+            report.exact_event(
+                ConversionEvent::new(ConversionFeature::Formula, "calculated column")
+                    .formula(FormulaDisposition::Translated)
+                    .at(location),
+            );
+        }
+
+        replace_formulas_referencing_omitted_names(
+            &mut sheets,
+            &BTreeSet::from([NameId::parse("total").unwrap()]),
+            &fill_outcomes,
+            ConversionLimits::default(),
+            &mut report,
+        )
+        .unwrap();
+
+        let replacements: Vec<_> = report
+            .outcomes()
+            .iter()
+            .filter(|outcome| outcome.formula == Some(FormulaDisposition::Replaced))
+            .map(|outcome| outcome.locations.clone())
+            .collect();
+        assert_eq!(replacements.len(), 2, "{replacements:?}");
+        assert!(
+            replacements.contains(&vec![left_location]),
+            "{replacements:?}"
+        );
+        assert!(
+            replacements.contains(&vec![right_location]),
+            "{replacements:?}"
+        );
+    }
+
     /// Excel authors defined names in whatever case they like, and writes that
     /// spelling into every formula that reaches them. The importer has to
     /// rewrite those references to the identifier it assigned the name, or a
@@ -5604,6 +5731,57 @@ mod tests {
         assert_eq!(
             translated,
             "=SUM (grand_total)+Sales[Amount]+\"Total\"".to_owned()
+        );
+    }
+
+    #[test]
+    fn defined_name_rewrite_preserves_structured_selector_headers() {
+        let names = BTreeMap::from([("total".to_owned(), NameId::parse("named_total").unwrap())]);
+
+        assert_eq!(
+            translate_excel_formula(
+                "SUM(sales[Total])+Total",
+                FormulaNames {
+                    sheets: &BTreeMap::new(),
+                    names: &names,
+                },
+            ),
+            "=SUM(sales[Total])+named_total"
+        );
+    }
+
+    #[test]
+    fn defined_name_rewrite_recognizes_a_leading_backslash() {
+        let names = BTreeMap::from([(
+            "\\total".to_owned(),
+            NameId::parse("escaped_total").unwrap(),
+        )]);
+
+        assert_eq!(
+            translate_excel_formula(
+                "SUM(\\Total)",
+                FormulaNames {
+                    sheets: &BTreeMap::new(),
+                    names: &names,
+                },
+            ),
+            "=SUM(escaped_total)"
+        );
+    }
+
+    #[test]
+    fn defined_name_rewrite_preserves_error_literals() {
+        let names = BTreeMap::from([("ref".to_owned(), NameId::parse("named_ref").unwrap())]);
+
+        assert_eq!(
+            translate_excel_formula(
+                "#REF!+REF",
+                FormulaNames {
+                    sheets: &BTreeMap::new(),
+                    names: &names,
+                },
+            ),
+            "=#REF!+named_ref"
         );
     }
 
