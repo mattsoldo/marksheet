@@ -246,6 +246,26 @@ mod tests {
     }
 
     #[test]
+    fn fill_formula_text_stays_opaque_when_the_target_is_split() {
+        // Splitting a `@fill` target must not scan the formula that follows it:
+        // a formula the formula parser rejects is that parser's business, and
+        // must never surface as a tokenizer-level rejection of the directive.
+        let source =
+            b"#!marksheet 0.1\n\n@sheet s \"S\"\n\n@block A1 csv\n,\n@end\n\n@fill B1 =\"unterminated\n";
+        let document = parse(source);
+        assert!(
+            document.diagnostics.is_empty(),
+            "malformed formula text must stay opaque to the tokenizer: {:?}",
+            document.diagnostics
+        );
+        assert_eq!(
+            canonicalize(&document).expect("an opaque formula must canonicalize"),
+            source,
+            "an unparsable formula is emitted verbatim"
+        );
+    }
+
+    #[test]
     fn canonical_quoted_arguments_are_not_split_on_an_embedded_equals() {
         let source = b"#!marksheet 0.1\n@sheet s \"a=\\u0041\"\n";
         let document = parse(source);
