@@ -559,35 +559,82 @@ fn sum_numbers(numbers: &[f64]) -> CalcValue {
     CalcValue::Number(sum)
 }
 
+/// Every finite binary64 magnitude is an exact multiple of `2^-1074`, so a
+/// fixed-precision spelling with this many fractional digits is the exact
+/// value rather than a rounded approximation of it.
+const EXACT_FRACTION_DIGITS: usize = 1074;
+
+/// Rounds the exact binary64 value in decimal-digit space. Scaling by a
+/// power of ten in binary64 would round twice and report the rounding of a
+/// nearby decimal literal instead of the stored value.
 fn round_decimal(value: f64, digits: i32, mode: &str) -> CalcValue {
-    let exponent = digits.unsigned_abs();
-    let Ok(exponent) = i32::try_from(exponent) else {
-        return CalcValue::Error(CellError::Number);
-    };
-    let factor = 10_f64.powi(exponent);
-    if !factor.is_finite() {
+    if !value.is_finite() {
         return CalcValue::Error(CellError::Number);
     }
-    let scaled = if digits >= 0 {
-        value * factor
-    } else {
-        value / factor
-    };
-    if !scaled.is_finite() {
-        return CalcValue::Error(CellError::Number);
-    }
-    let rounded = match mode {
-        "ROUND" => scaled.round(),
-        "ROUNDUP" => scaled.abs().ceil().copysign(scaled),
-        "ROUNDDOWN" => scaled.trunc(),
+    let exact = format!("{:.*}", EXACT_FRACTION_DIGITS, value.abs());
+    let (integer, fraction) = exact
+        .split_once('.')
+        .expect("fixed-precision formatting emits a fractional part");
+    // Digits kept from the left of the expansion. Negative `digits` can move
+    // the rounding place above the leading digit, so pad with zeroes to leave
+    // one retained digit for a carry to land in.
+    let retained =
+        i64::try_from(integer.len()).unwrap_or(i64::MAX).saturating_add(i64::from(digits));
+    let padding = usize::try_from(1 - retained).unwrap_or(0);
+    let retained = usize::try_from(retained).unwrap_or(0).max(1);
+    let mut expansion = vec![b'0'; padding];
+    expansion.extend_from_slice(integer.as_bytes());
+    expansion.extend_from_slice(fraction.as_bytes());
+    let mut point = integer.len() + padding;
+
+    let away_from_zero = match mode {
+        "ROUND" => expansion.get(retained).is_some_and(|digit| *digit >= b'5'),
+        "ROUNDUP" => expansion[retained..].iter().any(|digit| *digit != b'0'),
+        "ROUNDDOWN" => false,
         _ => unreachable!("rounding dispatcher validates the function name"),
     };
-    let result = if digits >= 0 {
-        rounded / factor
+    expansion.truncate(retained);
+    if away_from_zero {
+        carry_one(&mut expansion, &mut point);
+    }
+
+    let mut literal = String::with_capacity(expansion.len() + point + 2);
+    if value.is_sign_negative() {
+        literal.push('-');
+    }
+    let kept = String::from_utf8(expansion).expect("expansion holds ASCII digits");
+    if let Some(fraction) = kept.get(point..) {
+        literal.push_str(&kept[..point]);
+        if !fraction.is_empty() {
+            literal.push('.');
+            literal.push_str(fraction);
+        }
     } else {
-        rounded * factor
-    };
-    number_result(result)
+        literal.push_str(&kept);
+        for _ in kept.len()..point {
+            literal.push('0');
+        }
+    }
+    number_result(
+        literal
+            .parse::<f64>()
+            .expect("rounded literal is decimal syntax"),
+    )
+}
+
+/// Adds one unit in the last place of a decimal digit string, growing it by a
+/// leading digit when the carry runs off the front.
+fn carry_one(expansion: &mut Vec<u8>, point: &mut usize) {
+    for index in (0..expansion.len()).rev() {
+        if expansion[index] == b'9' {
+            expansion[index] = b'0';
+        } else {
+            expansion[index] += 1;
+            return;
+        }
+    }
+    expansion.insert(0, b'1');
+    *point += 1;
 }
 
 #[allow(clippy::cast_precision_loss)]

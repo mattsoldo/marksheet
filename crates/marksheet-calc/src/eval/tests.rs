@@ -279,6 +279,43 @@ mod numeric_and_text {
     }
 
     #[test]
+    fn rounding_uses_the_exact_binary64_value() {
+        assert_eq!(value("=ROUND(0.15,1)", &empty()), CalcValue::Number(0.1));
+        assert_eq!(value("=ROUND(2.675,2)", &empty()), CalcValue::Number(2.67));
+        assert_eq!(value("=ROUND(-0.15,1)", &empty()), CalcValue::Number(-0.1));
+        assert_eq!(value("=ROUNDUP(0.15,1)", &empty()), CalcValue::Number(0.2));
+        assert_eq!(value("=ROUNDUP(0.25,2)", &empty()), CalcValue::Number(0.25));
+        assert_eq!(
+            value("=ROUNDDOWN(2.675,2)", &empty()),
+            CalcValue::Number(2.67)
+        );
+    }
+
+    #[test]
+    fn rounding_places_left_of_the_point_keep_their_sign() {
+        assert_eq!(
+            value("=ROUND(-1500,-3)", &empty()),
+            CalcValue::Number(-2000.0)
+        );
+        assert_eq!(
+            value("=ROUNDUP(-125,-2)", &empty()),
+            CalcValue::Number(-200.0)
+        );
+        assert_eq!(
+            value("=ROUNDDOWN(-125,-1)", &empty()),
+            CalcValue::Number(-120.0)
+        );
+        assert_eq!(
+            value("=ROUNDDOWN(125,-3)", &empty()),
+            CalcValue::Number(0.0)
+        );
+        assert_eq!(
+            value("=ROUNDUP(125,-3)", &empty()),
+            CalcValue::Number(1000.0)
+        );
+    }
+
+    #[test]
     fn numeric_function_domains_are_checked() {
         assert_eq!(
             value("=MOD(1,0)", &empty()),
@@ -290,6 +327,10 @@ mod numeric_and_text {
         );
         assert_eq!(
             value("=ROUND(1,309)", &empty()),
+            CalcValue::Error(CellError::Number)
+        );
+        assert_eq!(
+            value("=ROUNDUP(1.7976931348623157E308,-308)", &empty()),
             CalcValue::Error(CellError::Number)
         );
     }
