@@ -16,6 +16,20 @@ run the same acceptance criteria through authenticated Codex and Claude Code
 clients; results are judged from the produced files and CLI semantics rather
 than prompt snapshots.
 
+`live-results.json` records the most recent live run. `run.py` checks that the
+record is well formed and matches the current corpus version, and prints each
+recorded verdict. It deliberately does not assert that the run passed: the
+record is release evidence rather than a hermetic test outcome, so a failed
+live run must remain committable.
+
+Staleness is reported as a warning rather than a failure, because age advances
+with no code change and only someone with hosted-model credentials could
+refresh the record. The release step that owns refreshing it opts in:
+
+```sh
+python3 tests/harness/run.py --require-fresh
+```
+
 Run it after building the CLI:
 
 ```sh

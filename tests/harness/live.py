@@ -272,7 +272,10 @@ def main() -> int:
         print(f"{harness}: 7 live tasks passed ({result['client']})")
     record = {
         "version": "marksheet-live-harness@1",
-        "verified_at": datetime.date.today().isoformat(),
+        # UTC so the recording clock matches run.py's freshness check.
+        "verified_at": datetime.datetime.now(datetime.timezone.utc)
+        .date()
+        .isoformat(),
         "corpus": "marksheet-harness-corpus@1",
         "results": results,
     }

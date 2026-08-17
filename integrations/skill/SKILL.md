@@ -61,6 +61,11 @@ calculation, or a safe edit of existing source.
   repeated data. Prefer `@fill` over copying formulas into every row.
 - `set` only edits an existing authored cell. It refuses ranges, absent cells,
   and virtual fill cells instead of guessing where source should be inserted.
+  A cell can be both: a blank field inside a column owned by an `@fill` reports
+  `source:"authored"` from `get` but is still refused, because the fill owns its
+  value. Treat a non-null `virtual_formula` as not settable whatever `source`
+  says; to change it, edit the `@fill` directive in source and re-run
+  `marksheet check`. No command edits directives.
 - Preserve comments, blank lines, directive order, quoted CSV spelling, and
   opaque extension payloads. Do not run `fmt` merely to tidy an unrelated edit.
 - Use a leading apostrophe for text that would otherwise parse as a number,
