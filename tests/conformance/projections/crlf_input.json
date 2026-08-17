@@ -1,0 +1,151 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 68,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "crlf",
+        "span": [
+          0,
+          17
+        ]
+      },
+      {
+        "content_span": [
+          17,
+          35
+        ],
+        "ending": "crlf",
+        "span": [
+          17,
+          37
+        ]
+      },
+      {
+        "content_span": [
+          37,
+          50
+        ],
+        "ending": "crlf",
+        "span": [
+          37,
+          52
+        ]
+      },
+      {
+        "content_span": [
+          52,
+          57
+        ],
+        "ending": "crlf",
+        "span": [
+          52,
+          59
+        ]
+      },
+      {
+        "content_span": [
+          59,
+          60
+        ],
+        "ending": "crlf",
+        "span": [
+          59,
+          62
+        ]
+      },
+      {
+        "content_span": [
+          62,
+          66
+        ],
+        "ending": "crlf",
+        "span": [
+          62,
+          68
+        ]
+      }
+    ],
+    "sha256": "26935adaccc6d2487f87584fa7c3431d5a20cf77fed847c0f32fab4884e1d558"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [],
+    "extensions": [],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "main",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              52,
+              62
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "value",
+                    "span": [
+                      52,
+                      57
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "value"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "1",
+                    "span": [
+                      59,
+                      60
+                    ]
+                  },
+                  "value": {
+                    "kind": "number",
+                    "value": "1"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              37,
+              50
+            ]
+          }
+        ],
+        "label": "CRLF",
+        "span": [
+          17,
+          35
+        ]
+      }
+    ],
+    "styles": []
+  }
+}

@@ -491,7 +491,9 @@ communicate through versioned messages with cancellation support.
 Draft 0.1 plugins are installed by an application or linked at build time. A
 workbook can refer to a plugin but cannot install it.
 
-The host registry maps an extension major version to capabilities:
+The host registry maps one exact `id@major` to capabilities. It rejects a
+duplicate exact registration as host configuration failure; it never falls back
+to a different major or chooses by registration order:
 
 ```text
 ExtensionPlugin
@@ -509,9 +511,23 @@ a converter or edit command. Formula functions receive typed arguments and a
 deterministic calculation context; they do not receive filesystem or network
 handles by default.
 
-The first plugin API should be an in-process Rust trait plus a browser registry
-for trusted compiled modules. A general third-party dynamic-plugin ABI is not a
-1.0 prerequisite.
+The first plugin API is an in-process Rust trait plus a browser registry for
+trusted compiled modules. Implementations are static or link-time host code;
+there is no third-party dynamic-plugin ABI, workbook-directed fetch, automatic
+installation, network capability, or subprocess capability. The registry owns
+diagnostic and resource caps, orders extension diagnostics by source span and
+code, and records explicit truncation rather than silently discarding results.
+
+The first demonstration extension is `assertions@1`. Its payload consists of
+newline-separated assertion lines, each `assert <target> <operator> <literal>`.
+`target` is one concrete core A1 cell: unqualified in a sheet-scoped instance
+and sheet-qualified in a workbook-scoped one. `operator` is one of `=`, `!=`,
+`<`, `<=`, `>`, or `>=`, and `literal` is one section-11 scalar spelling with
+JSON strings and the `blank` sentinel. It has no expression language,
+identifiers, functions, or I/O. Assertions run after core calculation, report
+failed assertions at the target, and cannot modify values. Hosts bound payload
+bytes, physical lines, targets, and emitted diagnostics before parsing or
+evaluation.
 
 ## 13. Import and export
 
@@ -541,6 +557,16 @@ formatting, pivots, and charts must appear in the conversion report.
 CSV export requires the caller to select one sheet and range or one named table.
 There is no honest default that flattens an arbitrary workbook into one CSV.
 
+The concrete public report is `marksheet-conversion@1`. It distinguishes
+`exact`, `approximated`, `omitted`, and `unsupported` feature outcomes and
+derives `lossless`, `lossy`, or `unsupported` fidelity from them. XLSX package
+writers use deterministic ZIP/XML construction (fixed order, timestamps,
+relationship IDs, and attributes) so reproducibility is testable. Import
+limits cover compressed and expanded archive size, members, XML nesting,
+worksheets, cells, styles, shared strings, and formulas. The converter never
+silently truncates an archive or chooses a CSV worksheet/range on the caller's
+behalf.
+
 ## 14. Diagnostics
 
 Every diagnostic contains:
@@ -564,6 +590,15 @@ MS1302 overlapping_footprints
 MS2101 unresolved_name
 MS2303 formula_cycle
 MS3101 required_extension_unavailable
+MS3103 undeclared_extension_instance
+MS3201 assertion_failed
+MS3202 assertion_payload_invalid
+MS3203 assertion_resource_limit
+MS4101 conversion_resource_limit
+MS4102 conversion_loss
+MS4103 csv_selection_required
+MS4104 csv_import_target_required
+MS4105 conversion_rejected
 ```
 
 Messages may improve without breaking clients; codes and structured fields are
@@ -653,7 +688,7 @@ sparse blocks, deep dependency chains, and wide fan-out formulas.
 
 - XLSX import/export with conversion reports;
 - selected-table and selected-range CSV conversion;
-- extension-host prototype; and
+- exact-ID trusted extension-host prototype with `assertions@1`; and
 - second independent parser against the conformance corpus.
 
 ### Milestone 6: Coding-harness proof

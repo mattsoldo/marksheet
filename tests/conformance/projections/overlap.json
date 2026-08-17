@@ -1,0 +1,180 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [
+    {
+      "code": "MS1302",
+      "severity": "error",
+      "span": [
+        58,
+        71
+      ]
+    }
+  ],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 79,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          34
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          35
+        ]
+      },
+      {
+        "content_span": [
+          35,
+          48
+        ],
+        "ending": "lf",
+        "span": [
+          35,
+          49
+        ]
+      },
+      {
+        "content_span": [
+          49,
+          52
+        ],
+        "ending": "lf",
+        "span": [
+          49,
+          53
+        ]
+      },
+      {
+        "content_span": [
+          53,
+          57
+        ],
+        "ending": "lf",
+        "span": [
+          53,
+          58
+        ]
+      },
+      {
+        "content_span": [
+          58,
+          71
+        ],
+        "ending": "lf",
+        "span": [
+          58,
+          72
+        ]
+      },
+      {
+        "content_span": [
+          72,
+          73
+        ],
+        "ending": "lf",
+        "span": [
+          72,
+          74
+        ]
+      },
+      {
+        "content_span": [
+          74,
+          78
+        ],
+        "ending": "lf",
+        "span": [
+          74,
+          79
+        ]
+      }
+    ],
+    "sha256": "6c3a0ece8ab47ae5fbfc83d3ec288fd9f8d9c51d9a03e140052e69908a1bd4aa"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [],
+    "extensions": [],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "main",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              49,
+              53
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "a",
+                    "span": [
+                      49,
+                      50
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "a"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "b",
+                    "span": [
+                      51,
+                      52
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "b"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              35,
+              48
+            ]
+          }
+        ],
+        "label": "Main",
+        "span": [
+          16,
+          34
+        ]
+      }
+    ],
+    "styles": []
+  }
+}

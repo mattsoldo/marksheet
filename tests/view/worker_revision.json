@@ -1,0 +1,12 @@
+{
+  "protocol": "marksheet-view-conformance@1",
+  "operations": [
+    {"op": "request", "request_id": "open-1", "worker_protocol": "marksheet-worker@1", "revision": 0, "kind": "open", "source": "layers_geometry.ms"},
+    {"op": "reply", "request_id": "open-1", "revision": 1, "outcome": "opened"},
+    {"op": "request", "request_id": "calc-1", "worker_protocol": "marksheet-worker@1", "revision": 1, "kind": "calculate", "targets": ["view!C2"]},
+    {"op": "request", "request_id": "replace-2", "worker_protocol": "marksheet-worker@1", "revision": 1, "kind": "replace_source", "source": "layers_geometry.ms"},
+    {"op": "reply", "request_id": "replace-2", "revision": 2, "outcome": "opened"},
+    {"op": "reply", "request_id": "calc-1", "revision": 1, "outcome": "cancelled_or_stale", "must_not_mutate_active_revision": true},
+    {"op": "assert_active_revision", "revision": 2, "must_not_include_result_from": "calc-1"}
+  ]
+}

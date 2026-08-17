@@ -98,6 +98,29 @@ fn check_rejects_malformed_formulas_after_source_validation() {
 }
 
 #[test]
+fn check_rejects_noncanonical_extension_major_versions() {
+    let temporary = TempFile::write(
+        "noncanonical-extension-major.ms",
+        b"#!marksheet 0.1\n@use assertions@01\n@sheet s \"Sheet\"\n",
+    );
+
+    let output = marksheet()
+        .args(["check", "--format", "json"])
+        .arg(temporary.path())
+        .output()
+        .expect("CLI executes");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    let diagnostics: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("JSON diagnostics are valid");
+    assert_eq!(diagnostics.as_array().map(Vec::len), Some(1));
+    assert_eq!(diagnostics[0]["code"], "MS1201");
+    assert_eq!(diagnostics[0]["primary"]["line"], 2);
+    assert_eq!(diagnostics[0]["primary"]["column"], 6);
+}
+
+#[test]
 fn check_rejects_unresolved_formula_references() {
     let temporary = TempFile::write(
         "unresolved-formula.ms",

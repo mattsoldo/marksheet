@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://marksheet.dev/schema/conversion-report-1.json",
+  "title": "marksheet-conversion@1 report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "source", "destination", "fidelity", "outcomes", "diagnostics"],
+  "properties": {
+    "schema": {"const": "marksheet-conversion@1"},
+    "source": {"$ref": "#/$defs/format"},
+    "destination": {"$ref": "#/$defs/format"},
+    "fidelity": {"enum": ["lossless", "lossy", "unsupported"]},
+    "outcomes": {"type": "array", "items": {"$ref": "#/$defs/outcome"}},
+    "diagnostics": {"type": "array", "items": {"$ref": "#/$defs/diagnostic"}}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"fidelity": {"const": "lossless"}}},
+      "then": {
+        "properties": {
+          "outcomes": {"items": {"properties": {"outcome": {"const": "exact"}}}},
+          "diagnostics": {"maxItems": 0}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"fidelity": {"const": "lossy"}}},
+      "then": {
+        "properties": {
+          "outcomes": {
+            "contains": {"properties": {"outcome": {"enum": ["approximated", "omitted"]}}}
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"fidelity": {"const": "unsupported"}}},
+      "then": {
+        "properties": {
+          "outcomes": {"contains": {"properties": {"outcome": {"const": "unsupported"}}}},
+          "diagnostics": {"contains": {"properties": {"severity": {"const": "error"}}}}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "format": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "version"],
+      "properties": {"format": {"type": "string", "minLength": 1}, "version": {"type": "string", "minLength": 1}}
+    },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["cell", "range", "table", "sheet", "source", "xlsx"]},
+        "sheet": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "cell": {"type": "string", "pattern": "^[A-Z]+[1-9][0-9]*$"},
+        "range": {"type": "string", "pattern": "^[A-Z]+[1-9][0-9]*(?::[A-Z]+[1-9][0-9]*)?$"},
+        "table": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "source": {"type": "string", "minLength": 1},
+        "part": {"type": "string", "minLength": 1},
+        "reference": {"type": ["string", "null"]}
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["feature", "outcome", "locations"],
+      "properties": {
+        "feature": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*$"},
+        "outcome": {"enum": ["exact", "approximated", "omitted", "unsupported"]},
+        "formula": {"enum": ["preserved", "translated", "replaced"]},
+        "detail": {"type": "string", "minLength": 1},
+        "locations": {"type": "array", "items": {"$ref": "#/$defs/location"}}
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity", "message", "locations"],
+      "properties": {
+        "code": {"type": "string", "pattern": "^MS[0-9]{4}$"},
+        "severity": {"enum": ["warning", "error"]},
+        "message": {"type": "string", "minLength": 1},
+        "locations": {"type": "array", "items": {"$ref": "#/$defs/location"}}
+      }
+    }
+  }
+}

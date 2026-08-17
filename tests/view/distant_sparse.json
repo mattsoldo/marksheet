@@ -1,0 +1,26 @@
+{
+  "protocol": "marksheet-view-conformance@1",
+  "source": "distant_sparse.ms",
+  "operations": [
+    {
+      "op": "visible_region",
+      "sheet": "sparse",
+      "range": "A1:C3",
+      "expect_layers": ["authored", "virtual", "calculated", "presentation", "geometry", "source_links"],
+      "expect_authored_coordinates": ["A1"],
+      "expect_absent_coordinates": ["B1", "C3"],
+      "budget": {"max_returned_cells": 4, "max_rendered_grid_cells": 64, "max_coordinate_probes": 64},
+      "unsupported_assertions": ["max_rendered_grid_cells", "max_coordinate_probes"]
+    },
+    {
+      "op": "visible_region",
+      "sheet": "sparse",
+      "range": "ZZZZ1000000:ZZZZ1000002",
+      "expect_layers": ["authored", "virtual", "calculated", "presentation", "geometry", "source_links"],
+      "expect_authored_coordinates": ["ZZZZ1000000"],
+      "expect_absent_coordinates": ["ZZZZ1000001", "ZZZZ1000002"],
+      "budget": {"max_returned_cells": 4, "max_rendered_grid_cells": 64, "max_coordinate_probes": 64},
+      "unsupported_assertions": ["max_rendered_grid_cells", "max_coordinate_probes"]
+    }
+  ]
+}

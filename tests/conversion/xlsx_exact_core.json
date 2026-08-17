@@ -1,0 +1,18 @@
+{
+  "protocol": "marksheet-conversion-fixture@1",
+  "request": {"source": {"format": "marksheet", "version": "0.1", "path": "sources/core.ms"}, "destination": "xlsx"},
+  "expect": {
+    "fidelity": "lossless",
+    "artifact": "generated/core.xlsx",
+    "outcomes": [
+      {"feature": "core_styles", "outcome": "exact"},
+      {"feature": "portable_formulas", "outcome": "exact", "formula": "translated"},
+      {"feature": "row_column_geometry", "outcome": "exact"},
+      {"feature": "scalar_cells", "outcome": "exact"},
+      {"feature": "sheets", "outcome": "exact"},
+      {"feature": "named_ranges", "outcome": "exact", "location": {"source": "@name tax_rate"}},
+      {"feature": "tables", "outcome": "exact", "location": {"table": "sales"}}
+    ],
+    "diagnostics": []
+  }
+}

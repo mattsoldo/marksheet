@@ -35,6 +35,15 @@ The CI workflow runs the complete set.
 
 Describe the problem, the approach, and how you verified the result. New or
 changed `.ms` behavior should include a focused fixture or test when practical.
+Pull requests must also disclose:
+
+- every AI agent model used for the contribution, including its specific model
+  name and effort level;
+- whether an oppositional review was performed; and
+- for each oppositional review, the reviewing model's specific model name and
+  effort level.
+
+If no AI agents or oppositional reviews were used, state that explicitly.
 By submitting a contribution, you agree that it may be distributed under this
 repository's [MIT License](LICENSE).
 

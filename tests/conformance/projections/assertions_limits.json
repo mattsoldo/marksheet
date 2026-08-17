@@ -1,0 +1,264 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [
+    {
+      "code": "MS3102",
+      "severity": "warning",
+      "span": [
+        16,
+        33
+      ]
+    }
+  ],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 165,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          33
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          34
+        ]
+      },
+      {
+        "content_span": [
+          34,
+          34
+        ],
+        "ending": "lf",
+        "span": [
+          34,
+          35
+        ]
+      },
+      {
+        "content_span": [
+          35,
+          57
+        ],
+        "ending": "lf",
+        "span": [
+          35,
+          58
+        ]
+      },
+      {
+        "content_span": [
+          58,
+          71
+        ],
+        "ending": "lf",
+        "span": [
+          58,
+          72
+        ]
+      },
+      {
+        "content_span": [
+          72,
+          77
+        ],
+        "ending": "lf",
+        "span": [
+          72,
+          78
+        ]
+      },
+      {
+        "content_span": [
+          78,
+          79
+        ],
+        "ending": "lf",
+        "span": [
+          78,
+          80
+        ]
+      },
+      {
+        "content_span": [
+          80,
+          84
+        ],
+        "ending": "lf",
+        "span": [
+          80,
+          85
+        ]
+      },
+      {
+        "content_span": [
+          85,
+          117
+        ],
+        "ending": "lf",
+        "span": [
+          85,
+          118
+        ]
+      },
+      {
+        "content_span": [
+          118,
+          131
+        ],
+        "ending": "lf",
+        "span": [
+          118,
+          132
+        ]
+      },
+      {
+        "content_span": [
+          132,
+          145
+        ],
+        "ending": "lf",
+        "span": [
+          132,
+          146
+        ]
+      },
+      {
+        "content_span": [
+          146,
+          159
+        ],
+        "ending": "lf",
+        "span": [
+          146,
+          160
+        ]
+      },
+      {
+        "content_span": [
+          160,
+          164
+        ],
+        "ending": "lf",
+        "span": [
+          160,
+          165
+        ]
+      }
+    ],
+    "sha256": "c99fc672d09f3120810b5d52678ad67eeb5c3229db4e273e5b482024603abb3e"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [
+      {
+        "id": "assertions@1",
+        "required": false,
+        "span": [
+          16,
+          33
+        ]
+      }
+    ],
+    "extensions": [
+      {
+        "id": "assertions@1",
+        "name": "checks",
+        "payload": {
+          "byte_length": 42,
+          "sha256": "d848ddacc164be49213da1dab4227873cae70ec70006bc2107e179a871ed5222",
+          "span": [
+            118,
+            160
+          ]
+        },
+        "scope": "inputs",
+        "span": [
+          85,
+          117
+        ]
+      }
+    ],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "inputs",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              72,
+              80
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "Value",
+                    "span": [
+                      72,
+                      77
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Value"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "1",
+                    "span": [
+                      78,
+                      79
+                    ]
+                  },
+                  "value": {
+                    "kind": "number",
+                    "value": "1"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              58,
+              71
+            ]
+          }
+        ],
+        "label": "Inputs",
+        "span": [
+          35,
+          57
+        ]
+      }
+    ],
+    "styles": []
+  }
+}

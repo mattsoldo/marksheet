@@ -21,6 +21,7 @@ Diagnostic contract for this corpus:
 - `MS2201`: invalid scalar, date, style, or geometry value
 - `MS3101`: unavailable required extension
 - `MS3102`: unavailable optional extension (warning)
+- `MS3103`: undeclared opaque extension instance (warning)
 
 `valid/all_core.ms` is the broad core-language fixture. The focused fixtures
 cover CSV edge cases (including CRLF input) and sparse coordinates. The invalid

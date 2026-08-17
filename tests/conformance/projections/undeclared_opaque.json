@@ -1,0 +1,222 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [
+    {
+      "code": "MS3103",
+      "severity": "warning",
+      "span": [
+        67,
+        100
+      ]
+    }
+  ],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 141,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          16
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          17
+        ]
+      },
+      {
+        "content_span": [
+          17,
+          39
+        ],
+        "ending": "lf",
+        "span": [
+          17,
+          40
+        ]
+      },
+      {
+        "content_span": [
+          40,
+          53
+        ],
+        "ending": "lf",
+        "span": [
+          40,
+          54
+        ]
+      },
+      {
+        "content_span": [
+          54,
+          59
+        ],
+        "ending": "lf",
+        "span": [
+          54,
+          60
+        ]
+      },
+      {
+        "content_span": [
+          60,
+          61
+        ],
+        "ending": "lf",
+        "span": [
+          60,
+          62
+        ]
+      },
+      {
+        "content_span": [
+          62,
+          66
+        ],
+        "ending": "lf",
+        "span": [
+          62,
+          67
+        ]
+      },
+      {
+        "content_span": [
+          67,
+          100
+        ],
+        "ending": "lf",
+        "span": [
+          67,
+          101
+        ]
+      },
+      {
+        "content_span": [
+          101,
+          135
+        ],
+        "ending": "lf",
+        "span": [
+          101,
+          136
+        ]
+      },
+      {
+        "content_span": [
+          136,
+          140
+        ],
+        "ending": "lf",
+        "span": [
+          136,
+          141
+        ]
+      }
+    ],
+    "sha256": "1133c745debf47f1b07a840d28585ea5da82243bd675bd0064ef9d52581b86d0"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [],
+    "extensions": [
+      {
+        "id": "vendor_data@1",
+        "name": "opaque",
+        "payload": {
+          "byte_length": 35,
+          "sha256": "07d9c1f2f8a4b72dba0ed0d312fa5ac2e20846c8f4fa5e0ea7e44546c3982f45",
+          "span": [
+            101,
+            136
+          ]
+        },
+        "scope": "inputs",
+        "span": [
+          67,
+          100
+        ]
+      }
+    ],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "inputs",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              54,
+              62
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "Value",
+                    "span": [
+                      54,
+                      59
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Value"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "5",
+                    "span": [
+                      60,
+                      61
+                    ]
+                  },
+                  "value": {
+                    "kind": "number",
+                    "value": "5"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              40,
+              53
+            ]
+          }
+        ],
+        "label": "Inputs",
+        "span": [
+          17,
+          39
+        ]
+      }
+    ],
+    "styles": []
+  }
+}

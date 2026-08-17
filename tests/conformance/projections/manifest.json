@@ -1,0 +1,196 @@
+{
+  "available_extensions": [],
+  "fixtures": [
+    {
+      "id": "tests/conformance/invalid/bad_context",
+      "projection": "bad_context.json",
+      "source": "tests/conformance/invalid/bad_context.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/bad_coordinate",
+      "projection": "bad_coordinate.json",
+      "source": "tests/conformance/invalid/bad_coordinate.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/bad_directive",
+      "projection": "bad_directive.json",
+      "source": "tests/conformance/invalid/bad_directive.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/bad_identifier",
+      "projection": "bad_identifier.json",
+      "source": "tests/conformance/invalid/bad_identifier.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/bad_property",
+      "projection": "bad_property.json",
+      "source": "tests/conformance/invalid/bad_property.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/duplicate_ids",
+      "projection": "duplicate_ids.json",
+      "source": "tests/conformance/invalid/duplicate_ids.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/duplicate_version",
+      "projection": "duplicate_version.json",
+      "source": "tests/conformance/invalid/duplicate_version.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/fill_over_nonblank",
+      "projection": "fill_over_nonblank.json",
+      "source": "tests/conformance/invalid/fill_over_nonblank.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/invalid_style_geometry_scalar",
+      "projection": "invalid_style_geometry_scalar.json",
+      "source": "tests/conformance/invalid/invalid_style_geometry_scalar.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/invalid_table_headers",
+      "projection": "invalid_table_headers.json",
+      "source": "tests/conformance/invalid/invalid_table_headers.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/malformed_csv",
+      "projection": "malformed_csv.json",
+      "source": "tests/conformance/invalid/malformed_csv.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/malformed_version",
+      "projection": "malformed_version.json",
+      "source": "tests/conformance/invalid/malformed_version.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/missing_version",
+      "projection": "missing_version.json",
+      "source": "tests/conformance/invalid/missing_version.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/nonrectangular_block",
+      "projection": "nonrectangular_block.json",
+      "source": "tests/conformance/invalid/nonrectangular_block.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/overlap",
+      "projection": "overlap.json",
+      "source": "tests/conformance/invalid/overlap.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/required_extension",
+      "projection": "required_extension.json",
+      "source": "tests/conformance/invalid/required_extension.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/reserved_boolean_name",
+      "projection": "reserved_boolean_name.json",
+      "source": "tests/conformance/invalid/reserved_boolean_name.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/unresolved_name",
+      "projection": "unresolved_name.json",
+      "source": "tests/conformance/invalid/unresolved_name.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/unresolved_targets",
+      "projection": "unresolved_targets.json",
+      "source": "tests/conformance/invalid/unresolved_targets.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/unsupported_version",
+      "projection": "unsupported_version.json",
+      "source": "tests/conformance/invalid/unsupported_version.ms"
+    },
+    {
+      "id": "tests/conformance/valid/all_core",
+      "projection": "all_core.json",
+      "source": "tests/conformance/valid/all_core.ms"
+    },
+    {
+      "id": "tests/conformance/valid/csv_edge_cases",
+      "projection": "csv_edge_cases.json",
+      "source": "tests/conformance/valid/csv_edge_cases.ms"
+    },
+    {
+      "id": "tests/conformance/valid/sparse_blocks",
+      "projection": "sparse_blocks.json",
+      "source": "tests/conformance/valid/sparse_blocks.ms"
+    },
+    {
+      "id": "tests/conversion/sources/advanced",
+      "projection": "advanced.json",
+      "source": "tests/conversion/sources/advanced.ms"
+    },
+    {
+      "id": "tests/conversion/sources/core",
+      "projection": "core.json",
+      "source": "tests/conversion/sources/core.ms"
+    },
+    {
+      "id": "tests/extensions/assertions_failure",
+      "projection": "assertions_failure.json",
+      "source": "tests/extensions/assertions_failure.ms"
+    },
+    {
+      "id": "tests/extensions/assertions_limits",
+      "projection": "assertions_limits.json",
+      "source": "tests/extensions/assertions_limits.ms"
+    },
+    {
+      "id": "tests/extensions/assertions_malformed",
+      "projection": "assertions_malformed.json",
+      "source": "tests/extensions/assertions_malformed.ms"
+    },
+    {
+      "id": "tests/extensions/assertions_scope",
+      "projection": "assertions_scope.json",
+      "source": "tests/extensions/assertions_scope.ms"
+    },
+    {
+      "id": "tests/extensions/assertions_success",
+      "projection": "assertions_success.json",
+      "source": "tests/extensions/assertions_success.ms"
+    },
+    {
+      "id": "tests/extensions/optional_major_mismatch",
+      "projection": "optional_major_mismatch.json",
+      "source": "tests/extensions/optional_major_mismatch.ms"
+    },
+    {
+      "id": "tests/extensions/required_unavailable",
+      "projection": "required_unavailable.json",
+      "source": "tests/extensions/required_unavailable.ms"
+    },
+    {
+      "id": "tests/extensions/undeclared_opaque",
+      "projection": "undeclared_opaque.json",
+      "source": "tests/extensions/undeclared_opaque.ms"
+    },
+    {
+      "id": "tests/roundtrip/canonical_mixed_input.canonical",
+      "projection": "canonical_mixed_input.canonical.json",
+      "source": "tests/roundtrip/canonical_mixed_input.canonical.ms"
+    },
+    {
+      "id": "tests/roundtrip/canonical_mixed_input",
+      "projection": "canonical_mixed_input.json",
+      "source": "tests/roundtrip/canonical_mixed_input.ms"
+    },
+    {
+      "id": "tests/roundtrip/crlf_input",
+      "projection": "crlf_input.json",
+      "source": "tests/roundtrip/crlf_input.ms"
+    },
+    {
+      "id": "tests/roundtrip/lossless_unknown_extension",
+      "projection": "lossless_unknown_extension.json",
+      "source": "tests/roundtrip/lossless_unknown_extension.ms"
+    },
+    {
+      "id": "tests/roundtrip/quoted_end_multiline",
+      "projection": "quoted_end_multiline.json",
+      "source": "tests/roundtrip/quoted_end_multiline.ms"
+    }
+  ],
+  "schema": "marksheet.conformance-projection-manifest@1"
+}

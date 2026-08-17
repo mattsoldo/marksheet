@@ -1,0 +1,17 @@
+{
+  "protocol": "marksheet-view-conformance@1",
+  "source": "layers_geometry.ms",
+  "operations": [
+    {
+      "op": "visible_region",
+      "sheet": "view",
+      "range": "A1:C2",
+      "expect_layers": ["authored", "virtual", "calculated", "presentation", "geometry", "source_links"],
+      "expect_cells": {
+        "A2": {"authored": {"kind": "number", "value": 2}, "calculated": {"kind": "number", "value": 2}, "style": {"bold": true, "text_color": "#111111", "fill": "#ffffff"}, "geometry": {"column_width": 10, "row_height": 30}, "source_link": "csv_field"},
+        "B2": {"authored": {"kind": "formula", "source": "=A2*3"}, "calculated": {"kind": "number", "value": 6}, "style": {"bold": false, "text_color": "#111111", "fill": "#ffff00"}, "geometry": {"column_width": 24, "row_height": 30}, "source_link": "csv_field"},
+        "C2": {"virtual": {"formula_source": "=B2*2", "origin": "fill"}, "calculated": {"kind": "number", "value": 12}, "style": {"bold": false, "text_color": "#111111", "fill": "#ffff00"}, "geometry": {"column_width": 10, "row_height": 30}, "source_link": "fill_directive", "set_cell_outcome": "virtual_cell_refused"}
+      }
+    }
+  ]
+}

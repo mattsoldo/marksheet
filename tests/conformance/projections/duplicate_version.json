@@ -1,0 +1,79 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [
+    {
+      "code": "MS1001",
+      "severity": "error",
+      "span": [
+        16,
+        31
+      ]
+    }
+  ],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 51,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          31
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          32
+        ]
+      },
+      {
+        "content_span": [
+          32,
+          50
+        ],
+        "ending": "lf",
+        "span": [
+          32,
+          51
+        ]
+      }
+    ],
+    "sha256": "0f4ae17d55d851e33588b4498def730ff6154a83c178e7e8ebee25bf5d590400"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [],
+    "extensions": [],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "main",
+        "items": [],
+        "label": "Main",
+        "span": [
+          32,
+          50
+        ]
+      }
+    ],
+    "styles": []
+  }
+}
