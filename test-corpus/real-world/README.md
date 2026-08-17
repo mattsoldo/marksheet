@@ -93,10 +93,11 @@ POI's NOTICE file as Apache-2.0 requires.
 
 ## License note on `xlsx/`
 
-`xlsx/` is gitignored, same as the synthetic corpus's `xlsx/` -- these are
-copied third-party files, appropriate to attribute and reference by pinned
-commit, but not to carry as binary blobs in this repo's history. Run
-`./download.sh` to fetch them locally.
+`xlsx/` is vendored in this repository so the corpus gate runs hermetically
+in CI. Every file's provenance -- source repository, pinned commit, and
+upstream license -- is recorded in `manifest.json`, with the license texts
+under `LICENSES/`. `./download.sh` remains the tool for refreshing or
+re-verifying the files against their pinned sources.
 
 ## Verification results
 
@@ -221,9 +222,16 @@ every import reports `fidelity: "lossy"`. What must hold is that the surviving
 subset is a fixed point. Files that cannot import at all are skipped rather
 than failed, since several are deliberately defective.
 
-Current state over all 94 corpus files: **61 stable, 27 unstable, 6 skipped**
-— and every one of the 27 is the same benign class, with no export or
-re-import failures left at all.
+The authoritative per-file records live in `../expectations.json`, and
+`../gate.py` holds every file to them in CI -- strictly in both directions, so
+a regression fails and a silent improvement fails too, with a message saying
+which record to promote. Current records over all 137 real-world files: **45
+byte-stable, 83 converge after one extra pass, 2 diverge, 6 correctly
+refused, 1 known-gap refusal** -- with no export or re-import failures at all.
+The convergent class is the style-identifier churn described below; the two
+divergent files (both Google Sheets dashboards) oscillate through the
+style-deduplication ordering and never settle, which the dedup fix described
+below would close.
 
 **Style records are not deduplicated on import.** The first import can emit
 several identical style records where one would do; exporting and re-importing

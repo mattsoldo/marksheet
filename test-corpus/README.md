@@ -79,6 +79,20 @@ And to check that conversion is a fixed point (`xlsx -> ms -> xlsx -> ms`):
 ./test-corpus/roundtrip.sh
 ```
 
+The vendored real-world corpus is additionally held to its recorded per-file
+outcomes in CI (a release binary, because the largest workbook converts in
+seconds optimized and minutes unoptimized):
+
+```bash
+cargo build --release -p marksheet-cli
+python3 test-corpus/gate.py ./target/release/marksheet
+```
+
+`expectations.json` records every file's class -- byte-stable, converges after
+one extra pass, diverges, correctly refused, or known-gap refusal -- and
+`gate.py` fails on drift in either direction, so an improvement must promote
+its record rather than pass silently.
+
 ## Why generated, not downloaded
 
 [`tests/conversion/README.md`](../tests/conversion/README.md) states this
@@ -111,8 +125,10 @@ test-corpus/
 ├── manifest.json            machine-readable file/tier/description index (generate.py's output)
 ├── verify.sh                imports every corpus file and reports fidelity per file
 ├── roundtrip.sh             asserts xlsx -> ms -> xlsx -> ms is a fixed point
+├── expectations.json        recorded per-file outcome class for the real-world corpus
+├── gate.py                  CI gate holding every real-world file to its record
 ├── xlsx/                    generated .xlsx/.xlsm files (gitignored)
-└── real-world/              137 real files from 9 producers -- see real-world/README.md
+└── real-world/              137 vendored real files from 9 producers -- see real-world/README.md
     ├── README.md              source/license/findings for this subset
     ├── manifest.json          machine-readable provenance per file
     ├── sources.json          the GitHub sources, pinned by commit SHA

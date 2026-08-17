@@ -56,6 +56,13 @@ jobs:
           python3 integrations/mcp/test_tool_server.py
           bash tests/harness/validate.sh
 
+      - name: Real-world corpus gate
+        # Release build: the largest corpus workbook (81 sheets) converts in
+        # seconds optimized and minutes unoptimized.
+        run: |
+          cargo build --release -p marksheet-cli
+          python3 test-corpus/gate.py ./target/release/marksheet
+
       - name: Lint
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 

@@ -6,4 +6,3 @@ __pycache__/
 .DS_Store
 test-corpus/xlsx/
 test-corpus/.venv/
-test-corpus/real-world/xlsx/
