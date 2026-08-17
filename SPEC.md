@@ -1393,6 +1393,60 @@ the selection and reports omitted workbook features outside it. CSV import
 produces one selected target sheet and block or table using the RFC 4180 dialect
 from section 9.1; callers must supply the target sheet identifier and label.
 
+### 20.7 Automation and coding-harness profile
+
+The reference process automation profile uses versioned JSON envelopes. A
+machine-facing success exits 0, a semantic refusal, validation failure, or
+reported difference exits 1, and an operational I/O or serialization failure
+exits 2. An exit-1 command that promises structured output MUST still emit one
+complete envelope and MUST NOT emit a partial JSON document.
+
+`marksheet-check@1`, `marksheet-inspect@1`, `marksheet-get@1`, and
+`marksheet-edit@1` identify the initial validation, inspection, query, and
+focused-edit envelopes. Each contains `version`, `profile`, `status`, and
+ordered diagnostics where applicable. Source fingerprints exposed to browser
+or JSON-number consumers encode the 64-bit hash as lowercase hexadecimal text,
+not a potentially lossy JavaScript number.
+
+An inspection reports workbook settings, ordered sheets, tables, names,
+extension declarations and instances, and diagnostics. It MUST NOT expose
+opaque extension payload bytes. A query target is one stable workbook name,
+one stable table ID, or `sheet-id!A1` / `sheet-id!A1:B2`. Labels do not replace
+stable sheet IDs in this interface. Query cells distinguish authored, virtual,
+and absent source provenance and MAY include a typed calculated value.
+
+A source-aware `set` operation accepts only a target resolving to exactly one
+existing authored cell. It MUST refuse an absent cell, virtual fill cell,
+range-shaped name, or ambiguous target rather than invent source placement.
+An append-table-row operation accepts one strict scalar spelling per table
+column in header order. Successful mutating envelopes contain the exact ordered
+byte patches applied, before/after source fingerprints, and diagnostics. The
+host MUST compare current bytes with the planned snapshot immediately before
+replacement and MUST perform no write on conflict. Replacement is atomic at
+the local-file boundary. Trusted extension assertions are post-edit validation,
+not an edit admission boundary: an applied edit that leaves assertion errors
+uses `status:"committed_invalid"`, `changed:true`, `valid:false`, includes the
+post-edit diagnostics, and exits 1. A tool adapter MUST preserve that committed
+state explicitly rather than label it as a refusal, because retrying a
+non-idempotent append could duplicate data.
+
+The optional `marksheet-tools@1` local server exposes `check`, `inspect`,
+`get`, `set`, `append_table_row`, `calculate`, `format`, `convert`, and
+`semantic_diff`. Every request uses an explicit path resolved after symlinks
+within one configured workspace. The server MUST reject paths outside that
+workspace, bound request/response bytes, and provide no workbook-triggered
+network, executable, clock, randomness, installation, or plugin-discovery
+surface. Harness-specific packages adapt installation layout only; they MUST
+reference the canonical skill and tool schema rather than fork authoring
+guidance.
+
+The reference JSON-lines adapter treats the configured project as a
+cooperative local workspace. It detects exact-byte content races before
+mutation, but a host that must defend against another process concurrently
+renaming workspace ancestors MUST add an operating-system sandbox or
+descriptor-relative filesystem bridge; pathname admission alone is not a
+multi-tenant filesystem boundary.
+
 ## 21. Security and resource handling
 
 - Core parsing and formula evaluation require no network access.

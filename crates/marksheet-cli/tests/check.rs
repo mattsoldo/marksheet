@@ -56,9 +56,11 @@ fn check_json_includes_stable_codes_and_positions() {
 
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stderr.is_empty());
-    let diagnostics: serde_json::Value =
+    let output: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("JSON diagnostics are valid");
-    let first = &diagnostics[0];
+    assert_eq!(output["version"], "marksheet-check@1");
+    assert_eq!(output["status"], "invalid");
+    let first = &output["diagnostics"][0];
     assert_eq!(first["code"], "MS1001");
     assert_eq!(first["severity"], "error");
     assert_eq!(first["primary"]["line"], 1);
@@ -112,8 +114,9 @@ fn check_rejects_noncanonical_extension_major_versions() {
 
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stderr.is_empty());
-    let diagnostics: serde_json::Value =
+    let output: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("JSON diagnostics are valid");
+    let diagnostics = &output["diagnostics"];
     assert_eq!(diagnostics.as_array().map(Vec::len), Some(1));
     assert_eq!(diagnostics[0]["code"], "MS1201");
     assert_eq!(diagnostics[0]["primary"]["line"], 2);

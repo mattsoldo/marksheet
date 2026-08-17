@@ -1,0 +1,9 @@
+{
+  "version": "marksheet-harness@1",
+  "harness": "claude-code",
+  "skill_source": "../../skill",
+  "project_install_path": ".claude/skills/marksheet",
+  "tool_schema": "../../mcp/tool-schema.json",
+  "response_schema": "../../mcp/response-schema.json",
+  "tool_server": "../../mcp/marksheet_tool_server.py"
+}

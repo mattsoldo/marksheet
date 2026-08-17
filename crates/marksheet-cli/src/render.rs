@@ -568,8 +568,21 @@ fn render_json(source: &[u8], diagnostics: &[Diagnostic]) -> io::Result<()> {
         .iter()
         .map(|diagnostic| JsonDiagnostic::from_diagnostic(diagnostic, line_index.as_ref()))
         .collect();
+    let output = JsonCheck {
+        version: "marksheet-check@1",
+        profile: "portable-a1@1",
+        status: if diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == "error")
+        {
+            "invalid"
+        } else {
+            "ok"
+        },
+        diagnostics,
+    };
     let mut stdout = io::stdout().lock();
-    serde_json::to_writer_pretty(&mut stdout, &diagnostics).map_err(io::Error::other)?;
+    serde_json::to_writer_pretty(&mut stdout, &output).map_err(io::Error::other)?;
     writeln!(stdout)
 }
 
@@ -582,7 +595,7 @@ fn severity_name(severity: Severity) -> &'static str {
 }
 
 #[derive(Serialize)]
-struct JsonDiagnostic {
+pub(crate) struct JsonDiagnostic {
     code: String,
     severity: &'static str,
     message: String,
@@ -590,6 +603,14 @@ struct JsonDiagnostic {
     related: Vec<JsonRelatedDiagnostic>,
     context: Option<marksheet_model::DiagnosticContext>,
     suggestion: Option<marksheet_model::Suggestion>,
+}
+
+#[derive(Serialize)]
+struct JsonCheck {
+    version: &'static str,
+    profile: &'static str,
+    status: &'static str,
+    diagnostics: Vec<JsonDiagnostic>,
 }
 
 #[derive(Serialize)]
@@ -917,7 +938,7 @@ fn json_scope(scope: &ComparisonScope) -> Value {
 }
 
 impl JsonDiagnostic {
-    fn from_diagnostic(diagnostic: &Diagnostic, line_index: Option<&LineIndex>) -> Self {
+    pub(crate) fn from_diagnostic(diagnostic: &Diagnostic, line_index: Option<&LineIndex>) -> Self {
         Self {
             code: diagnostic.code.as_str().to_owned(),
             severity: severity_name(diagnostic.severity),

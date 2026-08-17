@@ -1,10 +1,11 @@
-//! Command-line interface for validating, formatting, calculating, comparing,
-//! and converting Marksheet workbooks.
+//! Command-line interface for inspecting, validating, formatting, calculating,
+//! editing, comparing, and converting Marksheet workbooks.
 //!
 //! The command layer deliberately stays thin: parsing and serialization remain
 //! in `marksheet-syntax`, so native clients and future bindings observe the
 //! same behavior.
 
+mod automation;
 mod commands;
 mod render;
 
@@ -16,7 +17,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[command(
     name = "marksheet",
     version,
-    about = "Validate, calculate, compare, and convert Marksheet workbooks"
+    about = "Inspect, validate, calculate, edit, compare, and convert Marksheet workbooks"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -33,11 +34,49 @@ enum Command {
         /// Marksheet workbook to validate.
         path: PathBuf,
     },
+    /// Inspect workbook structure, names, tables, extensions, and diagnostics.
+    Inspect {
+        /// Marksheet workbook to inspect.
+        path: PathBuf,
+    },
+    /// Read an explicit sheet-qualified range, workbook name, or table.
+    Get {
+        /// Marksheet workbook to query.
+        path: PathBuf,
+        /// Stable name/table ID or a target such as `inputs!A1:B4`.
+        target: String,
+        /// Include calculated values alongside authored source values.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        calculated: bool,
+    },
+    /// Apply one source-aware cell or single-cell-name edit atomically.
+    Set {
+        /// Marksheet workbook to edit.
+        path: PathBuf,
+        /// Stable single-cell name or target such as `inputs!G2`.
+        target: String,
+        /// Strict scalar spelling or formula beginning with `=`.
+        #[arg(allow_hyphen_values = true)]
+        value_or_formula: String,
+    },
+    /// Append one source-aware table data row atomically.
+    AppendTableRow {
+        /// Marksheet workbook to edit.
+        path: PathBuf,
+        /// Stable table identifier.
+        table: String,
+        /// One strict scalar spelling per table column, in header order.
+        #[arg(long = "value", allow_hyphen_values = true)]
+        values: Vec<String>,
+    },
     /// Explicitly rewrite a workbook using canonical Marksheet formatting.
     Fmt {
         /// Exit nonzero when the workbook is not canonically formatted.
         #[arg(long)]
         check: bool,
+        /// Formatting result output format.
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        format: OutputFormat,
         /// Marksheet workbook to format.
         path: PathBuf,
     },
@@ -132,7 +171,30 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Check { format, path } => commands::check(&path, format),
-        Command::Fmt { check, path } => commands::format(&path, check),
+        Command::Inspect { path } => automation::inspect(&path),
+        Command::Get {
+            path,
+            target,
+            calculated,
+        } => automation::get(&path, &target, calculated),
+        Command::Set {
+            path,
+            target,
+            value_or_formula,
+        } => automation::set(&path, &target, &value_or_formula),
+        Command::AppendTableRow {
+            path,
+            table,
+            values,
+        } => automation::append_table_row(&path, &table, &values),
+        Command::Fmt {
+            check,
+            format,
+            path,
+        } => match format {
+            OutputFormat::Human => commands::format(&path, check),
+            OutputFormat::Json => automation::format(&path, check),
+        },
         Command::Calc {
             sheet,
             range,

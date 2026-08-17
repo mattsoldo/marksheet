@@ -1,0 +1,19 @@
+{
+  "version": "marksheet-live-harness@1",
+  "verified_at": "2026-08-17",
+  "corpus": "marksheet-harness-corpus@1",
+  "results": [
+    {
+      "harness": "codex",
+      "client": "codex-cli 0.147.0",
+      "tasks": 7,
+      "passed": true
+    },
+    {
+      "harness": "claude-code",
+      "client": "2.1.233 (Claude Code)",
+      "tasks": 7,
+      "passed": true
+    }
+  ]
+}

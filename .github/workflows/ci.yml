@@ -46,6 +46,16 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --all-targets --all-features
 
+      - name: Validate coding-harness integration kit
+        run: |
+          python3 -m pip install --disable-pip-version-check -r tests/harness/requirements.txt
+          cargo build -p marksheet-cli
+          for example in integrations/skill/examples/*.ms; do
+            cargo run -q -p marksheet-cli -- check "$example"
+          done
+          python3 integrations/mcp/test_tool_server.py
+          bash tests/harness/validate.sh
+
       - name: Lint
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 

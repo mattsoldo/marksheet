@@ -1,0 +1,13 @@
+{
+  "version": "marksheet-harness-corpus@1",
+  "harnesses": ["codex", "claude-code"],
+  "tasks": [
+    {"id": "create_workbook", "kind": "author_source", "expected": "create_workbook.expected.ms"},
+    {"id": "add_sheet", "kind": "author_source", "expected": "add_sheet.expected.ms"},
+    {"id": "append_table_row", "kind": "tool", "tool": "append_table_row"},
+    {"id": "change_named_input", "kind": "tool", "tool": "set"},
+    {"id": "repair_invalid_csv", "kind": "repair", "start": "invalid_csv.start.ms", "expected": "invalid_csv.expected.ms"},
+    {"id": "explain_formula_error", "kind": "diagnose", "source": "formula_error.ms"},
+    {"id": "honest_conversion", "kind": "tool", "tool": "convert"}
+  ]
+}

@@ -27,8 +27,8 @@ fn check_runs_the_statically_linked_assertions_extension() {
         serde_json::from_slice(&failure.stdout).expect("valid diagnostics JSON");
     let codes = diagnostic_codes(&diagnostics);
     assert_eq!(codes, ["MS3201", "MS3201"]);
-    assert_eq!(diagnostics[0]["primary"]["line"], 10);
-    assert_eq!(diagnostics[1]["primary"]["line"], 11);
+    assert_eq!(diagnostics["diagnostics"][0]["primary"]["line"], 10);
+    assert_eq!(diagnostics["diagnostics"][1]["primary"]["line"], 11);
 }
 
 #[test]
@@ -45,9 +45,9 @@ fn check_reports_plugin_payload_errors_at_deterministic_source_locations() {
         diagnostic_codes(&diagnostics),
         ["MS3202", "MS3202", "MS3202"]
     );
-    assert_eq!(diagnostics[0]["primary"]["line"], 10);
-    assert_eq!(diagnostics[1]["primary"]["line"], 11);
-    assert_eq!(diagnostics[2]["primary"]["line"], 12);
+    assert_eq!(diagnostics["diagnostics"][0]["primary"]["line"], 10);
+    assert_eq!(diagnostics["diagnostics"][1]["primary"]["line"], 11);
+    assert_eq!(diagnostics["diagnostics"][2]["primary"]["line"], 12);
 }
 
 #[test]
@@ -139,7 +139,7 @@ fn json_check(name: &str) -> std::process::Output {
 }
 
 fn diagnostic_codes(value: &serde_json::Value) -> Vec<&str> {
-    value
+    value["diagnostics"]
         .as_array()
         .expect("diagnostic array")
         .iter()

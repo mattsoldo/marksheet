@@ -1,0 +1,9 @@
+{
+  "version": "marksheet-harness@1",
+  "harness": "codex",
+  "skill_source": "../../skill",
+  "project_install_path": ".codex/skills/marksheet",
+  "tool_schema": "../../mcp/tool-schema.json",
+  "response_schema": "../../mcp/response-schema.json",
+  "tool_server": "../../mcp/marksheet_tool_server.py"
+}

@@ -119,8 +119,10 @@ make calculation and rendering explicitly incomplete. Optional unavailable and
 undeclared opaque extensions remain visible and preserved. Workbooks never
 select code, URLs, package paths, or installation behavior.
 
-Milestone 6, the coding-harness integration kit, is the next implementation
-slice.
+Milestone 6 adds the coding-harness integration kit: versioned automation JSON,
+source-aware query/edit commands, a canonical portable skill, a bounded local
+tool server, and one executable task corpus shared by Codex and Claude Code
+package profiles.
 
 ## Build and CLI usage
 
@@ -130,6 +132,9 @@ commands from the repository root:
 ```sh
 cargo test --workspace
 cargo run -p marksheet-cli -- check examples/budget.ms
+cargo run -p marksheet-cli -- inspect examples/budget.ms
+cargo run -p marksheet-cli -- get examples/budget.ms tax_rate
+cargo run -p marksheet-cli -- set examples/budget.ms tax_rate 0.25
 cargo run -p marksheet-cli -- fmt --check examples/budget.ms
 cargo run -p marksheet-cli -- calc examples/budget.ms \
   --sheet summary --range A1:B4 --format json
@@ -138,6 +143,20 @@ cargo run -p marksheet-cli -- convert examples/budget.ms \
   --to xlsx --output budget.xlsx
 cargo run -p marksheet-cli -- convert examples/budget.ms \
   --to csv --sheet summary --range A1:B4 --output summary.csv
+```
+
+The canonical coding-agent guidance is
+[`integrations/skill/SKILL.md`](integrations/skill/SKILL.md). The optional
+workspace-local JSON-lines server and stable tool schema live under
+[`integrations/mcp`](integrations/mcp), including checked request and response
+schemas, with thin harness packages under
+[`integrations/harnesses`](integrations/harnesses). Run both reference harness
+profiles with:
+
+```sh
+cargo build -p marksheet-cli
+python3 integrations/mcp/test_tool_server.py
+python3 tests/harness/run.py
 ```
 
 To build the standalone `marksheet` executable:

@@ -1,0 +1,207 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://marksheet.dev/schema/marksheet-tools-1.json",
+  "title": "marksheet-tools@1 request",
+  "oneOf": [
+    { "$ref": "#/$defs/check" },
+    { "$ref": "#/$defs/inspect" },
+    { "$ref": "#/$defs/get" },
+    { "$ref": "#/$defs/set" },
+    { "$ref": "#/$defs/append_table_row" },
+    { "$ref": "#/$defs/calculate" },
+    { "$ref": "#/$defs/format" },
+    { "$ref": "#/$defs/convert" },
+    { "$ref": "#/$defs/semantic_diff" }
+  ],
+  "$defs": {
+    "id": {
+      "anyOf": [
+        { "type": "string" },
+        { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 }
+      ]
+    },
+    "path": { "type": "string", "minLength": 1 },
+    "target": { "type": "string", "minLength": 1 },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "tool", "arguments"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "tool": { "const": "check" },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path"],
+          "properties": { "path": { "$ref": "#/$defs/path" } }
+        }
+      }
+    },
+    "inspect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "tool", "arguments"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "tool": { "const": "inspect" },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path"],
+          "properties": { "path": { "$ref": "#/$defs/path" } }
+        }
+      }
+    },
+    "get": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "tool", "arguments"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "tool": { "const": "get" },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "target"],
+          "properties": {
+            "path": { "$ref": "#/$defs/path" },
+            "target": { "$ref": "#/$defs/target" },
+            "calculated": { "type": "boolean", "default": true }
+          }
+        }
+      }
+    },
+    "set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "tool", "arguments"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "tool": { "const": "set" },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "target", "value_or_formula"],
+          "properties": {
+            "path": { "$ref": "#/$defs/path" },
+            "target": { "$ref": "#/$defs/target" },
+            "value_or_formula": { "type": "string" }
+          }
+        }
+      }
+    },
+    "append_table_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "tool", "arguments"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "tool": { "const": "append_table_row" },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "table", "values"],
+          "properties": {
+            "path": { "$ref": "#/$defs/path" },
+            "table": { "type": "string", "minLength": 1 },
+            "values": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "calculate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "tool", "arguments"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "tool": { "const": "calculate" },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "targets"],
+          "properties": {
+            "path": { "$ref": "#/$defs/path" },
+            "targets": {
+              "oneOf": [
+                { "$ref": "#/$defs/target" },
+                {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 32,
+                  "items": { "$ref": "#/$defs/target" }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "format": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "tool", "arguments"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "tool": { "const": "format" },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path"],
+          "properties": {
+            "path": { "$ref": "#/$defs/path" },
+            "check_only": { "type": "boolean", "default": true }
+          }
+        }
+      }
+    },
+    "convert": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "tool", "arguments"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "tool": { "const": "convert" },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "target_format"],
+          "properties": {
+            "path": { "$ref": "#/$defs/path" },
+            "target_format": { "enum": ["marksheet", "xlsx", "csv"] },
+            "options": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "output": { "$ref": "#/$defs/path" },
+                "sheet": { "type": "string", "minLength": 1 },
+                "label": { "type": "string", "minLength": 1 },
+                "range": { "type": "string", "minLength": 1 },
+                "table": { "type": "string", "minLength": 1 },
+                "anchor": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "semantic_diff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "tool", "arguments"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "tool": { "const": "semantic_diff" },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["old_path", "new_path"],
+          "properties": {
+            "old_path": { "$ref": "#/$defs/path" },
+            "new_path": { "$ref": "#/$defs/path" }
+          }
+        }
+      }
+    }
+  }
+}

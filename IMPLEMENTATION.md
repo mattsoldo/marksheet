@@ -92,7 +92,7 @@ crates/
   marksheet-calc/       Formula profile and calculation adapter
   marksheet-edit/       Transactions and source patch generation
   marksheet-convert/    Converter interfaces and reports
-  marksheet-cli/        check, fmt, calc, diff, and convert commands
+  marksheet-cli/        check, inspect, get, set, fmt, calc, diff, and convert
 bindings/
   wasm/                 Browser and Node.js API
   python/               Python API, added after the core stabilizes
@@ -352,8 +352,8 @@ Initial commands:
 marksheet check workbook.ms
 marksheet fmt --check workbook.ms
 marksheet fmt workbook.ms
-marksheet inspect workbook.ms --json
-marksheet get workbook.ms summary!A1:B20 --json
+marksheet inspect workbook.ms
+marksheet get workbook.ms summary!A1:B20
 marksheet set workbook.ms inputs!G2 0.22
 marksheet calc workbook.ms --sheet summary --range A1:B20
 marksheet diff old.ms new.ms
@@ -693,13 +693,13 @@ sparse blocks, deep dependency chains, and wide fan-out formulas.
 
 ### Milestone 6: Coding-harness proof
 
-- stable JSON output and exit codes for CLI automation;
-- `inspect`, `get`, and source-aware `set` commands;
-- canonical portable skill with concise references and examples;
-- optional local structured-tool server;
-- thin packages for at least two coding-agent harnesses; and
-- end-to-end harness task corpus covering authoring, editing, calculation,
-  diagnosis, and conversion.
+- [x] stable versioned JSON output and exit codes for CLI automation;
+- [x] `inspect`, `get`, source-aware `set`, and table-row append commands;
+- [x] canonical portable skill with concise references and examples;
+- [x] bounded workspace-local structured-tool server;
+- [x] thin Codex and Claude Code packages referencing the canonical assets; and
+- [x] one executable seven-task corpus shared by both harness profiles,
+  covering authoring, editing, calculation, diagnosis, and conversion.
 
 ## 17. Decisions deferred by Draft 0.1
 

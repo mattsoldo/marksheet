@@ -35,10 +35,10 @@ enum SourceFormat {
     Csv,
 }
 
-struct CliParsedDocument {
-    parsed: marksheet_syntax::ParsedDocument,
-    diagnostics: Vec<Diagnostic>,
-    capabilities_complete: bool,
+pub(crate) struct CliParsedDocument {
+    pub(crate) parsed: marksheet_syntax::ParsedDocument,
+    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) capabilities_complete: bool,
 }
 
 /// Runs `marksheet convert` and emits exactly one machine-readable fidelity
@@ -457,7 +457,7 @@ pub(crate) fn check(path: &Path, format: OutputFormat) -> Result<ExitCode, CliEr
 /// The source parser intentionally retains formulas as opaque fields, so this
 /// second pass is what makes `marksheet check` reject invalid formula syntax
 /// and unresolved formula references without calculating a selected range.
-fn validate_formulas(workbook: &marksheet_model::Workbook) -> Vec<Diagnostic> {
+pub(crate) fn validate_formulas(workbook: &marksheet_model::Workbook) -> Vec<Diagnostic> {
     use marksheet_calc::CalcEngine;
 
     marksheet_calc::ReferenceCalcEngine::new()
@@ -469,16 +469,9 @@ fn validate_formulas(workbook: &marksheet_model::Workbook) -> Vec<Diagnostic> {
 /// the same registry validate every opaque instance. Keeping this in one
 /// function prevents commands from accidentally accepting a workbook under a
 /// different extension environment.
-fn parse_with_extensions(source: &[u8]) -> CliParsedDocument {
+pub(crate) fn parse_with_extensions(source: &[u8]) -> CliParsedDocument {
     let registry = marksheet_extensions::ExtensionRegistry::with_assertions();
-    let supported_extensions = registry
-        .capabilities()
-        .into_iter()
-        .map(|capability| format!("{}@{}", capability.id, capability.major))
-        .collect();
-    let options = marksheet_syntax::ParseOptions {
-        supported_extensions,
-    };
+    let options = cli_parse_options();
     let parsed = marksheet_syntax::parse_with_options(source, &options);
     let mut diagnostics = parsed.diagnostics.clone();
     let mut capabilities_complete = true;
@@ -510,7 +503,19 @@ fn parse_with_extensions(source: &[u8]) -> CliParsedDocument {
     }
 }
 
-fn sort_and_deduplicate_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
+pub(crate) fn cli_parse_options() -> marksheet_syntax::ParseOptions {
+    let registry = marksheet_extensions::ExtensionRegistry::with_assertions();
+    let supported_extensions = registry
+        .capabilities()
+        .into_iter()
+        .map(|capability| format!("{}@{}", capability.id, capability.major))
+        .collect();
+    marksheet_syntax::ParseOptions {
+        supported_extensions,
+    }
+}
+
+pub(crate) fn sort_and_deduplicate_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
     diagnostics.sort_by(|left, right| {
         diagnostic_sort_key(left)
             .cmp(&diagnostic_sort_key(right))
@@ -804,23 +809,65 @@ pub(crate) fn format(path: &Path, check: bool) -> Result<ExitCode, CliError> {
         return Ok(ExitCode::from(1));
     }
 
-    if source != formatted {
-        replace_atomically(path, &formatted)?;
+    if source != formatted && !replace_atomically_if_current(path, &formatted, &source)? {
+        crate::render::print_stderr(&format!(
+            "{} changed while canonical formatting was planned; no write performed",
+            path.display()
+        ))
+        .map_err(CliError::Render)?;
+        return Ok(ExitCode::from(1));
     }
     Ok(ExitCode::SUCCESS)
 }
 
-fn read_source(path: &Path) -> Result<Vec<u8>, CliError> {
+pub(crate) fn read_source(path: &Path) -> Result<Vec<u8>, CliError> {
     fs::read(path).map_err(|source| CliError::Read {
         path: path.to_owned(),
         source,
     })
 }
 
+/// Reads a regular source file only when it fits within `maximum_bytes`.
+///
+/// Returning `None` lets automation commands report a structured resource
+/// refusal without first retaining an oversized source in memory.
+pub(crate) fn read_source_bounded(
+    path: &Path,
+    maximum_bytes: usize,
+) -> Result<Option<Vec<u8>>, CliError> {
+    let file = fs::File::open(path).map_err(|source| CliError::Read {
+        path: path.to_owned(),
+        source,
+    })?;
+    let metadata = file.metadata().map_err(|source| CliError::Read {
+        path: path.to_owned(),
+        source,
+    })?;
+    if !metadata.is_file() {
+        return Err(CliError::NonRegularFile(path.to_owned()));
+    }
+    if metadata.len() > maximum_bytes as u64 {
+        return Ok(None);
+    }
+    let capacity = usize::try_from(metadata.len()).unwrap_or(maximum_bytes);
+    let mut contents = Vec::with_capacity(capacity);
+    file.take(maximum_bytes as u64 + 1)
+        .read_to_end(&mut contents)
+        .map_err(|source| CliError::Read {
+            path: path.to_owned(),
+            source,
+        })?;
+    if contents.len() > maximum_bytes {
+        Ok(None)
+    } else {
+        Ok(Some(contents))
+    }
+}
+
 /// Formatting replaces a directory entry, so following a symlink here would
 /// replace the link itself rather than update its target. Refuse early to make
 /// that surprising and potentially destructive behavior impossible.
-fn reject_symlink(path: &Path) -> Result<(), CliError> {
+pub(crate) fn reject_symlink(path: &Path) -> Result<(), CliError> {
     let metadata = fs::symlink_metadata(path).map_err(|source| CliError::Read {
         path: path.to_owned(),
         source,
@@ -829,6 +876,13 @@ fn reject_symlink(path: &Path) -> Result<(), CliError> {
         return Err(CliError::SymbolicLink(path.to_owned()));
     }
     Ok(())
+}
+
+/// Rechecks the exact local file snapshot immediately before a planned write.
+pub(crate) fn source_matches(path: &Path, expected: &[u8]) -> Result<bool, CliError> {
+    reject_symlink(path)?;
+    read_source_bounded(path, expected.len())
+        .map(|current| current.is_some_and(|bytes| bytes == expected))
 }
 
 fn reject_destination_symlink(path: &Path) -> Result<(), CliError> {
@@ -859,7 +913,25 @@ fn exit_for_diagnostics(diagnostics: &[marksheet_model::Diagnostic]) -> ExitCode
 /// Replaces `path` using a sibling temporary file. On filesystems where rename
 /// is atomic within a directory, observers see either the old complete source
 /// or the new complete source, never a partially written workbook.
-fn replace_atomically(path: &Path, contents: &[u8]) -> Result<(), CliError> {
+pub(crate) fn replace_atomically(path: &Path, contents: &[u8]) -> Result<(), CliError> {
+    replace_atomically_inner(path, contents, None).map(|_| ())
+}
+
+/// Atomically replaces `path` only when its current bytes still match the
+/// snapshot against which `contents` was planned.
+pub(crate) fn replace_atomically_if_current(
+    path: &Path,
+    contents: &[u8],
+    expected: &[u8],
+) -> Result<bool, CliError> {
+    replace_atomically_inner(path, contents, Some(expected))
+}
+
+fn replace_atomically_inner(
+    path: &Path,
+    contents: &[u8],
+    expected: Option<&[u8]>,
+) -> Result<bool, CliError> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -890,6 +962,20 @@ fn replace_atomically(path: &Path, contents: &[u8]) -> Result<(), CliError> {
         });
     }
 
+    if let Some(expected) = expected {
+        match source_matches(path, expected) {
+            Ok(true) => {}
+            Ok(false) => {
+                let _ = fs::remove_file(&temporary);
+                return Ok(false);
+            }
+            Err(error) => {
+                let _ = fs::remove_file(&temporary);
+                return Err(error);
+            }
+        }
+    }
+
     if let Err(source) = fs::rename(&temporary, path) {
         let _ = fs::remove_file(&temporary);
         return Err(CliError::Write {
@@ -897,7 +983,7 @@ fn replace_atomically(path: &Path, contents: &[u8]) -> Result<(), CliError> {
             source,
         });
     }
-    Ok(())
+    Ok(true)
 }
 
 fn create_temporary_file(
@@ -943,6 +1029,7 @@ pub(crate) enum CliError {
     },
     InvalidOutputPath(PathBuf),
     TemporaryPath(PathBuf),
+    NonRegularFile(PathBuf),
     SymbolicLink(PathBuf),
     OutputSymbolicLink(PathBuf),
     OutputEqualsInput(PathBuf),
@@ -974,6 +1061,9 @@ impl fmt::Display for CliError {
                 "could not allocate a temporary formatting file in {}",
                 path.display()
             ),
+            Self::NonRegularFile(path) => {
+                write!(formatter, "{} is not a regular file", path.display())
+            }
             Self::SymbolicLink(path) => write!(
                 formatter,
                 "refusing to format symbolic link {}; format the target directly",
@@ -1004,3 +1094,30 @@ impl fmt::Display for CliError {
 }
 
 impl std::error::Error for CliError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expected_source_guard_refuses_stale_atomic_replacement() {
+        let directory =
+            std::env::temp_dir().join(format!("marksheet-atomic-guard-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir(&directory).expect("create test directory");
+        let path = directory.join("workbook.ms");
+        fs::write(&path, b"current").expect("write current source");
+
+        assert!(
+            !replace_atomically_if_current(&path, b"replacement", b"stale")
+                .expect("stale replacement is a normal refusal")
+        );
+        assert_eq!(fs::read(&path).expect("read refused source"), b"current");
+        assert!(
+            replace_atomically_if_current(&path, b"replacement", b"current")
+                .expect("matching replacement succeeds")
+        );
+        assert_eq!(fs::read(&path).expect("read replacement"), b"replacement");
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
+}

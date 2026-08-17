@@ -2,4 +2,5 @@ target/
 bindings/wasm/pkg/
 node_modules/
 .claude/
+__pycache__/
 .DS_Store

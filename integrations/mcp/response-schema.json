@@ -1,0 +1,384 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://marksheet.dev/schema/automation-responses-1.json",
+  "title": "Marksheet automation response envelopes",
+  "oneOf": [
+    { "$ref": "#/$defs/check" },
+    { "$ref": "#/$defs/inspect" },
+    { "$ref": "#/$defs/get" },
+    { "$ref": "#/$defs/edit" },
+    { "$ref": "#/$defs/format" },
+    { "$ref": "#/$defs/tool" }
+  ],
+  "$defs": {
+    "status": { "enum": ["ok", "invalid", "committed_invalid"] },
+    "profile": { "const": "portable-a1@1" },
+    "diagnostic": {
+      "type": "object",
+      "required": ["code", "severity", "message"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^MS[0-9]{4}$" },
+        "severity": { "enum": ["error", "warning", "info"] },
+        "message": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/diagnostic" }
+    },
+    "error": {
+      "type": ["object", "null"],
+      "required": ["kind", "message"],
+      "properties": {
+        "kind": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "source_version": {
+      "type": "object",
+      "required": ["byte_length", "fnv1a64"],
+      "properties": {
+        "byte_length": { "type": "integer", "minimum": 0 },
+        "fnv1a64": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{16}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "patch": {
+      "type": "object",
+      "required": ["start", "end", "replacement"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 },
+        "replacement": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "cell_error": {
+      "enum": ["#CIRC!", "#DIV/0!", "#N/A", "#NAME?", "#NUM!", "#REF!", "#VALUE!"]
+    },
+    "scalar_value": {
+      "oneOf": [
+        { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "blank" } }, "additionalProperties": false },
+        { "type": "object", "required": ["kind", "value"], "properties": { "kind": { "const": "boolean" }, "value": { "type": "boolean" } }, "additionalProperties": false },
+        { "type": "object", "required": ["kind", "value"], "properties": { "kind": { "const": "date" }, "value": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["kind", "value"], "properties": { "kind": { "const": "date_time" }, "value": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["kind", "value"], "properties": { "kind": { "const": "error" }, "value": { "$ref": "#/$defs/cell_error" } }, "additionalProperties": false },
+        { "type": "object", "required": ["kind", "value"], "properties": { "kind": { "const": "number" }, "value": { "type": "number" } }, "additionalProperties": false },
+        { "type": "object", "required": ["kind", "value"], "properties": { "kind": { "const": "text" }, "value": { "type": "string" } }, "additionalProperties": false }
+      ]
+    },
+    "source_value": {
+      "oneOf": [
+        { "$ref": "#/$defs/scalar_value" },
+        { "type": "object", "required": ["kind", "value"], "properties": { "kind": { "const": "formula" }, "value": { "type": "string", "pattern": "^=" } }, "additionalProperties": false }
+      ]
+    },
+    "resolved_target": {
+      "type": "object",
+      "required": ["kind", "id", "sheet", "range"],
+      "properties": {
+        "kind": { "enum": ["range", "name", "table"] },
+        "id": { "type": ["string", "null"] },
+        "sheet": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "range": { "type": "string", "pattern": "^[A-Z]+[1-9][0-9]*(?::[A-Z]+[1-9][0-9]*)?$" }
+      },
+      "additionalProperties": false
+    },
+    "inspect_table": {
+      "type": "object",
+      "required": ["id", "range", "headers", "data_range"],
+      "properties": {
+        "id": { "type": "string" },
+        "range": { "type": ["string", "null"] },
+        "headers": { "type": "array", "items": { "type": "string" } },
+        "data_range": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "inspect_sheet": {
+      "type": "object",
+      "required": ["id", "label", "authored_cell_count", "virtual_cell_count", "fill_count", "tables"],
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "authored_cell_count": { "type": "integer", "minimum": 0 },
+        "virtual_cell_count": { "type": "integer", "minimum": 0 },
+        "fill_count": { "type": "integer", "minimum": 0 },
+        "tables": { "type": "array", "items": { "$ref": "#/$defs/inspect_table" } }
+      },
+      "additionalProperties": false
+    },
+    "inspect_name_target": {
+      "oneOf": [
+        { "type": "object", "required": ["kind", "sheet", "coordinate"], "properties": { "kind": { "const": "cell" }, "sheet": { "type": "string" }, "coordinate": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["kind", "sheet", "range"], "properties": { "kind": { "const": "range" }, "sheet": { "type": "string" }, "range": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["kind", "table", "header"], "properties": { "kind": { "const": "table_column" }, "table": { "type": "string" }, "header": { "type": "string" } }, "additionalProperties": false }
+      ]
+    },
+    "inspect_workbook": {
+      "type": "object",
+      "required": ["settings", "sheets", "names", "extensions", "extension_instances"],
+      "properties": {
+        "settings": {
+          "type": "object",
+          "required": ["locale", "timezone", "formula_profile"],
+          "properties": {
+            "locale": { "type": "string" },
+            "timezone": { "type": "string" },
+            "formula_profile": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "sheets": { "type": "array", "items": { "$ref": "#/$defs/inspect_sheet" } },
+        "names": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "target", "resolved"],
+            "properties": {
+              "id": { "type": "string" },
+              "target": { "$ref": "#/$defs/inspect_name_target" },
+              "resolved": {
+                "type": ["object", "null"],
+                "required": ["sheet", "range"],
+                "properties": { "sheet": { "type": "string" }, "range": { "type": "string" } },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "extensions": {
+          "type": "array",
+          "items": { "type": "object", "required": ["id", "required"], "properties": { "id": { "type": "string" }, "required": { "type": "boolean" } }, "additionalProperties": false }
+        },
+        "extension_instances": {
+          "type": "array",
+          "items": { "type": "object", "required": ["id", "scope", "name"], "properties": { "id": { "type": "string" }, "scope": { "type": "string" }, "name": { "type": "string" } }, "additionalProperties": false }
+        }
+      },
+      "additionalProperties": false
+    },
+    "check": {
+      "type": "object",
+      "required": ["version", "profile", "status", "diagnostics"],
+      "properties": {
+        "version": { "const": "marksheet-check@1" },
+        "profile": { "$ref": "#/$defs/profile" },
+        "status": { "enum": ["ok", "invalid"] },
+        "diagnostics": { "$ref": "#/$defs/diagnostics" }
+      },
+      "additionalProperties": false
+    },
+    "inspect": {
+      "type": "object",
+      "required": ["version", "profile", "status", "source", "workbook", "diagnostics", "error"],
+      "properties": {
+        "version": { "const": "marksheet-inspect@1" },
+        "profile": { "$ref": "#/$defs/profile" },
+        "status": { "enum": ["ok", "invalid"] },
+        "source": { "$ref": "#/$defs/source_version" },
+        "workbook": { "anyOf": [{ "$ref": "#/$defs/inspect_workbook" }, { "type": "null" }] },
+        "diagnostics": { "$ref": "#/$defs/diagnostics" },
+        "error": { "$ref": "#/$defs/error" }
+      },
+      "additionalProperties": false
+    },
+    "get": {
+      "type": "object",
+      "required": ["version", "profile", "status", "requested_target", "target", "calculated", "cells", "diagnostics", "error"],
+      "properties": {
+        "version": { "const": "marksheet-get@1" },
+        "profile": { "$ref": "#/$defs/profile" },
+        "status": { "enum": ["ok", "invalid"] },
+        "requested_target": { "type": "string" },
+        "target": { "anyOf": [{ "$ref": "#/$defs/resolved_target" }, { "type": "null" }] },
+        "calculated": { "type": "boolean" },
+        "cells": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["coordinate", "source", "authored", "virtual_formula", "calculated"],
+            "properties": {
+              "coordinate": { "type": "string" },
+              "source": { "enum": ["authored", "virtual", "absent"] },
+              "authored": { "anyOf": [{ "$ref": "#/$defs/source_value" }, { "type": "null" }] },
+              "virtual_formula": { "type": ["string", "null"] },
+              "calculated": { "anyOf": [{ "$ref": "#/$defs/scalar_value" }, { "type": "null" }] }
+            },
+            "additionalProperties": false
+          }
+        },
+        "diagnostics": { "$ref": "#/$defs/diagnostics" },
+        "error": { "$ref": "#/$defs/error" }
+      },
+      "additionalProperties": false
+    },
+    "edit": {
+      "type": "object",
+      "required": ["version", "profile", "status", "operation", "target", "changed", "valid", "before", "after", "patches", "diagnostics", "error"],
+      "properties": {
+        "version": { "const": "marksheet-edit@1" },
+        "profile": { "$ref": "#/$defs/profile" },
+        "status": { "$ref": "#/$defs/status" },
+        "operation": { "enum": ["set_cell", "append_table_row"] },
+        "target": { "type": "string" },
+        "changed": { "type": "boolean" },
+        "valid": { "type": "boolean" },
+        "before": { "$ref": "#/$defs/source_version" },
+        "after": { "$ref": "#/$defs/source_version" },
+        "patches": { "type": "array", "items": { "$ref": "#/$defs/patch" } },
+        "diagnostics": { "$ref": "#/$defs/diagnostics" },
+        "error": { "$ref": "#/$defs/error" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status": { "const": "ok" } },
+            "required": ["status"]
+          },
+          "then": { "properties": { "valid": { "const": true } } }
+        },
+        {
+          "if": {
+            "properties": { "status": { "const": "committed_invalid" } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "changed": { "const": true },
+              "valid": { "const": false },
+              "patches": { "minItems": 1 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "status": { "const": "invalid" } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "changed": { "const": false },
+              "valid": { "const": false },
+              "patches": { "maxItems": 0 }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "format": {
+      "type": "object",
+      "required": ["version", "profile", "status", "check_only", "changed", "would_change", "valid", "before", "after", "proposed", "patches", "diagnostics", "error"],
+      "properties": {
+        "version": { "const": "marksheet-format@1" },
+        "profile": { "$ref": "#/$defs/profile" },
+        "status": { "enum": ["ok", "needs_format", "invalid", "conflict"] },
+        "check_only": { "type": "boolean" },
+        "changed": { "type": "boolean" },
+        "would_change": { "type": "boolean" },
+        "valid": { "type": "boolean" },
+        "before": { "$ref": "#/$defs/source_version" },
+        "after": { "$ref": "#/$defs/source_version" },
+        "proposed": { "anyOf": [{ "$ref": "#/$defs/source_version" }, { "type": "null" }] },
+        "patches": { "type": "array", "items": { "$ref": "#/$defs/patch" } },
+        "diagnostics": { "$ref": "#/$defs/diagnostics" },
+        "error": { "$ref": "#/$defs/error" }
+      },
+      "additionalProperties": false
+    },
+    "tool": {
+      "type": "object",
+      "required": ["version", "id", "ok", "status", "exit_code", "result", "stderr"],
+      "properties": {
+        "version": { "const": "marksheet-tools@1" },
+        "id": {
+          "anyOf": [
+            { "type": "string" },
+            { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+            { "type": "null" }
+          ]
+        },
+        "ok": { "type": "boolean" },
+        "status": { "enum": ["ok", "rejected", "committed_invalid", "error"] },
+        "exit_code": { "type": "integer", "minimum": 0 },
+        "result": {},
+        "stderr": { "type": "string" },
+        "error": { "$ref": "#/$defs/error" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "result": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "enum": ["marksheet-check@1", "marksheet-inspect@1", "marksheet-get@1", "marksheet-edit@1", "marksheet-format@1"]
+                  }
+                },
+                "required": ["version"]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "oneOf": [
+                  { "$ref": "#/$defs/check" },
+                  { "$ref": "#/$defs/inspect" },
+                  { "$ref": "#/$defs/get" },
+                  { "$ref": "#/$defs/edit" },
+                  { "$ref": "#/$defs/format" }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "ok" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "ok": { "const": true },
+              "exit_code": { "const": 0 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "committed_invalid" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "ok": { "const": true },
+              "exit_code": { "const": 1 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "rejected" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "ok": { "const": false },
+              "exit_code": { "const": 1 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "error" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "ok": { "const": false },
+              "exit_code": { "minimum": 2 }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    }
+  }
+}
