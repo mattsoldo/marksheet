@@ -264,7 +264,17 @@ class MarksheetProjection:
         for line in self.lines:
             if offset < line.end:
                 return line
-        return self.lines[-1] if self.lines else PhysicalLine(0, 0, 0, "none")
+        # `physical_lines` deliberately stops retaining structure after its
+        # line cap. Encoding diagnostics still need to identify a later
+        # offending byte, so derive that one line without materializing the
+        # discarded suffix.
+        start = self.data.rfind(b"\n", 0, offset) + 1
+        line_feed = self.data.find(b"\n", offset)
+        if line_feed == -1:
+            return PhysicalLine(start, len(self.data), len(self.data), "none")
+        if line_feed > start and self.data[line_feed - 1] == 0x0D:
+            return PhysicalLine(start, line_feed - 1, line_feed + 1, "crlf")
+        return PhysicalLine(start, line_feed, line_feed + 1, "lf")
 
     def decode(self) -> bool:
         # Encoding faults are their own diagnostic classes: `MS1002` for a
