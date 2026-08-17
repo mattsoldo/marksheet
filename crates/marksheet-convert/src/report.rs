@@ -318,6 +318,68 @@ impl ConversionReport {
             self.exact_event(outcome);
         }
     }
+    /// Withdraws the outcomes already recorded for one feature at the locations
+    /// `covers` accepts, together with the lossy diagnostics they raised.
+    ///
+    /// Outcomes are otherwise append-only: each records an independent decision
+    /// in source traversal order. A converter that only learns later that an
+    /// earlier decision no longer holds — a formula it first translated, then
+    /// had to replace once a defined name turned out to be unimportable — has
+    /// to retract the superseded claim before recording the new one. Leaving
+    /// both would make the finalized report state two contradictory outcomes
+    /// for the same feature and location, and `finish` sorts `Exact` ahead of
+    /// `Approximated`, so a consumer reading the first outcome recorded for a
+    /// location would read the stale claim rather than the true one.
+    pub(crate) fn retract(
+        &mut self,
+        feature: ConversionFeature,
+        covers: impl Fn(&ConversionLocation) -> bool,
+    ) {
+        let feature = String::from(feature);
+        let superseded = |event: &ConversionEvent| {
+            event.feature == feature
+                && !event.locations.is_empty()
+                && event.locations.iter().all(&covers)
+        };
+        let mut retracted = Vec::new();
+        self.outcomes.retain(|event| {
+            if superseded(event) {
+                retracted.push((event.detail.clone(), event.locations.clone()));
+                false
+            } else {
+                true
+            }
+        });
+        if retracted.is_empty() {
+            return;
+        }
+        self.diagnostics.retain(|diagnostic| {
+            diagnostic.code != "MS4102"
+                || !retracted.iter().any(|(detail, locations)| {
+                    detail.as_deref() == Some(diagnostic.message.as_str())
+                        && *locations == diagnostic.locations
+                })
+        });
+        self.recompute_fidelity();
+    }
+    /// Rederives fidelity from the surviving outcomes. Fidelity is evidence,
+    /// never independent state, so retracting the only lossy outcome has to
+    /// restore `Lossless` rather than leave the report claiming a loss it can
+    /// no longer point at.
+    fn recompute_fidelity(&mut self) {
+        if matches!(self.fidelity, Fidelity::Unsupported) {
+            return;
+        }
+        self.fidelity = if self
+            .outcomes
+            .iter()
+            .all(|event| matches!(event.outcome, FeatureOutcome::Exact))
+        {
+            Fidelity::Lossless
+        } else {
+            Fidelity::Lossy
+        };
+    }
     /// Applies the protocol's canonical ordering before a report crosses a
     /// crate boundary. Locations sort first using their semantic values (not
     /// their JSON spellings), followed by feature/code and outcome/severity,
@@ -859,6 +921,88 @@ mod tests {
             })
             .collect();
         assert_eq!(locations, ["bytes:2-3", "bytes:10-11"]);
+    }
+
+    #[test]
+    fn retraction_removes_only_the_superseded_claim() {
+        let sheet = SheetId::parse("summary").unwrap();
+        let target = ConversionLocation::cell(sheet.clone(), Coordinate::parse("A3").unwrap());
+        let neighbor = ConversionLocation::cell(sheet, Coordinate::parse("A4").unwrap());
+        let mut report =
+            ConversionReport::new(FormatDescriptor::xlsx(), FormatDescriptor::marksheet_ir());
+        report.exact_event(
+            ConversionEvent::new(ConversionFeature::Formula, "translated")
+                .at(target.clone())
+                .formula(FormulaDisposition::Translated),
+        );
+        report.exact_event(
+            ConversionEvent::new(ConversionFeature::Cell, "cell imported").at(target.clone()),
+        );
+        report.exact_event(
+            ConversionEvent::new(ConversionFeature::Formula, "translated").at(neighbor),
+        );
+
+        report.retract(ConversionFeature::Formula, |location| *location == target);
+
+        let surviving: Vec<_> = report
+            .outcomes()
+            .iter()
+            .map(|event| (event.feature.as_str(), event.locations.len()))
+            .collect();
+        assert_eq!(
+            surviving,
+            [("scalar_cells", 1), ("portable_formulas", 1)],
+            "{:?}",
+            report.outcomes()
+        );
+    }
+
+    #[test]
+    fn retracting_the_only_lossy_outcome_restores_lossless_fidelity() {
+        let location = ConversionLocation::source("bytes:0-1");
+        let mut report =
+            ConversionReport::new(FormatDescriptor::xlsx(), FormatDescriptor::marksheet_ir());
+        report.approximate(
+            ConversionEvent::new(ConversionFeature::Formula, "approximated")
+                .at(location.clone())
+                .formula(FormulaDisposition::Replaced),
+        );
+        assert_eq!(report.fidelity(), Fidelity::Lossy);
+
+        report.retract(ConversionFeature::Formula, |candidate| {
+            *candidate == location
+        });
+
+        assert_eq!(report.fidelity(), Fidelity::Lossless);
+        assert!(report.outcomes().is_empty());
+        assert!(
+            report.diagnostics().is_empty(),
+            "{:?}",
+            report.diagnostics()
+        );
+    }
+
+    /// An unrelated diagnostic that happens to carry the same message must
+    /// survive: retraction withdraws one claim, not a whole message class.
+    #[test]
+    fn retraction_keeps_diagnostics_it_did_not_raise() {
+        let sheet = SheetId::parse("summary").unwrap();
+        let target = ConversionLocation::cell(sheet.clone(), Coordinate::parse("A3").unwrap());
+        let neighbor = ConversionLocation::cell(sheet, Coordinate::parse("A4").unwrap());
+        let mut report =
+            ConversionReport::new(FormatDescriptor::xlsx(), FormatDescriptor::marksheet_ir());
+        report.approximate(
+            ConversionEvent::new(ConversionFeature::Formula, "same detail").at(target.clone()),
+        );
+        report.approximate(
+            ConversionEvent::new(ConversionFeature::Formula, "same detail").at(neighbor.clone()),
+        );
+
+        report.retract(ConversionFeature::Formula, |candidate| *candidate == target);
+
+        assert_eq!(report.diagnostics().len(), 1);
+        assert_eq!(report.diagnostics()[0].locations, [neighbor]);
+        assert_eq!(report.fidelity(), Fidelity::Lossy);
     }
 
     #[test]
