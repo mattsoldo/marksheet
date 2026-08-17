@@ -78,6 +78,20 @@ class PhysicalLine:
         }
 
 
+@dataclass(frozen=True)
+class Token:
+    """A directive argument plus whether the source spelled it as a JSON string.
+
+    Several grammar positions (identifiers, A1 anchors, ranges, the `csv`
+    encoding keyword, and `width=`/`height=` values) are spelled bare.  A JSON
+    string that happens to decode to the same characters is a different
+    spelling and must be rejected, so the decoded text alone is not enough.
+    """
+
+    text: str
+    quoted: bool
+
+
 @dataclass
 class Diagnostic:
     code: str
@@ -258,13 +272,34 @@ class MarksheetProjection:
             self.diagnostic("MS1301", line)
             self._duplicate_declaration_reported = True
 
+    def line_at(self, offset: int) -> PhysicalLine:
+        """Return the physical line owning a byte offset."""
+
+        for line in self.lines:
+            if offset < line.end:
+                return line
+        # `physical_lines` deliberately stops retaining structure after its
+        # line cap. Encoding diagnostics still need to identify a later
+        # offending byte, so derive that one line without materializing the
+        # discarded suffix.
+        start = self.data.rfind(b"\n", 0, offset) + 1
+        line_feed = self.data.find(b"\n", offset)
+        if line_feed == -1:
+            return PhysicalLine(start, len(self.data), len(self.data), "none")
+        if line_feed > start and self.data[line_feed - 1] == 0x0D:
+            return PhysicalLine(start, line_feed - 1, line_feed + 1, "crlf")
+        return PhysicalLine(start, line_feed, line_feed + 1, "lf")
+
     def decode(self) -> bool:
+        # Encoding faults are their own diagnostic classes: `MS1002` for a
+        # byte-order mark and `MS1003` for invalid UTF-8, reported over the
+        # offending line's content like every other line-scoped diagnostic.
         if self.data.startswith(b"\xef\xbb\xbf"):
-            self.diagnostics.append(Diagnostic("MS1001", "error", 0, 3))
+            self.diagnostic("MS1002", self.line_at(0))
         try:
             self.data.decode("utf-8")
         except UnicodeDecodeError as error:
-            self.diagnostics.append(Diagnostic("MS1001", "error", error.start, error.end))
+            self.diagnostic("MS1003", self.line_at(error.start))
             return False
         self.text_lines = [self.data[line.start:line.content_end].decode("utf-8") for line in self.lines]
         return True
@@ -346,12 +381,16 @@ class MarksheetProjection:
             return "", text[1:]
         return match.group(1), match.group(2) or ""
 
-    def _tokens(self, value: str, line: PhysicalLine) -> list[Any] | None:
-        """Tokenize a directive tail, decoding JSON strings without regex shortcuts."""
+    def _tokens(self, value: str, line: PhysicalLine) -> list[Token] | None:
+        """Tokenize a directive tail, decoding JSON strings without regex shortcuts.
+
+        Each token keeps its source spelling flag so call sites whose grammar
+        requires a bare token can reject an equivalent JSON string.
+        """
         if len(value.encode("utf-8")) > MAX_DIRECTIVE_BYTES:
             self.diagnostic(STRUCTURAL_LIMIT_CODE, line)
             return None
-        tokens: list[Any] = []
+        tokens: list[Token] = []
         index = 0
         while index < len(value):
             while index < len(value) and value[index] in " \t":
@@ -368,7 +407,7 @@ class MarksheetProjection:
                 if not isinstance(token, str):
                     self.diagnostic("MS1101", line)
                     return None
-                tokens.append(token)
+                tokens.append(Token(token, True))
                 if len(token.encode("utf-8")) > MAX_TOKEN_BYTES or len(tokens) > MAX_TOKENS_PER_DIRECTIVE:
                     self.diagnostic(STRUCTURAL_LIMIT_CODE, line)
                     return None
@@ -377,7 +416,7 @@ class MarksheetProjection:
             end = index
             while end < len(value) and value[end] not in " \t":
                 end += 1
-            tokens.append(value[index:end])
+            tokens.append(Token(value[index:end], False))
             if end - index > MAX_TOKEN_BYTES or len(tokens) > MAX_TOKENS_PER_DIRECTIVE:
                 self.diagnostic(STRUCTURAL_LIMIT_CODE, line)
                 return None
@@ -480,17 +519,19 @@ class MarksheetProjection:
             return
         if directive == "sheet":
             tokens = self._tokens(remainder, line)
-            if tokens is None or len(tokens) != 2 or not isinstance(tokens[1], str):
+            if tokens is None or len(tokens) != 2:
                 self.diagnostic("MS1101", line)
                 return
-            identifier = tokens[0]
-            if not isinstance(identifier, str) or not IDENTIFIER.fullmatch(identifier):
+            # The sheet identifier is a bare identifier; only the label is a
+            # JSON string.
+            if tokens[0].quoted or not IDENTIFIER.fullmatch(tokens[0].text):
                 self.diagnostic("MS1201", line)
                 return
+            identifier = tokens[0].text
             if identifier in self._sheet_ids:
                 self.duplicate_declaration(line)
                 return
-            sheet = {"id": identifier, "label": tokens[1], "span": span_of_line(line), "items": []}
+            sheet = {"id": identifier, "label": tokens[1].text, "span": span_of_line(line), "items": []}
             self._sheet_ids[identifier] = sheet
             self.workbook["sheets"].append(sheet)
             self._current_sheet = sheet
@@ -540,10 +581,15 @@ class MarksheetProjection:
                 self.diagnostic("MS1101", line)
                 return
             tokens = self._tokens(remainder, line)
-            if tokens is None or len(tokens) != 1 or not isinstance(tokens[0], str):
+            if tokens is None or len(tokens) != 1:
                 self.diagnostic("MS1101", line)
                 return
-            capability = tokens[0]
+            # `@use`/`@require` spell the capability bare, so a JSON string is
+            # rejected before the capability grammar is consulted.
+            if tokens[0].quoted:
+                self.diagnostic("MS1201", line)
+                return
+            capability = tokens[0].text
             match = EXTENSION_ID.fullmatch(capability)
             if not match or not valid_extension_id(capability):
                 self.diagnostic("MS1101", line)
@@ -633,16 +679,42 @@ class MarksheetProjection:
             return {"kind": "fill", "target": match.group(1), "formula": match.group(2), "span": span_of_line(line)}
         if directive == "apply":
             tokens = self._tokens(remainder, line)
-            if tokens is None or len(tokens) < 2 or not all(isinstance(token, str) for token in tokens):
+            if tokens is None or len(tokens) < 2:
                 self.diagnostic("MS1101", line)
                 return None
-            return {"kind": "apply", "target": tokens[0], "styles": tokens[1:], "span": span_of_line(line)}
+            styles: list[str] = []
+            for token in tokens[1:]:
+                # Style identifiers are bare; a quoted spelling is reported and
+                # dropped so the remaining list still applies.
+                if token.quoted:
+                    self.diagnostic("MS1201", line)
+                    continue
+                styles.append(token.text)
+            return {"kind": "apply", "target": tokens[0].text, "styles": styles, "span": span_of_line(line)}
         if directive in {"column", "row"}:
-            match = re.fullmatch(r"(\S+)[ \t]+(width|height)=(\S+)", remainder)
-            if not match or (directive == "column" and match.group(2) != "width") or (directive == "row" and match.group(2) != "height"):
+            tokens = self._tokens(remainder, line)
+            if tokens is None:
+                return None
+            if len(tokens) != 2:
                 self.diagnostic("MS1101", line)
                 return None
-            target, _, raw_value = match.groups()
+            range_token, value_token = tokens
+            # Both the range and the `width=`/`height=` value are bare tokens.
+            if range_token.quoted:
+                self.diagnostic("MS1202", line)
+                return None
+            range_value = self._parse_geometry_target(directive, range_token.text)
+            if range_value is None:
+                self.diagnostic("MS1202", line)
+                return None
+            if value_token.quoted:
+                self.diagnostic("MS2201", line)
+                return None
+            prefix = "width=" if directive == "column" else "height="
+            if not value_token.text.startswith(prefix):
+                self.diagnostic("MS2201", line)
+                return None
+            raw_value = value_token.text[len(prefix):]
             if len(raw_value) > MAX_TOKEN_BYTES:
                 self.diagnostic(STRUCTURAL_LIMIT_CODE, line)
                 return None
@@ -652,10 +724,6 @@ class MarksheetProjection:
                 value = float("nan")
             if not math.isfinite(value) or value <= 0 or not NUMBER.fullmatch(raw_value):
                 self.diagnostic("MS2201", line)
-                return None
-            range_value = self._parse_geometry_target(directive, target)
-            if range_value is None:
-                self.diagnostic("MS1202", line)
                 return None
             return {"kind": directive, "range": range_value, "value": raw_value, "span": span_of_line(line)}
         raise AssertionError(directive)
@@ -693,21 +761,35 @@ class MarksheetProjection:
         line = self.lines[line_index]
         tokens = self._tokens(remainder, line)
         expected = 2 if directive == "block" else 3
-        if tokens is None or len(tokens) != expected or not all(isinstance(token, str) for token in tokens) or tokens[-1] != "csv":
+        if tokens is None or len(tokens) != expected:
+            self.diagnostic("MS1101", line)
+            return line_index + 1
+        # The encoding keyword is the bare literal `csv`; a JSON string that
+        # decodes to `csv` is a different spelling. Recovery still skips the
+        # block body so its CSV lines are not read as directives.
+        if tokens[-1].quoted:
+            self.diagnostic("MS1101", line)
+            end_index, _, _ = self._find_csv_end(line_index + 1)
+            return len(self.lines) if end_index is None else end_index + 1
+        if tokens[-1].text != "csv":
             self.diagnostic("MS1101", line)
             return line_index + 1
         if self._current_sheet is None:
             self.diagnostic("MS1101", line)
             return line_index + 1
-        table_id: str | None = tokens[0] if directive == "table" else None
-        anchor_text = tokens[-2]
-        anchor = parse_cell(anchor_text)
+        anchor_token = tokens[-2]
+        if anchor_token.quoted:
+            self.diagnostic("MS1202", line)
+            end_index, _, _ = self._find_csv_end(line_index + 1)
+            return len(self.lines) if end_index is None else end_index + 1
+        table_id: str | None = tokens[0].text if directive == "table" else None
+        anchor = parse_cell(anchor_token.text)
         if anchor is None:
             self.diagnostic("MS1202", line)
             end_index, _, _ = self._find_csv_end(line_index + 1)
             return len(self.lines) if end_index is None else end_index + 1
         if table_id is not None:
-            if not IDENTIFIER.fullmatch(table_id):
+            if tokens[0].quoted or not IDENTIFIER.fullmatch(table_id):
                 self.diagnostic("MS1201", line)
                 end_index, _, _ = self._find_csv_end(line_index + 1)
                 return len(self.lines) if end_index is None else end_index + 1
@@ -960,7 +1042,14 @@ class MarksheetProjection:
     def _parse_extension(self, remainder: str, line_index: int) -> int:
         line = self.lines[line_index]
         tokens = self._tokens(remainder, line)
-        if tokens is None or len(tokens) != 2 or not all(isinstance(token, str) for token in tokens) or not valid_extension_id(tokens[0]):
+        if tokens is None or len(tokens) != 2:
+            self.diagnostic("MS1101", line)
+            return line_index + 1
+        # `@extension <capability> "<name>"` spells the capability bare.
+        if tokens[0].quoted:
+            self.diagnostic("MS1201", line)
+            return line_index + 1
+        if not valid_extension_id(tokens[0].text):
             self.diagnostic("MS1101", line)
             return line_index + 1
         end_index = line_index + 1
@@ -974,8 +1063,8 @@ class MarksheetProjection:
         payload = self.data[payload_start:payload_end]
         scope = "workbook" if self._current_sheet is None else self._current_sheet["id"]
         item = {
-            "id": tokens[0],
-            "name": tokens[1],
+            "id": tokens[0].text,
+            "name": tokens[1].text,
             "scope": scope,
             "span": span_of_line(line),
             "payload": {"span": [payload_start, payload_end], "byte_length": len(payload), "sha256": hashlib.sha256(payload).hexdigest()},

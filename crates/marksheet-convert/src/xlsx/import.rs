@@ -21,7 +21,10 @@ use crate::{
 
 use super::{
     package::{Package, relationships_part},
-    xml::{attribute, invalid, local_name, required_attribute, resource, xlsx_location},
+    xml::{
+        attribute, invalid, is_xml_character, local_name, required_attribute, resource,
+        xlsx_location,
+    },
 };
 
 #[derive(Clone, Debug)]
@@ -131,7 +134,7 @@ fn import_xlsx_inner(
     limits: ConversionLimits,
 ) -> Result<Conversion<Workbook>, ConvertError> {
     let package = Package::open(bytes, limits)?;
-    let mut workbook_info = parse_workbook(package.part("xl/workbook.xml")?, limits)?;
+    let mut workbook_info = parse_workbook(package.xml_part("xl/workbook.xml", limits)?, limits)?;
     if workbook_info.sheets.is_empty() {
         return Err(invalid("xl/workbook.xml", "workbook contains no sheets"));
     }
@@ -181,7 +184,7 @@ fn import_xlsx_inner(
     let styles_part_name = styles_part.unwrap_or("xl/styles.xml");
     let style_definitions = if let Some(part) = styles_part {
         consumed_parts.insert(part.to_owned());
-        let parsed = parse_styles(package.part(part)?, part, limits)?;
+        let parsed = parse_styles(package.xml_part(part, limits)?, part, limits)?;
         record_consumed_part_omissions(part, parsed.unsupported, &mut report);
         record_dropped_number_formats(part, &parsed.dropped_number_formats, &mut report);
         parsed.definitions
@@ -212,7 +215,8 @@ fn import_xlsx_inner(
     }
     let shared_strings = if let Some(part) = shared_part {
         consumed_parts.insert(part.to_owned());
-        let (strings, unsupported) = parse_shared_strings(package.part(part)?, part, limits)?;
+        let (strings, unsupported) =
+            parse_shared_strings(package.xml_part(part, limits)?, part, limits)?;
         record_consumed_part_omissions(part, unsupported, &mut report);
         strings
     } else {
@@ -264,8 +268,12 @@ fn import_xlsx_inner(
             date_1904: workbook_info.date_1904,
             limits,
         };
-        let mut worksheet =
-            parse_worksheet(package.part(sheet_part)?, sheet_part, &context, &mut report)?;
+        let mut worksheet = parse_worksheet(
+            package.xml_part(sheet_part, limits)?,
+            sheet_part,
+            &context,
+            &mut report,
+        )?;
         total_formulas = total_formulas
             .checked_add(worksheet.formula_count)
             .ok_or_else(|| resource(sheet_part, "workbook formula count overflow"))?;
@@ -313,7 +321,7 @@ fn import_xlsx_inner(
                 ));
             }
             let table = parse_table(
-                package.part(&relationship.target)?,
+                package.xml_part(&relationship.target, limits)?,
                 &relationship.target,
                 limits,
             )?;
@@ -714,6 +722,9 @@ fn parse_workbook(bytes: &[u8], limits: ConversionLimits) -> Result<WorkbookInfo
             Ok(Event::Text(text)) if current_name.is_some() => {
                 append_text(&mut name_text, &text, part, limits)?;
             }
+            Ok(Event::GeneralRef(reference)) if current_name.is_some() => {
+                append_reference(&mut name_text, &reference, part, limits)?;
+            }
             Ok(Event::End(element)) if local_name(element.name().as_ref()) == b"definedName" => {
                 let name = current_name
                     .take()
@@ -826,6 +837,11 @@ fn parse_shared_strings(
             Ok(Event::Text(text)) if inside_text => {
                 if let Some(current) = &mut current {
                     append_text(current, &text, part, limits)?;
+                }
+            }
+            Ok(Event::GeneralRef(reference)) if inside_text => {
+                if let Some(current) = &mut current {
+                    append_reference(current, &reference, part, limits)?;
                 }
             }
             Ok(Event::End(element)) if local_name(element.name().as_ref()) == b"t" => {
@@ -1658,14 +1674,20 @@ fn apply_number_format(style: &mut StyleProperties, id: u32, custom: Option<&Str
             let lowercase = code.to_ascii_lowercase();
             if lowercase.contains('%') {
                 style.number = Some(NumberFormat::Percent);
-                style.decimals = Some(fraction_digits(&lowercase));
+                style.decimals = fraction_digits(&lowercase);
             } else if lowercase.contains("[$") {
-                style.number = Some(NumberFormat::Currency);
-                style.currency = lowercase
-                    .split_once("[$-")
-                    .and_then(|(_, rest)| rest.split_once(']'))
-                    .map(|(currency, _)| currency.to_ascii_uppercase());
-                style.decimals = Some(fraction_digits(&lowercase));
+                if let Some(currency) = currency_code(&lowercase) {
+                    style.number = Some(NumberFormat::Currency);
+                    style.currency = Some(currency);
+                    style.decimals = fraction_digits(&lowercase);
+                } else if lowercase.contains(['0', '#']) {
+                    // Symbol- and locale-based XLSX currency codes cannot be
+                    // represented as Marksheet's required ISO 4217 code. Keep
+                    // the numeric shape without constructing an invalid style;
+                    // `number_format_loss` reports the dropped currency data.
+                    style.number = Some(NumberFormat::Decimal);
+                    style.decimals = fraction_digits(&lowercase);
+                }
             } else if lowercase.contains('y') || lowercase.contains('d') {
                 // Marksheet dates carry no display pattern, so the code itself
                 // is not reversible; `number_format_loss` reports the residue.
@@ -1676,7 +1698,7 @@ fn apply_number_format(style: &mut StyleProperties, id: u32, custom: Option<&Str
                 });
             } else if lowercase.contains(['0', '#']) {
                 style.number = Some(NumberFormat::Decimal);
-                style.decimals = Some(fraction_digits(&lowercase));
+                style.decimals = fraction_digits(&lowercase);
             }
         }
     }
@@ -1685,16 +1707,21 @@ fn apply_number_format(style: &mut StyleProperties, id: u32, custom: Option<&Str
 /// Counts the fixed decimal places a numeric format code requests. A code
 /// without a fractional section requests none, which is distinct from a style
 /// that leaves the decimal count unspecified.
-fn fraction_digits(code: &str) -> u8 {
-    code.split_once('.').map_or(0, |(_, fraction)| {
-        u8::try_from(
-            fraction
-                .chars()
-                .take_while(|character| *character == '0')
-                .count(),
-        )
-        .unwrap_or(u8::MAX)
-    })
+fn fraction_digits(code: &str) -> Option<u8> {
+    let count = code.split_once('.').map_or(0, |(_, fraction)| {
+        fraction
+            .chars()
+            .take_while(|character| *character == '0')
+            .count()
+    });
+    (count <= 15).then(|| u8::try_from(count).expect("count is bounded to 15"))
+}
+
+fn currency_code(code: &str) -> Option<String> {
+    let (_, rest) = code.split_once("[$-")?;
+    let (currency, _) = rest.split_once(']')?;
+    (currency.len() == 3 && currency.bytes().all(|byte| byte.is_ascii_alphabetic()))
+        .then(|| currency.to_ascii_uppercase())
 }
 
 /// Reports the `numFmtId` whenever the Marksheet style it produced would not
@@ -1973,6 +2000,27 @@ fn parse_worksheet(
                         }
                         CellTextState::Inline => {
                             append_text(&mut cell.inline_text, &text, part, context.limits)?;
+                        }
+                    }
+                }
+            }
+            Ok(Event::GeneralRef(reference)) => {
+                if let Some(cell) = &mut cell {
+                    match cell.text_state {
+                        CellTextState::None => {}
+                        CellTextState::Value => {
+                            append_reference(&mut cell.value, &reference, part, context.limits)?;
+                        }
+                        CellTextState::Formula => {
+                            append_reference(&mut cell.formula, &reference, part, context.limits)?;
+                        }
+                        CellTextState::Inline => {
+                            append_reference(
+                                &mut cell.inline_text,
+                                &reference,
+                                part,
+                                context.limits,
+                            )?;
                         }
                     }
                 }
@@ -2338,6 +2386,9 @@ fn parse_table(
             }
             Ok(Event::Text(text)) if inside_calculated => {
                 append_text(&mut current_formula, &text, part, limits)?;
+            }
+            Ok(Event::GeneralRef(reference)) if inside_calculated => {
+                append_reference(&mut current_formula, &reference, part, limits)?;
             }
             Ok(Event::End(element))
                 if local_name(element.name().as_ref()) == b"calculatedColumnFormula" =>
@@ -2768,8 +2819,10 @@ fn replace_formulas_referencing_omitted_names(
                                 report.retract(ConversionFeature::Formula, |candidate| {
                                     recorded.covers(candidate)
                                 });
+                                recorded.location.clone()
+                            } else {
+                                ConversionLocation::table_on_sheet(sheet_id.clone(), table.clone())
                             }
-                            ConversionLocation::table_on_sheet(sheet_id.clone(), table.clone())
                         }
                     };
                     report.approximate(omitted_name_reference_event().at(location));
@@ -3461,14 +3514,63 @@ fn append_text(
         .map_err(|error| invalid(part, &format!("invalid text encoding: {error}")))?;
     let decoded = unescape(&decoded)
         .map_err(|error| invalid(part, &format!("invalid XML entity: {error}")))?;
+    append_bounded(output, &decoded, part, limits)
+}
+
+/// Appends the character an entity or character reference stands for.
+///
+/// quick-xml reports every `&...;` in character data as its own event rather
+/// than folding it into the surrounding text, so a reader that only handles
+/// [`Event::Text`] silently drops the referenced character.
+fn append_reference(
+    output: &mut String,
+    reference: &quick_xml::events::BytesRef<'_>,
+    part: &str,
+    limits: ConversionLimits,
+) -> Result<(), ConvertError> {
+    let resolved = if let Some(character) = reference
+        .resolve_char_ref()
+        .map_err(|error| invalid(part, &format!("invalid XML character reference: {error}")))?
+    {
+        character
+    } else {
+        let name = reference
+            .decode()
+            .map_err(|error| invalid(part, &format!("invalid text encoding: {error}")))?;
+        // OOXML parts declare no DTD, so only the five predefined general
+        // entities can appear.
+        match name.as_ref() {
+            "amp" => '&',
+            "lt" => '<',
+            "gt" => '>',
+            "apos" => '\'',
+            "quot" => '"',
+            _ => return Err(invalid(part, &format!("unknown XML entity &{name};"))),
+        }
+    };
+    if !is_xml_character(resolved) {
+        return Err(invalid(
+            part,
+            "XML character reference resolves to a character XML forbids",
+        ));
+    }
+    append_bounded(output, resolved.encode_utf8(&mut [0_u8; 4]), part, limits)
+}
+
+fn append_bounded(
+    output: &mut String,
+    value: &str,
+    part: &str,
+    limits: ConversionLimits,
+) -> Result<(), ConvertError> {
     let length = output
         .len()
-        .checked_add(decoded.len())
+        .checked_add(value.len())
         .ok_or_else(|| resource(part, "text length overflow"))?;
     if length > limits.max_string_bytes {
         return Err(resource(part, "text exceeds the configured string limit"));
     }
-    output.push_str(&decoded);
+    output.push_str(value);
     Ok(())
 }
 
@@ -3583,7 +3685,49 @@ fn translate_excel_formula(formula: &str, names: FormulaNames<'_>) -> String {
             output.push_str(&formula[start..index]);
             continue;
         }
-        if bytes[index].is_ascii_alphabetic() || bytes[index] == b'_' {
+        // Structured selectors contain exact header data, not formula name
+        // tokens. Copy the selector spelling wholesale so an identically
+        // spelled defined name cannot rewrite its header.
+        if bytes[index] == b'[' {
+            let start = index;
+            index += 1;
+            while index < bytes.len() {
+                if bytes[index] == b']' {
+                    if bytes.get(index + 1) == Some(&b']') {
+                        index += 2;
+                        continue;
+                    }
+                    index += 1;
+                    break;
+                }
+                index += 1;
+            }
+            output.push_str(&formula[start..index]);
+            continue;
+        }
+        // Error literals have word-shaped bodies (`#REF!`, `#NAME?`, ...),
+        // but those bodies are never defined-name references.
+        if bytes[index] == b'#' {
+            let start = index;
+            index += 1;
+            while index < bytes.len()
+                && (bytes[index].is_ascii_alphanumeric() || matches!(bytes[index], b'_' | b'/'))
+            {
+                index += 1;
+            }
+            if matches!(bytes.get(index), Some(b'!' | b'?')) {
+                index += 1;
+            }
+            output.push_str(&formula[start..index]);
+            continue;
+        }
+        let starts_name = bytes[index].is_ascii_alphabetic()
+            || bytes[index] == b'_'
+            || (bytes[index] == b'\\'
+                && bytes
+                    .get(index + 1)
+                    .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_'));
+        if starts_name {
             let start = index;
             index += 1;
             while index < bytes.len()
@@ -3817,6 +3961,46 @@ mod tests {
             table_headers,
             report,
         )
+    }
+
+    /// Renames the single worksheet part to `part` and repoints the content
+    /// type override and the workbook relationship at the new name, so the
+    /// worksheet is reachable only through its relationship role.
+    fn disguise_worksheet_part(bytes: &[u8], part: &str, worksheet: &str) -> Vec<u8> {
+        let target = part.strip_prefix("xl/").unwrap();
+        let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let mut parts = Vec::new();
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            let name = entry.name().to_owned();
+            let mut content = Vec::new();
+            entry.read_to_end(&mut content).unwrap();
+            let (name, content) = match name.as_str() {
+                "xl/worksheets/sheet1.xml" => (part.to_owned(), worksheet.as_bytes().to_vec()),
+                "[Content_Types].xml" => {
+                    let text = String::from_utf8(content)
+                        .unwrap()
+                        .replace("/xl/worksheets/sheet1.xml", &format!("/{part}"));
+                    (name, text.into_bytes())
+                }
+                "xl/_rels/workbook.xml.rels" => {
+                    let text = String::from_utf8(content).unwrap().replace(
+                        "Target=\"worksheets/sheet1.xml\"",
+                        &format!("Target=\"{target}\""),
+                    );
+                    (name, text.into_bytes())
+                }
+                _ => (name, content),
+            };
+            parts.push((name, content));
+        }
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::DEFAULT.compression_method(CompressionMethod::Stored);
+        for (name, content) in parts {
+            writer.start_file(name, options).unwrap();
+            writer.write_all(&content).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
     }
 
     fn basic_workbook() -> Workbook {
@@ -4395,6 +4579,34 @@ mod tests {
                     .is_some_and(|detail| detail.contains("outside portable-a1@1 syntax"))
         }));
         assert!(!imported.report.is_lossless());
+    }
+
+    #[test]
+    fn xml_hardening_follows_the_part_role_not_the_part_name() {
+        let exported = export_xlsx(&basic_workbook(), ConversionLimits::default()).unwrap();
+        let limits = ConversionLimits::default();
+        let part = "xl/worksheets/sheet1.dat";
+
+        let mut doctype = String::from("<!DOCTYPE worksheet [<!ENTITY payload \"value\">]>");
+        doctype.push_str(&"<nest>".repeat(5_000));
+        doctype.push_str(&"</nest>".repeat(5_000));
+        let bytes = disguise_worksheet_part(&exported.value, part, &doctype);
+        assert_eq!(
+            import_xlsx(&bytes, limits).unwrap_err().error.code,
+            ConvertErrorCode::UnsupportedPackage
+        );
+
+        let mut deep = "<nest>".repeat(5_000);
+        deep.push_str(&"</nest>".repeat(5_000));
+        let bytes = disguise_worksheet_part(&exported.value, part, &deep);
+        assert_eq!(
+            import_xlsx(&bytes, limits).unwrap_err().error.code,
+            ConvertErrorCode::ResourceLimit
+        );
+
+        let worksheet = package_text(&exported.value, "xl/worksheets/sheet1.xml");
+        let bytes = disguise_worksheet_part(&exported.value, part, &worksheet);
+        assert_eq!(import_xlsx(&bytes, limits).unwrap().value.sheets.len(), 1);
     }
 
     #[test]
@@ -5209,6 +5421,29 @@ mod tests {
     }
 
     #[test]
+    fn sheet_labels_keep_xml_whitespace_across_the_round_trip() {
+        for (label, reference) in [
+            ("Line\nTwo", "Line&#10;Two"),
+            ("Tab\tTwo", "Tab&#9;Two"),
+            ("Cr\rTwo", "Cr&#13;Two"),
+        ] {
+            let mut source = basic_workbook();
+            source.sheets[0].label = label.to_owned();
+            let exported = export_xlsx(&source, ConversionLimits::default()).unwrap();
+            // A literal tab, line feed, or carriage return in an attribute
+            // value becomes a space under XML 1.0 attribute-value
+            // normalization, so only a character reference survives a parse.
+            assert!(
+                package_text(&exported.value, "xl/workbook.xml")
+                    .contains(&format!("<sheet name=\"{reference}\"")),
+                "sheet label {label:?} must be written as {reference}"
+            );
+            let imported = import_xlsx(&exported.value, ConversionLimits::default()).unwrap();
+            assert_eq!(imported.value.sheets[0].label, label);
+        }
+    }
+
+    #[test]
     fn multi_area_defined_name_degrades_while_supported_names_import_exactly() {
         let exported = export_xlsx(
             &named_range_workbook("=SUM(A1:A2)"),
@@ -5343,6 +5578,89 @@ mod tests {
     #[test]
     fn calculated_column_reaching_an_omitted_name_is_replaced() {
         assert_calculated_column_degraded(&calculated_column_import_with_omitted_name());
+    }
+
+    #[test]
+    fn omitted_name_replacements_keep_each_calculated_column_location() {
+        let sheet_id = SheetId::parse("data").unwrap();
+        let table_id = TableId::parse("sales").unwrap();
+        let left_location = xlsx_location("xl/tables/table1.xml", Some("Left"));
+        let right_location = xlsx_location("xl/tables/table1.xml", Some("Right"));
+        let mut sheets = vec![Sheet {
+            id: sheet_id.clone(),
+            label: "Data".to_owned(),
+            items: vec![
+                SheetItem::Fill(Fill {
+                    target: FillTarget::TableColumn {
+                        table: table_id.clone(),
+                        header: "Left".to_owned(),
+                    },
+                    formula: FormulaSource::new("=SUM(total)").unwrap(),
+                    origin: None,
+                }),
+                SheetItem::Fill(Fill {
+                    target: FillTarget::TableColumn {
+                        table: table_id.clone(),
+                        header: "Right".to_owned(),
+                    },
+                    formula: FormulaSource::new("=SUM(total)").unwrap(),
+                    origin: None,
+                }),
+            ],
+            origin: None,
+        }];
+        let fill_outcomes = BTreeMap::from([
+            (
+                (table_id.clone(), "Left".to_owned()),
+                FillOutcome {
+                    location: left_location.clone(),
+                    sheet: sheet_id.clone(),
+                    body: Range::parse("A2:A3").unwrap(),
+                },
+            ),
+            (
+                (table_id, "Right".to_owned()),
+                FillOutcome {
+                    location: right_location.clone(),
+                    sheet: sheet_id,
+                    body: Range::parse("B2:B3").unwrap(),
+                },
+            ),
+        ]);
+        let mut report =
+            ConversionReport::new(FormatDescriptor::xlsx(), FormatDescriptor::marksheet_ir());
+        for location in [left_location.clone(), right_location.clone()] {
+            report.exact_event(
+                ConversionEvent::new(ConversionFeature::Formula, "calculated column")
+                    .formula(FormulaDisposition::Translated)
+                    .at(location),
+            );
+        }
+
+        replace_formulas_referencing_omitted_names(
+            &mut sheets,
+            &BTreeSet::from([NameId::parse("total").unwrap()]),
+            &fill_outcomes,
+            ConversionLimits::default(),
+            &mut report,
+        )
+        .unwrap();
+
+        let replacements: Vec<_> = report
+            .outcomes()
+            .iter()
+            .filter(|outcome| outcome.formula == Some(FormulaDisposition::Replaced))
+            .map(|outcome| outcome.locations.clone())
+            .collect();
+        assert_eq!(replacements.len(), 2, "{replacements:?}");
+        assert!(
+            replacements.contains(&vec![left_location]),
+            "{replacements:?}"
+        );
+        assert!(
+            replacements.contains(&vec![right_location]),
+            "{replacements:?}"
+        );
     }
 
     /// Excel authors defined names in whatever case they like, and writes that
@@ -5669,6 +5987,22 @@ mod tests {
     }
 
     #[test]
+    fn defined_name_rewrite_preserves_structured_selector_headers() {
+        let names = BTreeMap::from([("total".to_owned(), NameId::parse("named_total").unwrap())]);
+
+        assert_eq!(
+            translate_excel_formula(
+                "SUM(sales[Total])+Total",
+                FormulaNames {
+                    sheets: &BTreeMap::new(),
+                    names: &names,
+                },
+            ),
+            "=SUM(sales[Total])+named_total"
+        );
+    }
+
+    #[test]
     fn number_formats_without_a_marksheet_equivalent_are_reported() {
         let exported = export_xlsx(&basic_workbook(), ConversionLimits::default()).unwrap();
         let styles = package_text(&exported.value, "xl/styles.xml")
@@ -5717,6 +6051,69 @@ mod tests {
     }
 
     #[test]
+    fn overprecise_number_format_does_not_create_an_invalid_style() {
+        let exported = export_xlsx(&basic_workbook(), ConversionLimits::default()).unwrap();
+        let styles = package_text(&exported.value, "xl/styles.xml")
+            .replacen(
+                "<fonts count=\"1\">",
+                "<numFmts count=\"1\"><numFmt numFmtId=\"164\" formatCode=\"0.0000000000000000\"/></numFmts><fonts count=\"1\">",
+                1,
+            )
+            .replacen(
+                "<cellXfs count=\"1\"><xf numFmtId=\"0\"",
+                "<cellXfs count=\"1\"><xf numFmtId=\"164\"",
+                1,
+            );
+        let bytes = rewrite_package(&exported.value, &[("xl/styles.xml", &styles)], &[]);
+        let imported = import_xlsx(&bytes, ConversionLimits::default()).unwrap();
+
+        assert_eq!(imported.value.styles[0].properties.decimals, None);
+        let text = marksheet_syntax::serialize_workbook(&imported.value).unwrap();
+        assert!(!marksheet_syntax::parse(&text).has_errors());
+        assert!(imported.report.outcomes().iter().any(|outcome| {
+            outcome.feature == "core_styles"
+                && outcome.outcome == crate::FeatureOutcome::Approximated
+                && outcome.locations.contains(&ConversionLocation::Xlsx {
+                    part: "xl/styles.xml".to_owned(),
+                    reference: Some("cellXfs[0]".to_owned()),
+                })
+        }));
+    }
+
+    #[test]
+    fn symbol_currency_format_does_not_create_an_invalid_style() {
+        let exported = export_xlsx(&basic_workbook(), ConversionLimits::default()).unwrap();
+        let styles = package_text(&exported.value, "xl/styles.xml")
+            .replacen(
+                "<fonts count=\"1\">",
+                "<numFmts count=\"1\"><numFmt numFmtId=\"164\" formatCode=\"[$$-409]#,##0.00\"/></numFmts><fonts count=\"1\">",
+                1,
+            )
+            .replacen(
+                "<cellXfs count=\"1\"><xf numFmtId=\"0\"",
+                "<cellXfs count=\"1\"><xf numFmtId=\"164\"",
+                1,
+            );
+        let bytes = rewrite_package(&exported.value, &[("xl/styles.xml", &styles)], &[]);
+        let imported = import_xlsx(&bytes, ConversionLimits::default()).unwrap();
+
+        let properties = &imported.value.styles[0].properties;
+        assert_eq!(properties.number, Some(NumberFormat::Decimal));
+        assert_eq!(properties.decimals, Some(2));
+        assert_eq!(properties.currency, None);
+        let text = marksheet_syntax::serialize_workbook(&imported.value).unwrap();
+        assert!(!marksheet_syntax::parse(&text).has_errors());
+        assert!(imported.report.outcomes().iter().any(|outcome| {
+            outcome.feature == "core_styles"
+                && outcome.outcome == crate::FeatureOutcome::Approximated
+                && outcome.locations.contains(&ConversionLocation::Xlsx {
+                    part: "xl/styles.xml".to_owned(),
+                    reference: Some("cellXfs[0]".to_owned()),
+                })
+        }));
+    }
+
+    #[test]
     fn numeric_cells_under_a_date_format_report_the_coercion() {
         let exported = export_xlsx(&basic_workbook(), ConversionLimits::default()).unwrap();
         let styles = package_text(&exported.value, "xl/styles.xml")
@@ -5761,5 +6158,128 @@ mod tests {
             "{:?}",
             imported.report.outcomes()
         );
+    }
+
+    #[test]
+    fn defined_name_rewrite_recognizes_a_leading_backslash() {
+        let names = BTreeMap::from([(
+            "\\total".to_owned(),
+            NameId::parse("escaped_total").unwrap(),
+        )]);
+
+        assert_eq!(
+            translate_excel_formula(
+                "SUM(\\Total)",
+                FormulaNames {
+                    sheets: &BTreeMap::new(),
+                    names: &names,
+                },
+            ),
+            "=SUM(escaped_total)"
+        );
+    }
+
+    #[test]
+    fn defined_name_rewrite_preserves_error_literals() {
+        let names = BTreeMap::from([("ref".to_owned(), NameId::parse("named_ref").unwrap())]);
+
+        assert_eq!(
+            translate_excel_formula(
+                "#REF!+REF",
+                FormulaNames {
+                    sheets: &BTreeMap::new(),
+                    names: &names,
+                },
+            ),
+            "=#REF!+named_ref"
+        );
+    }
+
+    #[test]
+    fn quoted_csv_table_headers_keep_xml_whitespace_across_the_round_trip() {
+        for (header, reference) in [
+            ("Head\nOne", "Head&#10;One"),
+            ("Head\tOne", "Head&#9;One"),
+            ("Head\rOne", "Head&#13;One"),
+        ] {
+            // Marksheet source has no spelling for a bare CR in a CSV field,
+            // so that case builds the same semantic workbook directly.
+            let workbook = if header.contains('\r') {
+                Workbook {
+                    sheets: vec![Sheet {
+                        id: SheetId::parse("data").unwrap(),
+                        label: "Data".to_owned(),
+                        items: vec![SheetItem::Table(Table {
+                            id: TableId::parse("costs").unwrap(),
+                            block: Block::new(
+                                Coordinate::parse("A1").unwrap(),
+                                vec![
+                                    vec![
+                                        Cell::new(Value::Text(header.to_owned())),
+                                        Cell::new(Value::Text("Other".to_owned())),
+                                    ],
+                                    vec![
+                                        Cell::new(Value::Number(1.0)),
+                                        Cell::new(Value::Number(2.0)),
+                                    ],
+                                ],
+                            )
+                            .unwrap(),
+                            origin: None,
+                        })],
+                        origin: None,
+                    }],
+                    ..Workbook::default()
+                }
+            } else {
+                let source = format!(
+                    "#!marksheet 0.1\n@sheet data \"Data\"\n@table costs A1 csv\n\"{header}\",Other\n1,2\n@end\n"
+                );
+                let parsed = marksheet_syntax::parse(source.as_bytes());
+                assert!(!parsed.has_errors(), "{:?}", parsed.diagnostics);
+                parsed.workbook.expect("source lowers to a workbook")
+            };
+
+            let exported = export_xlsx(&workbook, ConversionLimits::default()).unwrap();
+            assert!(
+                package_text(&exported.value, "xl/tables/table1.xml")
+                    .contains(&format!("name=\"{reference}\"")),
+                "table column {header:?} must be written as {reference}"
+            );
+            let imported = import_xlsx(&exported.value, ConversionLimits::default())
+                .expect("the exported package must be importable");
+            let headers = imported.value.sheets[0]
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    SheetItem::Table(table) => Some(table.block.cells[0].clone()),
+                    _ => None,
+                })
+                .expect("imported table");
+            assert_eq!(headers[0].value, Value::Text(header.to_owned()));
+        }
+    }
+
+    #[test]
+    fn escaped_text_references_are_decoded_rather_than_dropped() {
+        let mut source = basic_workbook();
+        source.sheets[0].items = vec![SheetItem::Block(
+            Block::new(
+                Coordinate::parse("A1").unwrap(),
+                vec![vec![Cell::new(Value::Text("a&b<c>d\re".to_owned()))]],
+            )
+            .unwrap(),
+        )];
+        let exported = export_xlsx(&source, ConversionLimits::default()).unwrap();
+        let imported = import_xlsx(&exported.value, ConversionLimits::default()).unwrap();
+        let value = imported.value.sheets[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                SheetItem::Block(block) => Some(block.cells[0][0].value.clone()),
+                _ => None,
+            })
+            .expect("imported block");
+        assert_eq!(value, Value::Text("a&b<c>d\re".to_owned()));
     }
 }

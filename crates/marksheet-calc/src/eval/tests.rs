@@ -590,3 +590,149 @@ mod limits {
         );
     }
 }
+
+/// The limits-aware resolution path is additive: it is a defaulted trait
+/// method, so a context written against the original [`EvaluationContext`]
+/// API keeps compiling and keeps behaving exactly as it did.
+mod context_compatibility {
+    use super::*;
+
+    /// Implements *only* the original `resolve(&self, &Reference, ByteSpan)
+    /// -> Result<ResolvedValue, CellError>`, with no knowledge that
+    /// `resolve_within_limits` exists. That this compiles is the point of the
+    /// test module: adding the budget-aware path did not change the published
+    /// trait's required surface.
+    struct LegacyContext;
+
+    impl EvaluationContext for LegacyContext {
+        fn resolve(
+            &self,
+            reference: &Reference,
+            _span: ByteSpan,
+        ) -> Result<ResolvedValue, CellError> {
+            match reference {
+                Reference::Cell { .. } => Ok(ResolvedValue::Scalar(CalcValue::Number(2.0))),
+                Reference::Range(_) => Ok(ResolvedValue::Range(
+                    RectangularRange::new(
+                        2,
+                        1,
+                        vec![CalcValue::Number(1.0), CalcValue::Number(2.0)],
+                    )
+                    .unwrap(),
+                )),
+                Reference::Name { .. } => Err(CellError::Name),
+                Reference::Structured(_) => Err(CellError::Reference),
+            }
+        }
+    }
+
+    #[test]
+    fn a_context_implementing_only_resolve_still_evaluates() {
+        let formula = parse("=A1+SUM(B1:B2)", &ParseLimits::default()).unwrap();
+        assert_eq!(
+            evaluate_with_defaults(&formula, &LegacyContext)
+                .unwrap()
+                .value,
+            CalcValue::Number(5.0)
+        );
+    }
+
+    #[test]
+    fn the_default_resolve_within_limits_delegates_to_resolve() {
+        let formula = parse("=undefined_name", &ParseLimits::default()).unwrap();
+        let crate::formula::ExprKind::Reference { reference } = &formula.expression.kind else {
+            panic!("expected a reference expression");
+        };
+        assert_eq!(
+            LegacyContext.resolve_within_limits(
+                reference,
+                formula.expression.span,
+                &EvaluationLimits::default(),
+                EvaluationStats::default(),
+            ),
+            Err(ResolveError::Cell(CellError::Name)),
+            "a cell error from the original method surfaces as ResolveError::Cell"
+        );
+    }
+
+    #[test]
+    fn a_legacy_context_is_still_bounded_by_per_cell_accounting() {
+        // Without an override the range is materialized first and rejected as
+        // it is consumed -- the pre-existing behavior, unchanged.
+        let formula = parse("=SUM(B1:B2)", &ParseLimits::default()).unwrap();
+        let error = evaluate(
+            &formula,
+            &LegacyContext,
+            &EvaluationLimits {
+                max_range_cells: 1,
+                ..EvaluationLimits::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            EvaluationError::RangeCellLimitExceeded { limit: 1, .. }
+        ));
+    }
+
+    /// Overrides `resolve_within_limits` to reject an oversized range before
+    /// materializing it, the way the workbook engine's context does.
+    struct BoundedContext;
+
+    impl EvaluationContext for BoundedContext {
+        fn resolve(
+            &self,
+            reference: &Reference,
+            span: ByteSpan,
+        ) -> Result<ResolvedValue, CellError> {
+            LegacyContext.resolve(reference, span)
+        }
+
+        fn resolve_within_limits(
+            &self,
+            reference: &Reference,
+            span: ByteSpan,
+            limits: &EvaluationLimits,
+            stats: EvaluationStats,
+        ) -> Result<ResolvedValue, ResolveError> {
+            if matches!(reference, Reference::Range(_)) {
+                let projected = stats.range_cells.saturating_add(2);
+                if projected > limits.max_range_cells {
+                    return Err(ResolveError::Limit(
+                        EvaluationError::RangeCellLimitExceeded {
+                            limit: limits.max_range_cells,
+                            stats: EvaluationStats {
+                                range_cells: projected,
+                                ..stats
+                            },
+                        },
+                    ));
+                }
+            }
+            self.resolve(reference, span).map_err(ResolveError::Cell)
+        }
+    }
+
+    #[test]
+    fn an_overriding_context_reports_the_limit_before_materializing() {
+        let formula = parse("=SUM(B1:B2)", &ParseLimits::default()).unwrap();
+        let error = evaluate(
+            &formula,
+            &BoundedContext,
+            &EvaluationLimits {
+                max_range_cells: 1,
+                ..EvaluationLimits::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            EvaluationError::RangeCellLimitExceeded { limit: 1, .. }
+        ));
+        assert_eq!(
+            error.stats().range_cells,
+            2,
+            "the whole range is accounted for atomically, not one cell at a time"
+        );
+    }
+}
