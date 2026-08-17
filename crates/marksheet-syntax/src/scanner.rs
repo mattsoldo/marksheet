@@ -59,6 +59,7 @@ impl Scanner<'_> {
         let mut first = true;
         while self.offset < self.source.len() {
             let line = physical_line(self.source, self.offset);
+            self.diagnose_line_ending(line);
             let content = &self.source[line.content.range()];
 
             if first && content.starts_with(b"#!marksheet") {
@@ -99,12 +100,17 @@ impl Scanner<'_> {
             }
             first = false;
         }
+    }
 
-        if self.source.is_empty() {
+    /// Only LF and CRLF are valid line endings, so a lone carriage return is an
+    /// error rather than a third spelling that canonical output would silently
+    /// rewrite. The CSV layer reports the same problem for records.
+    fn diagnose_line_ending(&mut self, line: Line) {
+        if &self.source[line.newline.range()] == b"\r" {
             self.diagnostics.push(error(
-                "MS1001",
-                "document is missing the Marksheet version header",
-                Span::new(0, 0),
+                "MS1004",
+                "bare carriage return is not a valid line ending",
+                line.newline,
             ));
         }
     }
@@ -124,6 +130,9 @@ impl Scanner<'_> {
                 directive.line.content,
             ));
         }
+        if let Some(terminator) = terminator {
+            self.diagnose_line_ending(terminator);
+        }
         let end = terminator.map_or(self.source.len(), |line| line.span.end);
         self.nodes.push(Node::CsvBlock(CsvBlock {
             kind,
@@ -139,6 +148,10 @@ impl Scanner<'_> {
     fn scan_extension(&mut self, directive: Directive) {
         let extension_start = directive.line.span.start;
         let payload_start = directive.line.span.end;
+        // SPEC section 17 makes the payload opaque and SPEC section 18 item 12
+        // normalizes only CRLF inside it, so a lone carriage return between the
+        // directive and `@end` is payload data rather than a line ending the
+        // scanner may reject. Only the surrounding structural lines are checked.
         let (payload_end, terminator) = find_exact_terminator(self.source, payload_start);
         if terminator.is_none() {
             self.diagnostics.push(error(
@@ -146,6 +159,9 @@ impl Scanner<'_> {
                 "extension body is missing its @end terminator",
                 directive.line.content,
             ));
+        }
+        if let Some(terminator) = terminator {
+            self.diagnose_line_ending(terminator);
         }
         let end = terminator.map_or(self.source.len(), |line| line.span.end);
         self.nodes.push(Node::Extension(ExtensionBlock {
@@ -197,13 +213,36 @@ fn split_directive(line: Line, source: &[u8]) -> Directive {
 fn find_exact_terminator(source: &[u8], start: usize) -> (usize, Option<Line>) {
     let mut cursor = start;
     while cursor < source.len() {
-        let line = physical_line(source, cursor);
+        let line = extension_payload_line(source, cursor);
         if &source[line.content.range()] == b"@end" {
             return (line.span.start, Some(line));
         }
         cursor = line.span.end;
     }
     (source.len(), None)
+}
+
+/// Split opaque extension payloads only at the structural line endings the
+/// format recognizes. A lone carriage return remains payload data, including
+/// when the following bytes happen to spell `@end`.
+fn extension_payload_line(source: &[u8], start: usize) -> Line {
+    let line_feed = source[start..]
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .map(|relative| start + relative);
+    let span_end = line_feed.map_or(source.len(), |offset| offset + 1);
+    let content_end = line_feed.map_or(source.len(), |offset| {
+        if source.get(offset.wrapping_sub(1)) == Some(&b'\r') {
+            offset - 1
+        } else {
+            offset
+        }
+    });
+    Line {
+        span: Span::new(start, span_end),
+        content: Span::new(start, content_end),
+        newline: Span::new(content_end, span_end),
+    }
 }
 
 /// Locate `@end` while deliberately tracking only quote state needed for the
@@ -271,9 +310,21 @@ fn parse_csv(source: &[u8], body: Span) -> (Vec<CsvRecord>, Vec<Diagnostic>) {
                         closed_quote = true;
                         break;
                     }
-                } else if source[cursor] == b'\r' && source.get(cursor + 1) == Some(&b'\n') {
+                } else if source[cursor] == b'\r' {
+                    // An embedded record always decodes to LF, so no raw
+                    // carriage return can reach a value or canonical output.
+                    let carriage_return = cursor;
+                    cursor += 1;
+                    if cursor < body.end && source[cursor] == b'\n' {
+                        cursor += 1;
+                    } else {
+                        diagnostics.push(error(
+                            "MS1102",
+                            "bare carriage return is not a valid line ending",
+                            Span::new(carriage_return, cursor),
+                        ));
+                    }
                     decoded.push(b'\n');
-                    cursor += 2;
                 } else {
                     decoded.push(source[cursor]);
                     cursor += 1;
@@ -425,6 +476,23 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.code.as_str() == "MS1003")
         );
+    }
+
+    #[test]
+    fn bare_carriage_return_before_end_text_does_not_terminate_extension() {
+        let source = b"#!marksheet 0.1\n@extension charts@1 \"x\"\nalpha\r@end\n@end\n";
+        let result = scan(source);
+        let Node::Extension(extension) = &result.cst.nodes[1] else {
+            panic!("expected extension");
+        };
+        assert_eq!(&source[extension.payload.range()], b"alpha\r@end\n");
+        assert_eq!(
+            extension
+                .terminator
+                .map(|line| &source[line.content.range()]),
+            Some(b"@end".as_slice())
+        );
+        assert!(result.diagnostics.is_empty());
     }
 
     #[test]

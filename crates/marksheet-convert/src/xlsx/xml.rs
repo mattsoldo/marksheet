@@ -147,6 +147,11 @@ pub(super) fn local_name(name: &[u8]) -> &[u8] {
     name.rsplit(|byte| *byte == b':').next().unwrap_or(name)
 }
 
+/// Escapes character data.
+///
+/// A carriage return becomes a numeric character reference because XML 1.0
+/// end-of-line handling (2.11) rewrites a literal CR to LF before a parser
+/// ever reports the text, which would silently rewrite the scalar.
 pub(super) fn escape_text(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
     for character in value.chars() {
@@ -154,14 +159,46 @@ pub(super) fn escape_text(value: &str) -> String {
             '&' => output.push_str("&amp;"),
             '<' => output.push_str("&lt;"),
             '>' => output.push_str("&gt;"),
+            '\r' => output.push_str("&#13;"),
             _ => output.push(character),
         }
     }
     output
 }
 
+/// Escapes an attribute value.
+///
+/// Tab and line feed become numeric character references on top of what
+/// [`escape_text`] already handles: XML 1.0 attribute-value normalization
+/// (3.3.3) replaces every literal tab, line feed, and carriage return with a
+/// space on any conforming parse, so writing them raw silently corrupts sheet
+/// labels and table column names.
 pub(super) fn escape_attribute(value: &str) -> String {
-    escape_text(value).replace('"', "&quot;")
+    let escaped = escape_text(value);
+    let mut output = String::with_capacity(escaped.len());
+    for character in escaped.chars() {
+        match character {
+            '"' => output.push_str("&quot;"),
+            '\t' => output.push_str("&#9;"),
+            '\n' => output.push_str("&#10;"),
+            _ => output.push(character),
+        }
+    }
+    output
+}
+
+/// Reports whether a character can appear in an XML 1.0 document at all.
+///
+/// Characters outside this set — the C0 controls other than tab, line feed,
+/// and carriage return, plus the two non-characters — have no literal and no
+/// character-reference spelling, so they cannot be escaped into a well-formed
+/// package and must be reported as lost instead.
+pub(super) fn is_xml_character(character: char) -> bool {
+    matches!(character,
+        '\t' | '\n' | '\r'
+        | ' '..='\u{d7ff}'
+        | '\u{e000}'..='\u{fffd}'
+        | '\u{10000}'..='\u{10ffff}')
 }
 
 pub(super) fn invalid(part: &str, message: &str) -> ConvertError {

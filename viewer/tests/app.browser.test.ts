@@ -3,9 +3,11 @@ import { ViewerApp } from "../src/app";
 import { LocalFileSession } from "../src/local-file";
 import type {
   A1Range,
+  AuthoredValue,
   Diagnostic,
   EditTransaction,
   ExtensionSupportSummary,
+  ScalarValue,
   StyledRegion,
   StyleProperties,
   ViewCompleteness,
@@ -105,6 +107,8 @@ function region(
   sheet: string,
   range: A1Range,
   completeness: ViewCompleteness = { calculation_complete: true, rendering_complete: true },
+  cellValue: AuthoredValue = { kind: "formula", value: "=1+1" },
+  calculated: ScalarValue = { kind: "number", value: 2 },
 ): VisibleRegion {
   return {
     sheet: {
@@ -119,8 +123,8 @@ function region(
     completeness,
     cells: [{
       coordinate: { column: 1, row: 1 },
-      source: { Authored: { value: { kind: "formula", value: "=1+1" }, source_span: { start: 10, end: 14 } } },
-      calculated: { kind: "number", value: 2 },
+      source: { Authored: { value: cellValue, source_span: { start: 10, end: 14 } } },
+      calculated,
       style: {
         properties: styleProperties({ bold: true }),
         layers: [{ id: "headline", style_source_span: null, application_source_span: null }],
@@ -151,6 +155,8 @@ class MockAdapter implements WorkbenchAdapter {
   regionCompleteness: ViewCompleteness = { calculation_complete: true, rendering_complete: true };
   sheets = defaultSheets;
   styleRegions: StyledRegion[] = [];
+  cellValue: AuthoredValue = { kind: "formula", value: "=1+1" };
+  cellCalculated: ScalarValue = { kind: "number", value: 2 };
   edit = vi.fn(async (_transaction: EditTransaction) => {
     this.currentRevision += 1;
     this.source = encoder.encode("@marksheet 0.1\n@sheet inputs \"Inputs\"\n2\n");
@@ -224,7 +230,7 @@ class MockAdapter implements WorkbenchAdapter {
   }
 
   async visibleRegion(sheet: string, range: A1Range) {
-    const visible = region(sheet, range, this.regionCompleteness);
+    const visible = region(sheet, range, this.regionCompleteness, this.cellValue, this.cellCalculated);
     visible.style_regions = this.styleRegions;
     const payload = {
       kind: "visible_region" as const,
@@ -432,6 +438,171 @@ describe("viewer browser shell", () => {
         sheet: "inputs",
         coordinate: { column: 1, row: 1 },
         value: { kind: "formula", value: "=2+2" },
+      }],
+    });
+    app.dispose();
+    root.remove();
+  });
+
+  const roundTripCases: Array<{
+    label: string;
+    value: AuthoredValue;
+    calculated: ScalarValue;
+    expectedSource: string;
+  }> = [
+    { label: "blank", value: { kind: "blank" }, calculated: { kind: "blank" }, expectedSource: "" },
+    {
+      label: "text that looks like a number",
+      value: { kind: "text", value: "42" },
+      calculated: { kind: "text", value: "42" },
+      expectedSource: "'42",
+    },
+    {
+      label: "text that looks like a boolean",
+      value: { kind: "text", value: "true" },
+      calculated: { kind: "text", value: "true" },
+      expectedSource: "'true",
+    },
+    {
+      label: "text that looks like a formula",
+      value: { kind: "text", value: "=SUM(A1)" },
+      calculated: { kind: "text", value: "=SUM(A1)" },
+      expectedSource: "'=SUM(A1)",
+    },
+    {
+      label: "text that looks like a date",
+      value: { kind: "text", value: "2024-01-01" },
+      calculated: { kind: "text", value: "2024-01-01" },
+      expectedSource: "'2024-01-01",
+    },
+    {
+      label: "text that looks like a datetime",
+      value: { kind: "text", value: "2024-01-01T12:30:00Z" },
+      calculated: { kind: "text", value: "2024-01-01T12:30:00Z" },
+      expectedSource: "'2024-01-01T12:30:00Z",
+    },
+    {
+      label: "text that looks like an error",
+      value: { kind: "text", value: "#REF!" },
+      calculated: { kind: "text", value: "#REF!" },
+      expectedSource: "'#REF!",
+    },
+    {
+      label: "plain text",
+      value: { kind: "text", value: "hello" },
+      calculated: { kind: "text", value: "hello" },
+      expectedSource: "hello",
+    },
+    {
+      label: "empty text",
+      value: { kind: "text", value: "" },
+      calculated: { kind: "text", value: "" },
+      expectedSource: "'",
+    },
+    {
+      label: "boolean",
+      value: { kind: "boolean", value: true },
+      calculated: { kind: "boolean", value: true },
+      expectedSource: "true",
+    },
+    {
+      label: "number",
+      value: { kind: "number", value: 42 },
+      calculated: { kind: "number", value: 42 },
+      expectedSource: "42",
+    },
+    {
+      label: "date",
+      value: { kind: "date", value: "2024-01-01" },
+      calculated: { kind: "date", value: "2024-01-01" },
+      expectedSource: "2024-01-01",
+    },
+    {
+      label: "datetime",
+      value: { kind: "date_time", value: "2024-01-01T12:30:00Z" },
+      calculated: { kind: "date_time", value: "2024-01-01T12:30:00Z" },
+      expectedSource: "2024-01-01T12:30:00Z",
+    },
+    {
+      label: "datetime with a non-UTC offset",
+      value: { kind: "date_time", value: "2024-01-01T12:30:00-05:00" },
+      calculated: { kind: "date_time", value: "2024-01-01T12:30:00-05:00" },
+      expectedSource: "2024-01-01T12:30:00-05:00",
+    },
+    {
+      label: "error",
+      value: { kind: "error", value: "#REF!" },
+      calculated: { kind: "error", value: "#REF!" },
+      expectedSource: "#REF!",
+    },
+    {
+      label: "formula",
+      value: { kind: "formula", value: "=SUM(A1)" },
+      calculated: { kind: "number", value: 4 },
+      expectedSource: "=SUM(A1)",
+    },
+  ];
+
+  it("exercises every authored value kind in the formula-bar round trip", () => {
+    expect(new Set(roundTripCases.map((testCase) => testCase.value.kind))).toEqual(
+      new Set(["blank", "text", "number", "boolean", "date", "date_time", "formula", "error"]),
+    );
+  });
+
+  it.each(roundTripCases)(
+    "round-trips an authored $label value through the formula bar unchanged",
+    async ({ value, calculated, expectedSource }) => {
+      const root = document.createElement("main");
+      document.body.append(root);
+      const adapter = new MockAdapter();
+      adapter.cellValue = value;
+      adapter.cellCalculated = calculated;
+      const app = new ViewerApp(root, adapter);
+      await app.openSource(encoder.encode("fixture"), "fixture.ms");
+
+      const formula = root.querySelector("#formula-input") as HTMLInputElement;
+      expect(formula.value).toBe(expectedSource);
+
+      // Recommit the formula bar's own displayed text, unmodified by the user.
+      formula.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await vi.waitFor(() => expect(adapter.edit).toHaveBeenCalledTimes(1));
+
+      expect(adapter.edit).toHaveBeenCalledWith({
+        operations: [{
+          kind: "set_cell",
+          sheet: "inputs",
+          coordinate: { column: 1, row: 1 },
+          value,
+        }],
+      });
+      app.dispose();
+      root.remove();
+    },
+  );
+
+  it("keeps a cell authored as text \"42\" as text when recommitted unchanged", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    adapter.cellValue = { kind: "text", value: "42" };
+    adapter.cellCalculated = { kind: "text", value: "42" };
+    const app = new ViewerApp(root, adapter);
+    await app.openSource(encoder.encode("fixture"), "fixture.ms");
+
+    const formula = root.querySelector("#formula-input") as HTMLInputElement;
+    // The formula bar must show the escaped form, not the bare "42" that
+    // would reparse as Number 42 on the next commit.
+    expect(formula.value).toBe("'42");
+
+    formula.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await vi.waitFor(() => expect(adapter.edit).toHaveBeenCalledTimes(1));
+
+    expect(adapter.edit).toHaveBeenCalledWith({
+      operations: [{
+        kind: "set_cell",
+        sheet: "inputs",
+        coordinate: { column: 1, row: 1 },
+        value: { kind: "text", value: "42" },
       }],
     });
     app.dispose();

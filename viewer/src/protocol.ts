@@ -8,6 +8,7 @@ export type {
   AxisGeometry,
   ByteSpan,
   CalculationResult,
+  CellError,
   Diagnostic,
   EditOperation,
   EditTransaction,

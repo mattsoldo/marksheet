@@ -1,0 +1,154 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [
+    {
+      "code": "MS1201",
+      "severity": "error",
+      "span": [
+        56,
+        69
+      ]
+    }
+  ],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 70,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          34
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          35
+        ]
+      },
+      {
+        "content_span": [
+          35,
+          48
+        ],
+        "ending": "lf",
+        "span": [
+          35,
+          49
+        ]
+      },
+      {
+        "content_span": [
+          49,
+          50
+        ],
+        "ending": "lf",
+        "span": [
+          49,
+          51
+        ]
+      },
+      {
+        "content_span": [
+          51,
+          55
+        ],
+        "ending": "lf",
+        "span": [
+          51,
+          56
+        ]
+      },
+      {
+        "content_span": [
+          56,
+          69
+        ],
+        "ending": "lf",
+        "span": [
+          56,
+          70
+        ]
+      }
+    ],
+    "sha256": "d72d65efc16946090a694f6473587f7edeba1047b16185a8b08d9a1e305957b5"
+  },
+  "workbook": {
+    "book": null,
+    "capabilities": [],
+    "extensions": [],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "main",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              49,
+              51
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "x",
+                    "span": [
+                      49,
+                      50
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "x"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              35,
+              48
+            ]
+          },
+          {
+            "kind": "apply",
+            "span": [
+              56,
+              69
+            ],
+            "styles": [],
+            "target": "A1"
+          }
+        ],
+        "label": "Main",
+        "span": [
+          16,
+          34
+        ]
+      }
+    ],
+    "styles": []
+  }
+}
