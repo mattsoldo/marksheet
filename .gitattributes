@@ -3,7 +3,8 @@
 *.ms text eol=lf
 LICENSE text eol=lf
 
-# These fixtures intentionally retain CRLF bytes for parser and round-trip tests.
+# These fixtures intentionally retain carriage-return bytes for parser and
+# round-trip tests.
 tests/conformance/valid/csv_edge_cases.ms binary
 tests/roundtrip/crlf_input.ms binary
 tests/edit/rename_sheet_id_crlf.before.ms binary

@@ -77,6 +77,61 @@
       "source": "tests/conformance/invalid/overlap.ms"
     },
     {
+      "id": "tests/conformance/invalid/quoted_apply_style",
+      "projection": "quoted_apply_style.json",
+      "source": "tests/conformance/invalid/quoted_apply_style.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/quoted_block_anchor",
+      "projection": "quoted_block_anchor.json",
+      "source": "tests/conformance/invalid/quoted_block_anchor.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/quoted_block_encoding",
+      "projection": "quoted_block_encoding.json",
+      "source": "tests/conformance/invalid/quoted_block_encoding.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/quoted_column_range",
+      "projection": "quoted_column_range.json",
+      "source": "tests/conformance/invalid/quoted_column_range.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/quoted_column_width",
+      "projection": "quoted_column_width.json",
+      "source": "tests/conformance/invalid/quoted_column_width.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/quoted_extension_capability",
+      "projection": "quoted_extension_capability.json",
+      "source": "tests/conformance/invalid/quoted_extension_capability.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/quoted_row_height",
+      "projection": "quoted_row_height.json",
+      "source": "tests/conformance/invalid/quoted_row_height.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/quoted_sheet_id",
+      "projection": "quoted_sheet_id.json",
+      "source": "tests/conformance/invalid/quoted_sheet_id.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/quoted_style_id",
+      "projection": "quoted_style_id.json",
+      "source": "tests/conformance/invalid/quoted_style_id.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/quoted_table_encoding",
+      "projection": "quoted_table_encoding.json",
+      "source": "tests/conformance/invalid/quoted_table_encoding.ms"
+    },
+    {
+      "id": "tests/conformance/invalid/quoted_table_id",
+      "projection": "quoted_table_id.json",
+      "source": "tests/conformance/invalid/quoted_table_id.ms"
+    },
+    {
       "id": "tests/conformance/invalid/required_extension",
       "projection": "required_extension.json",
       "source": "tests/conformance/invalid/required_extension.ms"

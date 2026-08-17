@@ -12,6 +12,7 @@ use marksheet_model::{
 
 use crate::cst::{CsvBlock, CsvKind, Directive, ExtensionBlock, Node, Span};
 use crate::diagnostic::{Diagnostic, error, warning};
+use crate::tokens::{split_target_and_rest, split_tokens};
 
 #[derive(Clone, Debug, Default)]
 pub struct ParseOptions {
@@ -173,6 +174,14 @@ impl Lowerer<'_> {
         let Some(tokens) = self.exact_tokens(directive.arguments, 2) else {
             return;
         };
+        if tokens[0].quoted {
+            self.diagnostics.push(error(
+                "MS1201",
+                "sheet identifier must not be a JSON string",
+                tokens[0].span,
+            ));
+            return;
+        }
         let Ok(id) = SheetId::parse(&tokens[0].text) else {
             self.diagnostics
                 .push(error("MS1201", "invalid sheet identifier", tokens[0].span));
@@ -209,7 +218,15 @@ impl Lowerer<'_> {
         let Some(tokens) = self.exact_tokens(csv.directive.arguments, expected) else {
             return;
         };
-        if tokens.last().is_none_or(|token| token.text != "csv") {
+        // The grammar spells the encoding as a bare `csv` literal, so a JSON
+        // string that decodes to `csv` must not be accepted here.
+        let encoding = &tokens[expected - 1];
+        if encoding.quoted {
+            let span = encoding.span;
+            self.invalid(span, "block encoding must not be a JSON string");
+            return;
+        }
+        if encoding.text != "csv" {
             self.invalid(
                 csv.directive.arguments,
                 "only the csv block encoding is supported",
@@ -217,6 +234,14 @@ impl Lowerer<'_> {
             return;
         }
         let anchor_index = usize::from(csv.kind == CsvKind::Table);
+        if tokens[anchor_index].quoted {
+            self.diagnostics.push(error(
+                "MS1202",
+                "block anchor must not be a JSON string",
+                tokens[anchor_index].span,
+            ));
+            return;
+        }
         let Ok(anchor) = Coordinate::parse(&tokens[anchor_index].text) else {
             self.diagnostics.push(error(
                 "MS1202",
@@ -278,6 +303,14 @@ impl Lowerer<'_> {
         }
 
         if csv.kind == CsvKind::Table {
+            if tokens[0].quoted {
+                self.diagnostics.push(error(
+                    "MS1201",
+                    "table identifier must not be a JSON string",
+                    tokens[0].span,
+                ));
+                return;
+            }
             let Ok(table_id) = TableId::parse(&tokens[0].text) else {
                 self.diagnostics
                     .push(error("MS1201", "invalid table identifier", tokens[0].span));
@@ -364,6 +397,14 @@ impl Lowerer<'_> {
         let Some((id_token, property_span)) = self.first_token_and_rest(directive.arguments) else {
             return;
         };
+        if id_token.quoted {
+            self.diagnostics.push(error(
+                "MS1201",
+                "style identifier must not be a JSON string",
+                id_token.span,
+            ));
+            return;
+        }
         let Ok(id) = StyleId::parse(&id_token.text) else {
             self.diagnostics
                 .push(error("MS1201", "invalid style identifier", id_token.span));
@@ -524,6 +565,14 @@ impl Lowerer<'_> {
         let Some(tokens) = self.exact_tokens(directive.arguments, 1) else {
             return;
         };
+        if tokens[0].quoted {
+            self.diagnostics.push(error(
+                "MS1201",
+                "extension capability must not be a JSON string",
+                tokens[0].span,
+            ));
+            return;
+        }
         let Ok(capability) = ExtensionId::parse(&tokens[0].text) else {
             self.diagnostics.push(error(
                 "MS1201",
@@ -578,6 +627,14 @@ impl Lowerer<'_> {
         let Some(tokens) = self.exact_tokens(extension.directive.arguments, 2) else {
             return;
         };
+        if tokens[0].quoted {
+            self.diagnostics.push(error(
+                "MS1201",
+                "extension capability must not be a JSON string",
+                tokens[0].span,
+            ));
+            return;
+        }
         let Ok(capability) = ExtensionId::parse(&tokens[0].text) else {
             self.diagnostics.push(error(
                 "MS1201",
@@ -750,6 +807,14 @@ impl Lowerer<'_> {
         };
         let mut styles = Vec::new();
         for token in &tokens {
+            if token.quoted {
+                self.diagnostics.push(error(
+                    "MS1201",
+                    "style identifier must not be a JSON string",
+                    token.span,
+                ));
+                continue;
+            }
             let Ok(style) = StyleId::parse(&token.text) else {
                 self.diagnostics
                     .push(error("MS1201", "invalid style identifier", token.span));
@@ -823,11 +888,27 @@ impl Lowerer<'_> {
         let Some(tokens) = self.exact_tokens(directive.arguments, 2) else {
             return;
         };
+        if tokens[0].quoted {
+            self.diagnostics.push(error(
+                "MS1202",
+                "column range must not be a JSON string",
+                tokens[0].span,
+            ));
+            return;
+        }
         let Some(columns) = parse_column_range(&tokens[0].text) else {
             self.diagnostics
                 .push(error("MS1202", "invalid column range", tokens[0].span));
             return;
         };
+        if tokens[1].quoted {
+            self.diagnostics.push(error(
+                "MS2201",
+                "column width must not be a JSON string",
+                tokens[1].span,
+            ));
+            return;
+        }
         let Some(width) = tokens[1]
             .text
             .strip_prefix("width=")
@@ -855,11 +936,27 @@ impl Lowerer<'_> {
         let Some(tokens) = self.exact_tokens(directive.arguments, 2) else {
             return;
         };
+        if tokens[0].quoted {
+            self.diagnostics.push(error(
+                "MS1202",
+                "row range must not be a JSON string",
+                tokens[0].span,
+            ));
+            return;
+        }
         let Some(rows) = parse_row_range(&tokens[0].text) else {
             self.diagnostics
                 .push(error("MS1202", "invalid row range", tokens[0].span));
             return;
         };
+        if tokens[1].quoted {
+            self.diagnostics.push(error(
+                "MS2201",
+                "row height must not be a JSON string",
+                tokens[1].span,
+            ));
+            return;
+        }
         let Some(height) = tokens[1]
             .text
             .strip_prefix("height=")
@@ -999,45 +1096,18 @@ struct Token {
 }
 
 fn lex_tokens(source: &str, span: Span) -> Result<Vec<Token>, &'static str> {
-    let bytes = source.as_bytes();
-    let mut cursor = span.start;
     let mut tokens = Vec::new();
-    while cursor < span.end {
-        while cursor < span.end && bytes[cursor] == b' ' {
-            cursor += 1;
-        }
-        if cursor == span.end {
-            break;
-        }
-        let start = cursor;
-        let mut in_string = false;
-        let mut escaped = false;
-        let mut brackets = 0_u32;
-        while cursor < span.end {
-            match bytes[cursor] {
-                b'"' if !escaped => in_string = !in_string,
-                b'\\' if in_string => escaped = !escaped,
-                b'[' if !in_string => brackets += 1,
-                b']' if !in_string && brackets > 0 => brackets -= 1,
-                b' ' if !in_string && brackets == 0 => break,
-                _ => escaped = false,
-            }
-            cursor += 1;
-        }
-        if in_string {
-            return Err("unterminated JSON string");
-        }
-        let raw = &source[start..cursor];
-        let quoted = raw.starts_with('"');
+    for raw in split_tokens(&source[span.range()])? {
+        let quoted = raw.text.starts_with('"');
         let text = if quoted {
-            serde_json::from_str(raw).map_err(|_| "invalid JSON string")?
+            serde_json::from_str(raw.text).map_err(|_| "invalid JSON string")?
         } else {
-            raw.to_owned()
+            raw.text.to_owned()
         };
         tokens.push(Token {
             text,
-            raw: raw.to_owned(),
-            span: Span::new(start, cursor),
+            raw: raw.text.to_owned(),
+            span: Span::new(span.start + raw.start, span.start + raw.end()),
             quoted,
         });
     }
@@ -1112,28 +1182,6 @@ fn parse_bracket_target(value: &str) -> Option<(&str, String)> {
         header.push(']');
     }
     Some((id, header))
-}
-
-/// Finds the separator after a target while allowing spaces inside a
-/// structured-reference header and `]]` escapes.
-fn split_target_and_rest(value: &str) -> Option<(&str, &str)> {
-    let bytes = value.as_bytes();
-    let mut index = 0;
-    let mut in_brackets = false;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'[' => in_brackets = true,
-            b']' if in_brackets && bytes.get(index + 1) == Some(&b']') => index += 1,
-            b']' => in_brackets = false,
-            b' ' if !in_brackets => {
-                let rest = value[index..].trim_start();
-                return (!rest.is_empty()).then_some((&value[..index], rest));
-            }
-            _ => {}
-        }
-        index += 1;
-    }
-    None
 }
 
 fn parse_fill_target(value: &str) -> Option<FillTarget> {
