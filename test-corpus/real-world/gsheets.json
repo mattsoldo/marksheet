@@ -1,0 +1,338 @@
+[
+  {
+    "id": "1Rt_Pd9VdbYLpwiSkaYiScYZY00ApF7B5o-LxugJhul0",
+    "file": "marketing_dashboard.xlsx",
+    "note": "8 sheets, ~2 MB: the largest and most formula-heavy of the group, with a dashboard, setup sheet and instructions.",
+    "sha256_first_seen": "792098c4e12791fd59655e9fd60b3a1763c79f96cba3e926156ba4b872a4ebb2",
+    "bytes_first_seen": 2053810
+  },
+  {
+    "id": "1Ns3d2ECRhJaJgABSQ38qZfTnOHO-R-r6z7RIHSdJI5o",
+    "file": "budget_transactions_dashboard.xlsx",
+    "note": "6 sheets: instructions, a transactions ledger and a dashboard built on it.",
+    "sha256_first_seen": "836fe1fe242293137b4a7cdb378c5781f419ae0b476e239653f5f9fb08232777",
+    "bytes_first_seen": 33085
+  },
+  {
+    "id": "18SZnGo40teKBUDeQxJ0pI7tBsfSOg11NFEJ4kCKSLSk",
+    "file": "employee_schedule.xlsx",
+    "note": "6 sheets: a monthly overview plus one sheet per week, heavy on merged cells and formatting.",
+    "sha256_first_seen": "2f6c7302027c855733f0bcddc8f708b836d28954c55564d3a2987b2d9fefb708",
+    "bytes_first_seen": 88937
+  },
+  {
+    "id": "19MR_l4qxlDMN52HG9cnNsWL2UsGPsXS00F19tmmWQg0",
+    "file": "gantt_chart.xlsx",
+    "note": "Gantt chart: dense conditional formatting driven by date arithmetic.",
+    "sha256_first_seen": "f0131f863b57b048cf136278501d1fcad0eae06b9c7eb3599737757584090cbc",
+    "bytes_first_seen": 13782
+  },
+  {
+    "id": "1V4d4mIDvvZP_I92kBB54RY5FhmuFkErZY-9WDcO_CS0",
+    "file": "annual_budget_tracker.xlsx",
+    "note": "4 sheets: setup, income and expenses feeding an annual roll-up.",
+    "sha256_first_seen": "ead98fcf29d56c87d65ad80590375c9fe32274377e2925759b7cd4c8bf8a2e38",
+    "bytes_first_seen": 27878
+  },
+  {
+    "id": "13hf67JpMnUIhwzSlycZxr4ps4IFpdjWQOVNAhDcEz5o",
+    "file": "traffic_dashboard_rawdata.xlsx",
+    "note": "4 sheets including a raw-data sheet and a dashboard computed from it.",
+    "sha256_first_seen": "255b4314126d4929156c166ddc87eb47f8ed883f17ef030b50f8aeda6a47ad88",
+    "bytes_first_seen": 36994
+  },
+  {
+    "id": "1W9dXXOJUwtBVarLY9FRko3glIm83-iXHHH0E6wT_AxU",
+    "file": "event_marketing_timeline.xlsx",
+    "note": "Single dense timeline sheet with a wide styled grid.",
+    "sha256_first_seen": "0d52d322d2146cc26a1145341dc05b024a7c77f07d9666c625cd714b996f624d",
+    "bytes_first_seen": 22609
+  },
+  {
+    "id": "1y9wdAAwET5v21JmN7NqZItWjP-i_1AlN-RhXn1tItE0",
+    "file": "advanced_gantt.xlsx",
+    "note": "advanced gantt template exported from Google Sheets",
+    "sha256_first_seen": "4a7bcd2f424f3081b14106270e37816cf8002d55c65bfdf90479a70e03a02da9",
+    "bytes_first_seen": 431598
+  },
+  {
+    "id": "1TX9FzuaF1CeFX07_f1fTL81x9Pc3BpG_NyTMtENJGd4",
+    "file": "agile_project_plan.xlsx",
+    "note": "agile project plan template exported from Google Sheets",
+    "sha256_first_seen": "32e1c65e7f40a3617a5cdcde2875ae48ce5eae2e9cf2b5e9ec0648522a8b9525",
+    "bytes_first_seen": 298307
+  },
+  {
+    "id": "1O8NX9KYGPNou9BDCvp5z1-KZQIG-sxV7za5U5Mqusss",
+    "file": "balance_sheet.xlsx",
+    "note": "balance sheet template exported from Google Sheets",
+    "sha256_first_seen": "b4e562d6c65e074b5f810cdbc2371181041bb89b287908022a0cd3fbf6cc62fd",
+    "bytes_first_seen": 841299
+  },
+  {
+    "id": "17Z9tLHPvVvyRfFrdZX32lbIZojvu8sQdVBAURJT7dtc",
+    "file": "barcode_inventory.xlsx",
+    "note": "barcode inventory template exported from Google Sheets",
+    "sha256_first_seen": "86832ac12eed6856161a001d138dbc20f8ec9c15e3932efb36426cfd9d3c9951",
+    "bytes_first_seen": 185386
+  },
+  {
+    "id": "1rx6fEsm-fj_fNRPJ3szSr4oryXtVSQwahxUy3IcT-jo",
+    "file": "budget_2021_large.xlsx",
+    "note": "budget 2021 large template exported from Google Sheets",
+    "sha256_first_seen": "b4f956e0ba0402ff8802536675cee99c4f042b5b4ee677a60106fbaf1d75026a",
+    "bytes_first_seen": 1866779
+  },
+  {
+    "id": "1TAXeBDKJO1keYwKWjP0fdf8K2LdPd00hxdw_MifA4WQ",
+    "file": "budget_transaction_tracking.xlsx",
+    "note": "budget transaction tracking template exported from Google Sheets",
+    "sha256_first_seen": "535bbaebc763a5842d160ebbaea76c22bf7702daee48fb768f29e393aab8c3f1",
+    "bytes_first_seen": 18169
+  },
+  {
+    "id": "1kxiKO-i3tPLPtPEBZoXI5HQCTRDRDduxfke5l8tev-4",
+    "file": "budget_vs_actual.xlsx",
+    "note": "budget vs actual template exported from Google Sheets",
+    "sha256_first_seen": "25458439712a791a2a0caa849e31e8df61d7b32a8bcda0cdbc3a480e642fa2a8",
+    "bytes_first_seen": 685307
+  },
+  {
+    "id": "1WcqOAq3b7MEOwEri4tTIXq2lkpGml_3wz0NPqwYgAu0",
+    "file": "chart_gallery.xlsx",
+    "note": "chart gallery template exported from Google Sheets",
+    "sha256_first_seen": "266ae538cb5499abc8d0196457191818931e5721d1634b2c4665392a542aaf8a",
+    "bytes_first_seen": 1812232
+  },
+  {
+    "id": "1BMAO6J6fsTBdldcGe-Lw3afExfH05ZGcMybCgc-YPco",
+    "file": "chemical_inventory.xlsx",
+    "note": "chemical inventory template exported from Google Sheets",
+    "sha256_first_seen": "9c61afc6bc93e873a76f60e4de5ee023e4066a9db6c4c0482928b110a8c5589f",
+    "bytes_first_seen": 138203
+  },
+  {
+    "id": "1wtpUXokVECx8dP3AkxMy8ifxxHuctjv7a6xcqUvMxtA",
+    "file": "construction_schedule.xlsx",
+    "note": "construction schedule template exported from Google Sheets",
+    "sha256_first_seen": "804b8adf8f02a7f9e2a3b56549743ae7a8f9ac9c2dc7a2bb0d9d338e4acac708",
+    "bytes_first_seen": 255727
+  },
+  {
+    "id": "1dFRfWV6BYoXYFJFvrv2vlhXKmCD1to3SDz4Xlo3N98M",
+    "file": "content_calendar.xlsx",
+    "note": "content calendar template exported from Google Sheets",
+    "sha256_first_seen": "f4781cc7eedf5a4ec2da1bf16c6af9377f0cf78c939ab776773f6ad857af44da",
+    "bytes_first_seen": 648571
+  },
+  {
+    "id": "1fc3U-3KGYkuZTeqF4xX03Tehgt6JB57oKKZbIZeXXDw",
+    "file": "expense_tracker.xlsx",
+    "note": "expense tracker template exported from Google Sheets",
+    "sha256_first_seen": "163c31c93854878331b4c06dcf56cc5fb4da8ae200ee2d6e882238729c709a24",
+    "bytes_first_seen": 58404
+  },
+  {
+    "id": "1QsuW5UdrYNqz42ZCRC3UV_LTpw3CrmFlZ2wNPepQySA",
+    "file": "financial_statements.xlsx",
+    "note": "financial statements template exported from Google Sheets",
+    "sha256_first_seen": "2f174533e4a137452d4260dc3cc0220d0c239b2d813abe4af43bb2cfac3493fb",
+    "bytes_first_seen": 201646
+  },
+  {
+    "id": "1T4cmzRVlDR5TzxEpD8OeV4orraXGKrzaX8SgeljWiGI",
+    "file": "gantt_dependencies.xlsx",
+    "note": "gantt dependencies template exported from Google Sheets",
+    "sha256_first_seen": "22f73f891e5f2789c0214b87b08abe9b1a771726d76aed108a70ca31ce2e3534",
+    "bytes_first_seen": 431293
+  },
+  {
+    "id": "1CVHK7aP2O-M0edjmDp5l2njuhTTVkV93R9_tRDLGXkk",
+    "file": "inventory_simple.xlsx",
+    "note": "inventory simple template exported from Google Sheets",
+    "sha256_first_seen": "d5777f09fe160c4956f1354cc9b08dbcdfd0f76581d52f9107939fdb08a3b6cd",
+    "bytes_first_seen": 24715
+  },
+  {
+    "id": "11e90lu-RAIxcpvfxXASmAqHIDnnd2ZbNQfVel9X4S0w",
+    "file": "invoice_basic.xlsx",
+    "note": "invoice basic template exported from Google Sheets",
+    "sha256_first_seen": "5bc3519c2dfd7d856229281dead137cd35c022cb98db865ff1ab9910048d1df4",
+    "bytes_first_seen": 12038
+  },
+  {
+    "id": "1mtb0xTlE0s9gDpRGUFT0DgI3ccXpeHruOyspvz_uDmU",
+    "file": "invoice_discounts.xlsx",
+    "note": "invoice discounts template exported from Google Sheets",
+    "sha256_first_seen": "25099605534ffa177677cce1a2713cb182650d5e2079cdb7842e97be9c8a4a85",
+    "bytes_first_seen": 6316
+  },
+  {
+    "id": "1mx6bppZIDQBk4O7L4ohUBIYGiJigPodzqPTwVb9XnMw",
+    "file": "invoice_smartsheet.xlsx",
+    "note": "invoice smartsheet template exported from Google Sheets",
+    "sha256_first_seen": "b50fe7f9336faa3812c2854e0e07eca9aeeb30e98ba767146dcf664841ff8cbd",
+    "bytes_first_seen": 108566
+  },
+  {
+    "id": "1HhiHPEBpy8I9n-MUtzBMIVEJmgFIih1axDtwpN37ZOI",
+    "file": "it_project_gantt.xlsx",
+    "note": "it project gantt template exported from Google Sheets",
+    "sha256_first_seen": "16ed4384765ea35040f086b33544e0abfb8c0b4ba0eea64a84d1da092fd0f9e0",
+    "bytes_first_seen": 191889
+  },
+  {
+    "id": "1Iz3YHbMuLGwzaPOiMIbdyFEb_JkwhyfVqco4q5jxyLw",
+    "file": "marketers_index.xlsx",
+    "note": "marketers index template exported from Google Sheets",
+    "sha256_first_seen": "c1ae3f689ea31d80ef6f99b4471e11e64d10484b51110d365cb11f943e667fd4",
+    "bytes_first_seen": 19633
+  },
+  {
+    "id": "1uXLxuO2SNKMwPET-m4Q2lcWfJwT8CXILWWuKOtm-GTk",
+    "file": "medical_research_gantt.xlsx",
+    "note": "medical research gantt template exported from Google Sheets",
+    "sha256_first_seen": "c391b3731ceda11ac3993c2e9a59229c02978297c56caa0d6502235c60f81ed1",
+    "bytes_first_seen": 111090
+  },
+  {
+    "id": "1M5WJyLnM6D64jBOWWLagiflbzKXj6EsIJpWmTvcpGE0",
+    "file": "monthly_budget.xlsx",
+    "note": "monthly budget template exported from Google Sheets",
+    "sha256_first_seen": "9951269735716fced4927aeecf9e153788587fc321f99729ca39776a28b74bc8",
+    "bytes_first_seen": 12629
+  },
+  {
+    "id": "1zQo1J0vLb6X4s_byJLZfctyiueim2qul7EDiaGJthsM",
+    "file": "multi_location_inventory.xlsx",
+    "note": "multi location inventory template exported from Google Sheets",
+    "sha256_first_seen": "deaca5e479143b1e8b5b63d8e4d78c21f17cfcedd55676f0761533d2cbc77fd4",
+    "bytes_first_seen": 189357
+  },
+  {
+    "id": "1SJpHIwwqnWfUC88Fb5mZ58TTHc8FiydHEX4wuXLnF4w",
+    "file": "payroll_register.xlsx",
+    "note": "payroll register template exported from Google Sheets",
+    "sha256_first_seen": "78b5c880d87c68a114c0a547903a7df004470cd2ff8d98e292460df06ccf16b5",
+    "bytes_first_seen": 241959
+  },
+  {
+    "id": "1Ryko0uTB2za6YGxTPn8BhGR9sj8r0vck4C6apJHGL8o",
+    "file": "personal_budget_2022.xlsx",
+    "note": "personal budget 2022 template exported from Google Sheets",
+    "sha256_first_seen": "2485a39ea8328b4fa80b5a12c009c6e6fc96550ea11b7ac71e8ee4ee89771e02",
+    "bytes_first_seen": 321938
+  },
+  {
+    "id": "1A4judRwLFdf5k0e6W2nKAWv-cO9nco6-i-swPAygftE",
+    "file": "pm_dashboard.xlsx",
+    "note": "pm dashboard template exported from Google Sheets",
+    "sha256_first_seen": "54405bb9c2ec1bb9e7659b54682520d181a12044b56f06bd23394ee0a0de9ecd",
+    "bytes_first_seen": 301532
+  },
+  {
+    "id": "1cFtD_yDFgzOOuQN0x9mwGqDQY0zhDknDaVyXZm2ariU",
+    "file": "product_roadmap.xlsx",
+    "note": "product roadmap template exported from Google Sheets",
+    "sha256_first_seen": "2b18305aa5920193c857e2a22c95d5b2e7bb5ecf7e156f8a19def2abeb7cca27",
+    "bytes_first_seen": 304708
+  },
+  {
+    "id": "1sSaUbagYc2s66jtFr9FxhIBLdYlViJI5PNUTZf_LzY8",
+    "file": "project_monitoring.xlsx",
+    "note": "project monitoring template exported from Google Sheets",
+    "sha256_first_seen": "61c842322e4b7ae3b27b4e0f32562fdc5502d225df158c85d30bd26ecf4f0300",
+    "bytes_first_seen": 314039
+  },
+  {
+    "id": "19V3y71VFveHI0FTf0BvLEdV2JL-QMGfL5GGKt29qwxM",
+    "file": "purchase_order.xlsx",
+    "note": "purchase order template exported from Google Sheets",
+    "sha256_first_seen": "ea2d62a8ea19e247b698626452d6e4af09bf4e06741b4ac6e46215cb7f56d157",
+    "bytes_first_seen": 148577
+  },
+  {
+    "id": "1jV40GcoOtZL5CE4Xwtdqbn0FOtJFoVniCvv7WquDxoA",
+    "file": "raci_matrix.xlsx",
+    "note": "raci matrix template exported from Google Sheets",
+    "sha256_first_seen": "4478697c3865ceea9428a483aa28947dfd24fed83924c670b1309b733ef25e4a",
+    "bytes_first_seen": 243711
+  },
+  {
+    "id": "1NUWYsFLBW9NRTRzRmerX6AlxFLtG8SpsStJ_A3Btk0g",
+    "file": "risk_register.xlsx",
+    "note": "risk register template exported from Google Sheets",
+    "sha256_first_seen": "23a60d3356a485ef3a49c179875207f13d663afdc876a2c6507ad97aed4e6e9f",
+    "bytes_first_seen": 182348
+  },
+  {
+    "id": "1y6UFcV_AS5IBiGHUy6XyxQiUiU5tx3tyu4PGNvKrqC0",
+    "file": "rolling_forecast.xlsx",
+    "note": "rolling forecast template exported from Google Sheets",
+    "sha256_first_seen": "f7d89eb5042e9ebdf24b4686440e9dee69be9ed0cf9e204c6a0ee1e53631f889",
+    "bytes_first_seen": 706323
+  },
+  {
+    "id": "1mF0_txpHuGYdT7hxwY8V2_lszqYBiI4QbhTYx_keij0",
+    "file": "sales_dashboard.xlsx",
+    "note": "sales dashboard template exported from Google Sheets",
+    "sha256_first_seen": "ee2d9ec6569d2904b67853b18dada17608f9bb28f99eb228e587e4577d25b916",
+    "bytes_first_seen": 262988
+  },
+  {
+    "id": "1mwc8CNnN68KN1YEGnM6i6GWX8nobxM97eFRfUS9H1rs",
+    "file": "scrum_gantt.xlsx",
+    "note": "scrum gantt template exported from Google Sheets",
+    "sha256_first_seen": "7a9ce091a9af321d000f9c33a62b1f8b59b57efd424062e0395051974a964fa8",
+    "bytes_first_seen": 461075
+  },
+  {
+    "id": "13JPX7xdGRfs38cER6qK_CGnV3GaaWvzB0ljEGOu4GNQ",
+    "file": "social_media_calendar.xlsx",
+    "note": "social media calendar template exported from Google Sheets",
+    "sha256_first_seen": "e299abcfef6458ee35f08c1aba5771f8616958f3238d3ec9bc1fe50fef680eb5",
+    "bytes_first_seen": 68963
+  },
+  {
+    "id": "1WQ8lW7ITk7as9TakZc74wb-Hnkt4qBdQO3Wy9ovK20Q",
+    "file": "stakeholder_management.xlsx",
+    "note": "stakeholder management template exported from Google Sheets",
+    "sha256_first_seen": "73d3db492e7d1fa7ed455e02e069283e59d1b94f114d278d1ef259b08d41905f",
+    "bytes_first_seen": 291219
+  },
+  {
+    "id": "1B3BrdD2ypRT0jk1wHyWU9xciVCyExGBruWw-txazE9s",
+    "file": "teamgantt_chart.xlsx",
+    "note": "teamgantt chart template exported from Google Sheets",
+    "sha256_first_seen": "0106e002cce2889a44dee8534ea42eb34f45dcbeafbc5eff2647eed1c07ab687",
+    "bytes_first_seen": 30110
+  },
+  {
+    "id": "1fhkLFkKOAJd6dj-Q_0R49d_OXlfpPguhnNiCISz816w",
+    "file": "timesheet.xlsx",
+    "note": "timesheet template exported from Google Sheets",
+    "sha256_first_seen": "6c1b1f471935b9975e94e092ee7cc3849c83f7f190284bdd4a7d49f93e28c7f7",
+    "bytes_first_seen": 236451
+  },
+  {
+    "id": "1AKrIXpFWYPTbTQIJR0V-5kSdhpQ-ODWD1MaSRSeaLDM",
+    "file": "warehouse_inventory.xlsx",
+    "note": "warehouse inventory template exported from Google Sheets",
+    "sha256_first_seen": "dec4c8bf2c06934b041c5a2521b3e9ad2d435da2280088a550c663bfa97de517",
+    "bytes_first_seen": 423657
+  },
+  {
+    "id": "1FjojfNyLpOecd4JwDPahTdIG95Rvc0RSVYZyBHd8694",
+    "file": "work_breakdown_structure.xlsx",
+    "note": "work breakdown structure template exported from Google Sheets",
+    "sha256_first_seen": "8aaf7dad63d6ff306eb4b1ce8502845b1940a16d0a1eee77a65b6e51f33f164d",
+    "bytes_first_seen": 240797
+  },
+  {
+    "id": "11Pdpt3-fmRC_vEIxvSODbIXgOs8XKntP_KWvafKpisA",
+    "file": "zero_based_budget.xlsx",
+    "note": "zero based budget template exported from Google Sheets",
+    "sha256_first_seen": "ce96bdee4231e01252c02c50e3e60e71c1fa910160de916d801b41f973663220",
+    "bytes_first_seen": 82381
+  }
+]

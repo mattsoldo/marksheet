@@ -1,0 +1,32 @@
+[
+  {
+    "file": "ons_consumer_price_inflation.xlsx",
+    "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/consumerpriceinflation/current/consumerpriceinflationdetailedreferencetables.xlsx",
+    "publisher": "UK Office for National Statistics",
+    "license": "UK Open Government Licence v3.0",
+    "note": "81 sheets, ~2 MB of real Excel-authored statistical tables. The largest and most structurally complex workbook in the corpus, and the file that first surfaced the carriage-return-in-cell-text defect.",
+    "stability": "The 'current' URL tracks the latest monthly release, so its content changes over time; it is always a real ONS workbook.",
+    "sha256_first_seen": "fa06e6060d5b697dd01b1e24f5b1d5c5a8e5236b2ea66022c9e2d3cdac2b990f",
+    "bytes_first_seen": 2115356
+  },
+  {
+    "file": "worldbank_gdp.xlsx",
+    "url": "https://databankfiles.worldbank.org/public/ddpext_download/GDP.xlsx",
+    "publisher": "World Bank DataBank",
+    "license": "CC BY 4.0",
+    "note": "Published GDP ranking table: a compact real-world reporting workbook.",
+    "stability": "Refreshed by the publisher; content changes between releases.",
+    "sha256_first_seen": "72e34823927524c6c69015aa38bef63a5cbae07db2f89dcaf98f4412689b2542",
+    "bytes_first_seen": 31622
+  },
+  {
+    "file": "us_census_state_population.xlsx",
+    "url": "https://www2.census.gov/programs-surveys/popest/tables/2020-2023/state/totals/NST-EST2023-POP.xlsx",
+    "publisher": "U.S. Census Bureau",
+    "license": "Public domain (17 U.S.C. 105)",
+    "note": "Vintage-2023 state population estimates: a fixed, dated release.",
+    "stability": "Dated release path, so this one is stable.",
+    "sha256_first_seen": "aec49456a006a06bdaba1ec90f032e0412617da40cdda26709074fbc6bb528e6",
+    "bytes_first_seen": 14964
+  }
+]
