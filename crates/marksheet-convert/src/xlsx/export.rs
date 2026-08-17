@@ -637,45 +637,44 @@ fn styles_xml(styles: &[StyleProperties]) -> Vec<u8> {
 }
 
 fn custom_number_format(index: usize, style: &StyleProperties) -> Option<(u32, String)> {
+    custom_number_format_code(style)
+        .map(|code| (164 + u32::try_from(index).unwrap_or(u32::MAX), code))
+}
+
+/// Renders the `numFmt` format code this exporter emits for a style, or `None`
+/// when the style is carried by a built-in `numFmtId` instead. The importer
+/// reuses it to decide whether a source format survives the projection.
+pub(super) fn custom_number_format_code(style: &StyleProperties) -> Option<String> {
     match style.number {
-        Some(NumberFormat::Currency) => {
-            let decimals = usize::from(style.decimals.unwrap_or(2));
-            let code = format!(
-                "[$-{}]#,##0{}",
-                style.currency.as_deref().unwrap_or("USD"),
-                if decimals == 0 {
-                    String::new()
-                } else {
-                    format!(".{}", "0".repeat(decimals))
-                }
-            );
-            Some((164 + u32::try_from(index).unwrap_or(u32::MAX), code))
-        }
+        Some(NumberFormat::Currency) => Some(format!(
+            "[$-{}]#,##0{}",
+            style.currency.as_deref().unwrap_or("USD"),
+            fraction_pattern(style.decimals.unwrap_or(2))
+        )),
         Some(NumberFormat::Decimal | NumberFormat::Percent) if style.decimals.is_some() => {
-            let suffix = if style.number == Some(NumberFormat::Percent) {
-                "%"
-            } else {
-                ""
-            };
-            let decimals = usize::from(style.decimals.unwrap_or(0));
-            Some((
-                164 + u32::try_from(index).unwrap_or(u32::MAX),
-                format!(
-                    "0{}{}",
-                    if decimals == 0 {
-                        String::new()
-                    } else {
-                        format!(".{}", "0".repeat(decimals))
-                    },
-                    suffix
-                ),
+            Some(format!(
+                "0{}{}",
+                fraction_pattern(style.decimals.unwrap_or(0)),
+                if style.number == Some(NumberFormat::Percent) {
+                    "%"
+                } else {
+                    ""
+                }
             ))
         }
         _ => None,
     }
 }
 
-fn built_in_number_format(style: &StyleProperties) -> u32 {
+fn fraction_pattern(decimals: u8) -> String {
+    if decimals == 0 {
+        String::new()
+    } else {
+        format!(".{}", "0".repeat(usize::from(decimals)))
+    }
+}
+
+pub(super) fn built_in_number_format(style: &StyleProperties) -> u32 {
     match style.number {
         None | Some(NumberFormat::General) => 0,
         Some(NumberFormat::Integer) => 1,
