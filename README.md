@@ -80,11 +80,11 @@ Marksheet is at **Draft 0.1**. The format is being designed in public and is not
 yet stable. Files written during the `0.x` period may require migration as the
 core is refined. Stability rules become strict at `1.0`.
 
-The reference implementation has completed the Milestone 5 interoperability
-and extensions proof. It includes lossless parsing, canonical formatting,
-deterministic `portable-a1@1` calculation, source-aware semantic transactions,
-exact inverse patches, undo/redo, conservative external-change rebasing,
-semantic diff, and the following interoperable layers:
+The reference implementation has completed the Milestone 6 coding-harness
+proof. It includes lossless parsing, canonical formatting, deterministic
+`portable-a1@1` calculation, source-aware semantic transactions, exact inverse
+patches, undo/redo, conservative external-change rebasing, semantic diff, and
+the following interoperable layers:
 
 - `marksheet-view`, a sparse, pure-Rust, renderer-neutral projection layer. It
   returns bounded viewports and keeps authored values, virtual fills,
@@ -119,10 +119,10 @@ make calculation and rendering explicitly incomplete. Optional unavailable and
 undeclared opaque extensions remain visible and preserved. Workbooks never
 select code, URLs, package paths, or installation behavior.
 
-Milestone 6 adds the coding-harness integration kit: versioned automation JSON,
-source-aware query/edit commands, a canonical portable skill, a bounded local
-tool server, and one executable task corpus shared by Codex and Claude Code
-package profiles.
+The coding-harness integration kit adds versioned automation JSON, source-aware
+query/edit commands, a canonical portable skill, a bounded local tool server,
+and one executable task corpus completed by both Codex and Claude Code package
+profiles.
 
 ## Build and CLI usage
 
