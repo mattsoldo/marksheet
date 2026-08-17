@@ -563,9 +563,14 @@ would resolve a reference to a name that no longer exists as `#NAME?`, and an
 unresolved name reference cannot be written back to XLSX, a formula that reaches
 an omitted name is replaced with `#NAME?` — a cell formula becomes the typed
 error value and a fill becomes `=#NAME?` — with a `portable_formulas` replaced
-outcome per affected cell, table column, or fill range. Package-level defects
-such as malformed XML, duplicate case-insensitive names, or a name that collides
-with a table identifier remain conversion failures.
+outcome per affected cell, table column, or fill range. That replacement is the
+only formula outcome the affected location keeps: names resolve after every
+sheet has been read, so the substitution retracts the translation the first pass
+recorded for the same formula rather than leaving the report claiming both.
+Package-level defects such as malformed XML, duplicate case-insensitive names,
+or a name that collides with a table identifier after normalization remain
+conversion failures — the collision is a property of the identifier namespace,
+so it is fatal even when that name's own target is unimportable.
 
 Reaching a name at all requires rewriting the formula body. Excel spells sheet
 labels and defined names case-insensitively, while portable-a1@1 requires the
@@ -584,7 +589,14 @@ There is no honest default that flattens an arbitrary workbook into one CSV.
 
 The concrete public report is `marksheet-conversion@1`. It distinguishes
 `exact`, `approximated`, `omitted`, and `unsupported` feature outcomes and
-derives `lossless`, `lossy`, or `unsupported` fidelity from them. XLSX package
+derives `lossless`, `lossy`, or `unsupported` fidelity from them. A report never
+states two outcomes for the same feature at the same location: a converter that
+learns only in a later pass that an earlier decision no longer holds — a formula
+first translated, then destroyed once a defined name turned out to be
+unimportable — retracts the superseded outcome and its diagnostic before
+recording the replacement, and fidelity is rederived from what survives. The
+finalized report sorts `exact` ahead of `approximated`, so a stale claim left
+next to a true one would be the first a consumer reads. XLSX package
 writers use deterministic ZIP/XML construction (fixed order, timestamps,
 relationship IDs, and attributes) so reproducibility is testable. Import
 limits cover compressed and expanded archive size, members, XML nesting,
