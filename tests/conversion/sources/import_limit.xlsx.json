@@ -1,0 +1,8 @@
+{
+  "fixture": "marksheet-xlsx-source@1",
+  "sheets": ["Data"],
+  "parts": ["xl/sharedStrings.xml"],
+  "features": ["cells", "shared_strings"],
+  "declared_uncompressed_bytes": 1048577,
+  "generated": true
+}

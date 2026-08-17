@@ -15,7 +15,9 @@ clap.workspace = true
 marksheet-syntax = { path = "../marksheet-syntax" }
 marksheet-model = { path = "../marksheet-model" }
 marksheet-calc = { path = "../marksheet-calc" }
+marksheet-convert = { path = "../marksheet-convert" }
 marksheet-edit = { path = "../marksheet-edit" }
+marksheet-extensions = { path = "../marksheet-extensions" }
 serde.workspace = true
 serde_json.workspace = true
 

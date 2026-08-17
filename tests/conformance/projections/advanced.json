@@ -1,0 +1,339 @@
+{
+  "completeness": {
+    "calculation_complete": true,
+    "rendering_complete": true
+  },
+  "diagnostics": [
+    {
+      "code": "MS3102",
+      "severity": "warning",
+      "span": [
+        84,
+        97
+      ]
+    }
+  ],
+  "schema": "marksheet.conformance-projection@1",
+  "source": {
+    "byte_length": 235,
+    "physical_lines": [
+      {
+        "content_span": [
+          0,
+          15
+        ],
+        "ending": "lf",
+        "span": [
+          0,
+          16
+        ]
+      },
+      {
+        "content_span": [
+          16,
+          83
+        ],
+        "ending": "lf",
+        "span": [
+          16,
+          84
+        ]
+      },
+      {
+        "content_span": [
+          84,
+          97
+        ],
+        "ending": "lf",
+        "span": [
+          84,
+          98
+        ]
+      },
+      {
+        "content_span": [
+          98,
+          98
+        ],
+        "ending": "lf",
+        "span": [
+          98,
+          99
+        ]
+      },
+      {
+        "content_span": [
+          99,
+          121
+        ],
+        "ending": "lf",
+        "span": [
+          99,
+          122
+        ]
+      },
+      {
+        "content_span": [
+          122,
+          135
+        ],
+        "ending": "lf",
+        "span": [
+          122,
+          136
+        ]
+      },
+      {
+        "content_span": [
+          136,
+          149
+        ],
+        "ending": "lf",
+        "span": [
+          136,
+          150
+        ]
+      },
+      {
+        "content_span": [
+          150,
+          157
+        ],
+        "ending": "lf",
+        "span": [
+          150,
+          158
+        ]
+      },
+      {
+        "content_span": [
+          158,
+          165
+        ],
+        "ending": "lf",
+        "span": [
+          158,
+          166
+        ]
+      },
+      {
+        "content_span": [
+          166,
+          170
+        ],
+        "ending": "lf",
+        "span": [
+          166,
+          171
+        ]
+      },
+      {
+        "content_span": [
+          171,
+          200
+        ],
+        "ending": "lf",
+        "span": [
+          171,
+          201
+        ]
+      },
+      {
+        "content_span": [
+          201,
+          209
+        ],
+        "ending": "lf",
+        "span": [
+          201,
+          210
+        ]
+      },
+      {
+        "content_span": [
+          210,
+          229
+        ],
+        "ending": "lf",
+        "span": [
+          210,
+          230
+        ]
+      },
+      {
+        "content_span": [
+          230,
+          234
+        ],
+        "ending": "lf",
+        "span": [
+          230,
+          235
+        ]
+      }
+    ],
+    "sha256": "6a720276a145a23d3ba88a756edc0537bd42e48e2c719ac8b8019ba269898d72"
+  },
+  "workbook": {
+    "book": {
+      "properties": {
+        "formula-profile": "portable-a1@1",
+        "locale": "en-US",
+        "timezone": "UTC"
+      },
+      "span": [
+        16,
+        83
+      ]
+    },
+    "capabilities": [
+      {
+        "id": "charts@1",
+        "required": false,
+        "span": [
+          84,
+          97
+        ]
+      }
+    ],
+    "extensions": [
+      {
+        "id": "charts@1",
+        "name": "revenue",
+        "payload": {
+          "byte_length": 29,
+          "sha256": "afd54b7631f5293d6d4255d56e44faaab4fb896dda2b00a2a1740207baa8e62e",
+          "span": [
+            201,
+            230
+          ]
+        },
+        "scope": "report",
+        "span": [
+          171,
+          200
+        ]
+      }
+    ],
+    "names": [],
+    "settings": {
+      "formula_profile": "portable-a1@1",
+      "locale": "en-US",
+      "timezone": "UTC"
+    },
+    "sheets": [
+      {
+        "id": "report",
+        "items": [
+          {
+            "anchor": {
+              "column": 1,
+              "row": 1
+            },
+            "body_span": [
+              136,
+              166
+            ],
+            "kind": "block",
+            "rows": [
+              [
+                {
+                  "source": {
+                    "raw": "Month",
+                    "span": [
+                      136,
+                      141
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Month"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "Revenue",
+                    "span": [
+                      142,
+                      149
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Revenue"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "Jan",
+                    "span": [
+                      150,
+                      153
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Jan"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "100",
+                    "span": [
+                      154,
+                      157
+                    ]
+                  },
+                  "value": {
+                    "kind": "number",
+                    "value": "100"
+                  }
+                }
+              ],
+              [
+                {
+                  "source": {
+                    "raw": "Feb",
+                    "span": [
+                      158,
+                      161
+                    ]
+                  },
+                  "value": {
+                    "kind": "text",
+                    "value": "Feb"
+                  }
+                },
+                {
+                  "source": {
+                    "raw": "125",
+                    "span": [
+                      162,
+                      165
+                    ]
+                  },
+                  "value": {
+                    "kind": "number",
+                    "value": "125"
+                  }
+                }
+              ]
+            ],
+            "span": [
+              122,
+              135
+            ]
+          }
+        ],
+        "label": "Report",
+        "span": [
+          99,
+          121
+        ]
+      }
+    ],
+    "styles": []
+  }
+}

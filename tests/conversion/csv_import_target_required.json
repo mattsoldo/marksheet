@@ -1,0 +1,9 @@
+{
+  "protocol": "marksheet-conversion-fixture@1",
+  "request": {"source": {"format": "csv", "version": "rfc4180-marksheet-scalars@1", "path": "sources/import.csv"}, "destination": "marksheet"},
+  "expect": {
+    "fidelity": "unsupported",
+    "outcomes": [{"feature": "csv_import_target", "outcome": "unsupported"}],
+    "diagnostics": [{"code": "MS4104", "severity": "error"}]
+  }
+}

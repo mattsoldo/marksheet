@@ -1,0 +1,15 @@
+{
+  "protocol": "marksheet-extension-fixture@1",
+  "registry": ["assertions@1"],
+  "source": "assertions_malformed.ms",
+  "expect": {
+    "capabilities_complete": true,
+    "calculation_complete": true,
+    "rendering_complete": true,
+    "validation_complete": true,
+    "valid": false,
+    "diagnostics": [{"code": "MS3202", "severity": "error", "line": 10}, {"code": "MS3202", "severity": "error", "line": 11}, {"code": "MS3202", "severity": "error", "line": 12}],
+    "opaque_instances": ["assertions@1:checks"],
+    "instance_outcomes": [{"capability": "assertions@1", "name": "checks", "scope": "sheet:inputs", "outcome": "processed"}]
+  }
+}

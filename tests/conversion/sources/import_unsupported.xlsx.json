@@ -1,0 +1,7 @@
+{
+  "fixture": "marksheet-xlsx-source@1",
+  "sheets": ["Report"],
+  "parts": ["xl/worksheets/sheet1.xml", "xl/charts/chart1.xml", "xl/vbaProject.bin"],
+  "features": ["cells", "chart", "macro"],
+  "generated": true
+}

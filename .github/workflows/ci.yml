@@ -16,17 +16,17 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    name: Rust checks
+  core:
+    name: Core Rust
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust 1.85
-        uses: dtolnay/rust-toolchain@1
+      - name: Install Rust 1.97.1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.85"
+          toolchain: "1.97.1"
           components: rustfmt, clippy
 
       - name: Cache Cargo dependencies and build artifacts
@@ -36,16 +36,15 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-            crates/marksheet-calc-formualizer/target
-          key: ${{ runner.os }}-rust-1.85-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-rust-1.97.1-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-rust-1.85-
+            ${{ runner.os }}-rust-1.97.1-
 
       - name: Check formatting
         run: cargo fmt --check
 
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --workspace --all-targets --all-features
 
       - name: Lint
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -53,13 +52,206 @@ jobs:
       - name: Check documentation
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --no-deps
+        run: cargo doc --workspace --all-features --no-deps
 
       - name: Build release artifacts
         run: cargo build --workspace --release --all-features
 
-      - name: Test isolated Formualizer spike
-        run: cargo test --manifest-path crates/marksheet-calc-formualizer/Cargo.toml --features calc-link
+  formualizer:
+    name: Isolated Formualizer spike
+    runs-on: ubuntu-latest
 
-      - name: Lint isolated Formualizer spike
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install current stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache spike dependencies and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/marksheet-calc-formualizer/target
+          key: ${{ runner.os }}-formualizer-stable-${{ hashFiles('crates/marksheet-calc-formualizer/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-formualizer-stable-
+
+      - name: Check spike formatting
+        run: cargo fmt --manifest-path crates/marksheet-calc-formualizer/Cargo.toml --check
+
+      - name: Test isolated spike
+        run: cargo test --manifest-path crates/marksheet-calc-formualizer/Cargo.toml --all-targets --features calc-link
+
+      - name: Lint isolated spike
         run: cargo clippy --manifest-path crates/marksheet-calc-formualizer/Cargo.toml --all-targets --features calc-link -- -D warnings
+
+      - name: Check spike documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --manifest-path crates/marksheet-calc-formualizer/Cargo.toml --features calc-link --no-deps
+
+  fixtures:
+    name: Fixture validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate formula fixtures
+        run: bash tests/formula/validate.sh
+
+      - name: Validate edit fixtures
+        run: bash tests/edit/validate.sh
+
+      - name: Validate view fixtures
+        run: bash tests/view/validate.sh
+
+      - name: Validate conversion fixtures
+        run: bash tests/conversion/validate.sh
+
+      - name: Validate extension fixtures
+        run: bash tests/extensions/validate.sh
+
+      - name: Run independent Python conformance consumer
+        run: bash conformance/python/validate.sh
+
+  wasm:
+    name: Wasm bindings
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.97.1
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Cache Wasm Cargo dependencies and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            bindings/wasm/target
+          key: ${{ runner.os }}-wasm-rust-1.97.1-${{ hashFiles('Cargo.lock', 'bindings/wasm/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-wasm-rust-1.97.1-
+
+      - name: Cache wasm-bindgen CLI 0.2.127
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-bindgen
+          key: ${{ runner.os }}-wasm-bindgen-cli-0.2.127
+
+      - name: Install wasm-bindgen CLI 0.2.127
+        run: |
+          if ! wasm-bindgen --version 2>/dev/null | grep -Fx 'wasm-bindgen 0.2.127'; then
+            cargo install wasm-bindgen-cli --version 0.2.127 --locked
+          fi
+
+      - name: Check binding formatting
+        run: cargo fmt --manifest-path bindings/wasm/Cargo.toml --all -- --check
+
+      - name: Run native binding tests
+        run: cargo test --manifest-path bindings/wasm/Cargo.toml --all-targets --all-features
+
+      - name: Lint native bindings
+        run: cargo clippy --manifest-path bindings/wasm/Cargo.toml --all-targets --all-features -- -D warnings
+
+      - name: Check binding documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --manifest-path bindings/wasm/Cargo.toml --all-features --no-deps
+
+      - name: Build release Wasm
+        run: cargo build --manifest-path bindings/wasm/Cargo.toml --target wasm32-unknown-unknown --release --all-features
+
+      - name: Check browser ABI drift
+        run: bindings/wasm/check-web-abi.sh
+
+      - name: Enforce 2 MiB Wasm size budget
+        run: bindings/wasm/check-size.sh
+
+      - name: Run browser worker tests
+        working-directory: bindings/wasm/web
+        run: npm test
+
+  viewer:
+    name: Browser viewer
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.97.1
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+          targets: wasm32-unknown-unknown
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: viewer/package-lock.json
+
+      - name: Cache viewer Wasm build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            bindings/wasm/target
+          key: ${{ runner.os }}-viewer-wasm-rust-1.97.1-${{ hashFiles('Cargo.lock', 'bindings/wasm/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-viewer-wasm-rust-1.97.1-
+
+      - name: Cache wasm-bindgen CLI 0.2.127
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-bindgen
+          key: ${{ runner.os }}-wasm-bindgen-cli-0.2.127
+
+      - name: Install wasm-bindgen CLI 0.2.127
+        run: |
+          if ! wasm-bindgen --version 2>/dev/null | grep -Fx 'wasm-bindgen 0.2.127'; then
+            cargo install wasm-bindgen-cli --version 0.2.127 --locked
+          fi
+
+      - name: Install viewer dependencies
+        working-directory: viewer
+        run: npm ci
+
+      - name: Audit viewer dependencies
+        working-directory: viewer
+        run: npm audit --audit-level=high
+
+      - name: Run viewer tests
+        working-directory: viewer
+        run: npm test
+
+      - name: Build viewer
+        working-directory: viewer
+        run: npm run build
+
+      - name: Smoke test real Wasm viewer flow
+        working-directory: viewer
+        run: npm run smoke:wasm

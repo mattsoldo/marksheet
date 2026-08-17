@@ -1,0 +1,13 @@
+{
+  "protocol": "marksheet-conversion-fixture@1",
+  "request": {"source": {"format": "marksheet", "version": "0.1", "path": "sources/core.ms"}, "destination": "csv", "selection": {"table": "sales"}},
+  "expect": {
+    "fidelity": "lossy",
+    "artifact": "generated/sales.csv",
+    "outcomes": [
+      {"feature": "selected_table", "outcome": "exact", "location": {"table": "sales"}},
+      {"feature": "workbook_features_outside_selection", "outcome": "omitted"}
+    ],
+    "diagnostics": [{"code": "MS4102", "severity": "warning", "location": {"table": "sales"}}]
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "@marksheet/viewer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare:wasm": "bash scripts/prepare-wasm.sh",
+    "prebuild": "npm run prepare:wasm",
+    "build": "tsc --noEmit && vite build && bash scripts/check-build.sh",
+    "predev": "npm run prepare:wasm",
+    "dev": "vite",
+    "preview": "vite preview",
+    "smoke:wasm": "npm run prepare:wasm && node scripts/smoke-wasm.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "happy-dom": "^20.11.2",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.2",
+    "vitest": "^3.2.4"
+  }
+}

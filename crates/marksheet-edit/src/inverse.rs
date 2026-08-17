@@ -9,7 +9,7 @@ use std::fmt;
 
 use marksheet_calc::prepare::{CompileLimits, PrepareLimits, PreparedWorkbook, compile_formulas};
 use marksheet_model::{Diagnostic, Workbook};
-use marksheet_syntax::parse;
+use marksheet_syntax::{ParseOptions, parse_with_options};
 
 use crate::patch::{PatchError, PatchSet, SourcePatch};
 
@@ -48,11 +48,24 @@ impl InverseTransaction {
     /// [`InverseEditErrorKind::InvalidResult`] without exposing a result when
     /// the patched bytes do not parse, prepare, or compile cleanly.
     pub fn execute(&self, source: &[u8]) -> Result<InverseEditResult, InverseEditError> {
+        self.execute_with_parse_options(source, &ParseOptions::default())
+    }
+
+    /// Applies and validates this inverse with host extension capabilities.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same atomic failures as [`Self::execute`].
+    pub fn execute_with_parse_options(
+        &self,
+        source: &[u8],
+        options: &ParseOptions,
+    ) -> Result<InverseEditResult, InverseEditError> {
         let (edited, reverse) = self
             .patches
             .apply_with_inverse(source)
             .map_err(|error| InverseEditError::from_patch(&error))?;
-        let (workbook, diagnostics) = validate_result(&edited)?;
+        let (workbook, diagnostics) = validate_result(&edited, options)?;
         Ok(InverseEditResult {
             patches: self.patches.patches().to_vec(),
             source: edited,
@@ -136,8 +149,11 @@ impl fmt::Display for InverseEditError {
 
 impl std::error::Error for InverseEditError {}
 
-fn validate_result(source: &[u8]) -> Result<(Workbook, Vec<Diagnostic>), InverseEditError> {
-    let document = parse(source);
+fn validate_result(
+    source: &[u8],
+    options: &ParseOptions,
+) -> Result<(Workbook, Vec<Diagnostic>), InverseEditError> {
+    let document = parse_with_options(source, options);
     if document.has_errors() {
         return Err(InverseEditError::invalid_result(
             "inverse transaction result is not a valid Marksheet document",

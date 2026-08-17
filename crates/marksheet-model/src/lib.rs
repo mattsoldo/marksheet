@@ -682,11 +682,91 @@ pub enum Value {
     Text(String),
     Number(f64),
     Boolean(bool),
-    Date(Date),
-    DateTime(OffsetDateTime),
+    Date(#[serde(with = "iso_date")] Date),
+    DateTime(#[serde(with = "rfc3339_datetime")] OffsetDateTime),
     Formula(FormulaSource),
     Error(CellError),
 }
+
+/// Serde adapters for the public scalar date representation.
+///
+/// The `time` crate's optional serde support uses an implementation-defined
+/// tuple representation. Marksheet's browser-facing protocol is instead a
+/// stable ISO 8601 string, so the `Value` enum opts into this adapter at the
+/// enum field rather than relying on `time`'s derived implementation.
+mod iso_date {
+    use serde::{Deserialize, Deserializer, Serializer, de::Error as _, ser::Error as _};
+    use time::Date;
+
+    // `serde(with)` fixes this callback signature to `&Date`; accepting by
+    // value would not be callable from the enum's generated serializer.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    pub fn serialize<S>(value: &Date, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let year = value.year();
+        if !(0..=9999).contains(&year) {
+            return Err(S::Error::custom(
+                "date is outside the wire format's four-digit year range",
+            ));
+        }
+
+        serializer.serialize_str(&format!(
+            "{year:04}-{month:02}-{day:02}",
+            month = u8::from(value.month()),
+            day = value.day()
+        ))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Date, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if !super::looks_like_date(&value) {
+            return Err(D::Error::custom("date must use YYYY-MM-DD"));
+        }
+
+        let format = time::format_description::parse_borrowed::<2>("[year]-[month]-[day]")
+            .map_err(D::Error::custom)?;
+        Date::parse(&value, &format).map_err(D::Error::custom)
+    }
+}
+
+/// Serde adapters for the public scalar datetime representation.
+///
+/// Formatting with `Rfc3339` retains the [`OffsetDateTime`]'s stored offset,
+/// rather than normalizing the instant to UTC before it reaches a client.
+mod rfc3339_datetime {
+    use serde::{Deserialize, Deserializer, Serializer, de::Error as _, ser::Error as _};
+    use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+
+    pub fn serialize<S>(value: &OffsetDateTime, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        value
+            .format(&Rfc3339)
+            .map_err(S::Error::custom)
+            .and_then(|value| serializer.serialize_str(&value))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<OffsetDateTime, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if !super::looks_like_datetime(&value) {
+            return Err(D::Error::custom(
+                "datetime must use RFC 3339 with an explicit offset",
+            ));
+        }
+
+        OffsetDateTime::parse(&value, &Rfc3339).map_err(D::Error::custom)
+    }
+}
+
 impl Value {
     /// Interprets a decoded CSV field using the precedence defined by the format.
     #[must_use]
@@ -1219,7 +1299,8 @@ pub struct ExtensionId {
 impl ExtensionId {
     /// # Errors
     ///
-    /// Returns an error for an invalid identifier, missing separator, or zero/non-numeric major version.
+    /// Returns an error for an invalid identifier, missing separator, or a
+    /// major version that is not a canonical positive decimal integer.
     pub fn parse(value: &str) -> Result<Self, ExtensionIdError> {
         let (id, major) = value
             .rsplit_once('@')
@@ -1227,14 +1308,17 @@ impl ExtensionId {
                 value: value.to_owned(),
             })?;
         let id = Identifier::parse(id).map_err(ExtensionIdError::Identifier)?;
-        let major = major.parse().map_err(|_| ExtensionIdError::Invalid {
-            value: value.to_owned(),
-        })?;
-        if major == 0 {
+        let major_bytes = major.as_bytes();
+        if !matches!(major_bytes.first(), Some(b'1'..=b'9'))
+            || major_bytes[1..].iter().any(|byte| !byte.is_ascii_digit())
+        {
             return Err(ExtensionIdError::Invalid {
                 value: value.to_owned(),
             });
         }
+        let major = major.parse().map_err(|_| ExtensionIdError::Invalid {
+            value: value.to_owned(),
+        })?;
         Ok(Self { id, major })
     }
 }
@@ -1420,6 +1504,32 @@ mod tests {
     #[test]
     fn default_workbook_has_no_explicit_book_origin() {
         assert_eq!(Workbook::default().book_origin, None);
+    }
+
+    #[test]
+    fn extension_ids_require_canonical_positive_major_versions() {
+        for (source, expected_major) in [
+            ("assertions@1", 1),
+            ("archive@10", 10),
+            ("maximum@18446744073709551615", u64::MAX),
+        ] {
+            let extension = ExtensionId::parse(source).expect("canonical extension id");
+            assert_eq!(extension.major, expected_major, "{source}");
+        }
+
+        for source in [
+            "assertions@",
+            "assertions@0",
+            "assertions@00",
+            "assertions@01",
+            "assertions@+1",
+            "assertions@-1",
+            "assertions@ 1",
+            "assertions@1 ",
+            "assertions@18446744073709551616",
+        ] {
+            assert!(ExtensionId::parse(source).is_err(), "{source}");
+        }
     }
 
     #[test]

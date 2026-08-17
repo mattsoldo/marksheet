@@ -1,0 +1,17 @@
+{
+  "protocol": "marksheet-conversion-fixture@1",
+  "request": {"source": {"format": "xlsx", "version": "office-open-xml@1", "fixture": "sources/import_unsupported.xlsx.json"}, "destination": "marksheet"},
+  "expect": {
+    "fidelity": "lossy",
+    "artifact": "generated/import_unsupported.ms",
+    "outcomes": [
+      {"feature": "scalar_cells", "outcome": "exact"},
+      {"feature": "chart", "outcome": "omitted", "location": {"source": "xl/charts/chart1.xml"}},
+      {"feature": "macro", "outcome": "omitted", "location": {"source": "xl/vbaProject.bin"}}
+    ],
+    "diagnostics": [
+      {"code": "MS4102", "severity": "warning", "location": {"source": "xl/charts/chart1.xml"}},
+      {"code": "MS4102", "severity": "warning", "location": {"source": "xl/vbaProject.bin"}}
+    ]
+  }
+}

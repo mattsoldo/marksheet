@@ -6,6 +6,11 @@ with `default-features = false` and the documented `portable-wasm` feature
 profile. It must not become a production dependency without an integration
 review.
 
+This isolated spike requires Rust 1.88 or newer because Formualizer's current
+parser dependency uses stabilized let-chains. The production Marksheet
+workspace remains supported on Rust 1.85; the separate toolchain here is not a
+production MSRV increase.
+
 ## What is proven
 
 - Stable Marksheet sheet IDs and name IDs lower to engine-private formula-safe
@@ -29,17 +34,17 @@ review.
 Run the probe without changing the root workspace or lockfile:
 
 ```sh
-cargo test --manifest-path crates/marksheet-calc-formualizer/Cargo.toml --features calc-link
-cargo clippy --manifest-path crates/marksheet-calc-formualizer/Cargo.toml \
+cargo +stable test --manifest-path crates/marksheet-calc-formualizer/Cargo.toml --features calc-link
+cargo +stable clippy --manifest-path crates/marksheet-calc-formualizer/Cargo.toml \
   --all-targets --features calc-link -- -D warnings
-cargo tree --manifest-path crates/marksheet-calc-formualizer/Cargo.toml -e features
+cargo +stable tree --manifest-path crates/marksheet-calc-formualizer/Cargo.toml -e features
 ```
 
 Once `marksheet-calc` exposes a buildable integration boundary, also verify the
 path dependency explicitly:
 
 ```sh
-cargo check --manifest-path crates/marksheet-calc-formualizer/Cargo.toml --features calc-link
+cargo +stable check --manifest-path crates/marksheet-calc-formualizer/Cargo.toml --features calc-link
 ```
 
 ## Findings and adoption constraints
