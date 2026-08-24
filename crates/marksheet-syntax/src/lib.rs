@@ -157,6 +157,20 @@ mod tests {
     }
 
     #[test]
+    fn pipe_blocks_are_valid_and_canonicalize_with_pipe_quoting() {
+        let source =
+            b"#!marksheet 0.1\n@sheet s \"Sheet\"\n@block a1 pipe\nfirst|\"north|west\"\n@end\n";
+        let document = parse(source);
+        assert!(!document.has_errors(), "{:?}", document.diagnostics);
+        let canonical = canonicalize(&document).expect("pipe document canonicalizes");
+        assert_eq!(
+            canonical,
+            b"#!marksheet 0.1\n\n@sheet s \"Sheet\"\n@block A1 pipe\nfirst|\"north|west\"\n@end\n"
+        );
+        assert_eq!(canonicalize(&parse(&canonical)).unwrap(), canonical);
+    }
+
+    #[test]
     fn lossless_access_is_byte_identical_even_for_invalid_input() {
         let source = b"\xef\xbb\xbf#!marksheet 0.1\r\n\xff";
         let document = parse(source);

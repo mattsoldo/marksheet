@@ -68,8 +68,8 @@ The browser's `WasmWorkbench` accepts at most **5 MiB (5,242,880 bytes)** of
 source. Before parsing an open or source replacement, and again after an edit
 while rebuilding its view, it rejects a source with more than 4,096
 newline-delimited records, 4,096 lines beginning with `@`, 4,096 `=` bytes, or
-4,096 `,` bytes. These are raw preflight scans rather than a partial CSV or
-Marksheet parser: `=` and `,` in quoted text or comments, and data lines
+4,096 `,` or `|` bytes. These are raw preflight scans rather than a partial
+delimited Marksheet parser: `=`, `,`, and `|` in quoted text or comments, and data lines
 beginning with `@`, still count. That means a valid but unusually shaped source
 can be refused with a worker `limit` error. The false positives are intentional:
 they prevent malformed quoting or comments from evading the worker's bounds

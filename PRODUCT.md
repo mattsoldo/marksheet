@@ -137,7 +137,7 @@ The core consists of:
 1. A format and formula-profile version.
 2. Workbook metadata and deterministic calculation settings.
 3. Ordered sheets with stable machine IDs and human labels.
-4. Sparse, A1-anchored CSV blocks.
+4. Sparse, A1-anchored comma or pipe-delimited blocks.
 5. Named tables with headers and structured references.
 6. Scalar values, including numbers, text, booleans, dates, and datetimes.
 7. A portable formula language with cell, range, sheet, table, and name
@@ -308,6 +308,8 @@ Marksheet is ready for a stable 1.0 when:
 - Build a calculation engine adapter.
 - Build CSV and XLSX conversion tools.
 - Publish language-server diagnostics and syntax highlighting.
+- Provide editor integrations that can launch the local browser viewer for
+  previewing `.ms` workbooks.
 - Publish the first portable agent skill and structured CLI interface.
 
 ### Phase 3: Experience

@@ -62,7 +62,7 @@ these fixed source-structure preflight checks:
 | newline-delimited records (a final newline does not add a record) | 4,096 |
 | lines whose first byte is `@` (directive diagnostic candidates) | 4,096 |
 | `=` bytes (formula candidates) | 4,096 |
-| `,` bytes (CSV field delimiters) | 4,096 |
+| `,` or `|` bytes (block field delimiters) | 4,096 |
 
 These are intentionally conservative byte scans, not a partial Marksheet or
 CSV parser. In particular, `=` and `,` inside quoted text or comments still

@@ -561,6 +561,7 @@ mod tests {
         let malformed = Block {
             anchor: coordinate("A1"),
             cells: vec![vec![Cell::new(Value::Blank)], vec![]],
+            encoding: marksheet_model::BlockEncoding::Csv,
             origin: None,
         };
         let error = PreparedWorkbook::build(

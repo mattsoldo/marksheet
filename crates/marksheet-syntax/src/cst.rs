@@ -2,6 +2,8 @@
 
 use std::ops::Range;
 
+use marksheet_model::BlockEncoding;
+
 /// A half-open byte span into the original document.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Span {
@@ -56,7 +58,7 @@ pub enum CsvKind {
     Table,
 }
 
-/// An exact CSV field and its decoded content.
+/// An exact delimited field and its decoded content.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CsvField {
     /// Exact field spelling, including surrounding quotes when present.
@@ -65,7 +67,7 @@ pub struct CsvField {
     pub quoted: bool,
 }
 
-/// One decoded CSV record.
+/// One decoded delimited record.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CsvRecord {
     /// Covers fields and delimiters, but not the record-ending newline.
@@ -79,6 +81,8 @@ pub struct CsvRecord {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CsvBlock {
     pub kind: CsvKind,
+    /// The encoding selected by the directive's bare final argument.
+    pub encoding: BlockEncoding,
     pub directive: Directive,
     /// All bytes after the directive newline and before the terminator.
     pub body: Span,

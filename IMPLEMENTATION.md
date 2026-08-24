@@ -144,13 +144,14 @@ SheetItem
   Block | Table | Fill | Apply | Column | Row | Extension | Comment | Blank
 ```
 
-A CSV field node stores:
+A delimited field node stores:
 
 - its raw byte span;
 - decoded value;
 - whether it was quoted;
 - record and field indexes; and
-- newline and delimiter trivia needed for a local rewrite.
+- its `csv` or `pipe` encoding plus newline and delimiter trivia needed for a
+  local rewrite.
 
 Extension payloads remain opaque byte slices unless a trusted, installed
 extension parser claims them.
@@ -161,7 +162,7 @@ The semantic pass:
 
 1. validates versions and workbook properties;
 2. creates sheets in source order;
-3. maps block and table fields to coordinates;
+3. maps CSV and pipe block/table fields to coordinates;
 4. detects footprint overlaps;
 5. parses scalar values and formula ASTs;
 6. resolves tables and named ranges after the complete file is known;
@@ -298,8 +299,9 @@ EditTransaction
 
 Examples:
 
-- Editing `inputs!B2` replaces one CSV field token.
-- Appending a table row inserts one CSV record before that table's `@end`.
+- Editing `inputs!B2` replaces one delimited field token.
+- Appending a table row inserts one record before that table's `@end`, using
+  that table's authored delimiter.
 - Changing a block anchor edits one directive argument.
 - Renaming a sheet label edits one quoted string.
 - Renaming a sheet ID edits the declaration and all resolved formula/name
@@ -409,7 +411,7 @@ It should teach an agent to:
 - preserve source locality and avoid canonicalizing unrelated content;
 - validate after every material edit;
 - inspect calculated results and diagnostics;
-- use explicit text escapes and CSV quoting correctly;
+- use explicit text escapes and selected-dialect quoting correctly;
 - avoid unsupported required extensions; and
 - request conversion reports rather than assume XLSX or CSV fidelity.
 
@@ -485,6 +487,15 @@ materialize required dependencies independently of the viewport.
 Parsing, canonical formatting, large conversions, and recalculation should run
 outside the UI thread. Browser builds should place the Wasm core in a worker and
 communicate through versioned messages with cancellation support.
+
+### 11.3 Editor preview integration
+
+The repository includes a Zed project task that builds and launches the same
+browser viewer on a loopback address. Zed's extension API currently has no
+custom rendered-document or webview surface, so the integration opens the
+viewer in the system browser rather than claiming an in-editor preview. The
+task must remain local-only and must not upload or overwrite a selected
+workbook.
 
 ## 12. Plugin host
 
@@ -666,7 +677,7 @@ For every valid fixture:
 
 ### 15.4 Property and fuzz tests
 
-Use generated coordinates, CSV fields, formulas, Unicode strings, and opaque
+Use generated coordinates, comma and pipe fields, formulas, Unicode strings, and opaque
 extension payloads to test scanner and parser invariants. Fuzz inputs must cover
 multiline quoted fields and adversarial `@end` placement.
 

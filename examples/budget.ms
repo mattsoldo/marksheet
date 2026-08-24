@@ -12,11 +12,11 @@
 
 @sheet inputs "Inputs"
 
-@table costs A1 csv
-Item,Cost,Quantity,Subtotal
-Rent,1500,1,
-Utilities,200,1,
-Groceries,360,1,
+@table costs A1 pipe
+Item|Cost|Quantity|Subtotal
+Rent|1500|1|
+Utilities|200|1|
+Groceries|360|1|
 @end
 
 @fill costs[Subtotal] =[@Cost]*[@Quantity]
@@ -27,9 +27,9 @@ Groceries,360,1,
 @column B:D width=12
 
 # This second block demonstrates sparse placement on the same sheet.
-@block F1 csv
-Setting,Value
-Tax rate,0.2
+@block F1 pipe
+Setting|Value
+Tax rate|0.2
 @end
 
 @apply F1:G1 header
@@ -39,11 +39,11 @@ Tax rate,0.2
 
 @sheet summary "Summary"
 
-@block A1 csv
-Metric,Value
-Total costs,=SUM(costs[Subtotal])
-Average line item,=AVERAGE(cost_values)
-After tax,=B2*(1-tax_rate)
+@block A1 pipe
+Metric|Value
+Total costs|=SUM(costs[Subtotal])
+Average line item|=AVERAGE(cost_values)
+After tax|=B2*(1-tax_rate)
 @end
 
 @apply A1:B1 header

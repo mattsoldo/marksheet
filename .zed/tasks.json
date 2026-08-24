@@ -1,0 +1,9 @@
+[
+  {
+    "label": "Preview Marksheet viewer",
+    "command": "bash",
+    "args": ["viewer/scripts/zed-preview.sh"],
+    "use_new_terminal": true,
+    "reveal": "always"
+  }
+]

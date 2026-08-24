@@ -282,7 +282,9 @@ impl Serializer {
         }
         let anchor = self.coordinate(block.anchor, "block anchor");
         self.output.push_str(&anchor);
-        self.output.push_str(" csv\n");
+        self.output.push(' ');
+        self.output.push_str(block.encoding.name());
+        self.output.push('\n');
 
         let Some(width) = block.cells.first().map(Vec::len) else {
             self.diagnostics.push(serialization_error(
@@ -301,11 +303,12 @@ impl Serializer {
         for row in &block.cells {
             for (index, cell) in row.iter().enumerate() {
                 if index != 0 {
-                    self.output.push(',');
+                    self.output.push(char::from(block.encoding.delimiter()));
                 }
                 let scalar = self.value(cell);
                 let force = row.len() == 1 && scalar == "@end";
-                self.output.push_str(&csv_quote(&scalar, force));
+                self.output
+                    .push_str(&delimited_quote(&scalar, force, block.encoding.delimiter()));
             }
             self.output.push('\n');
         }
@@ -679,11 +682,11 @@ fn json_string(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_owned())
 }
 
-fn csv_quote(value: &str, force: bool) -> String {
+fn delimited_quote(value: &str, force: bool, delimiter: u8) -> String {
     if force
         || value
             .bytes()
-            .any(|byte| matches!(byte, b',' | b'"' | b'\n' | b'\r'))
+            .any(|byte| byte == delimiter || matches!(byte, b'"' | b'\n' | b'\r'))
     {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {

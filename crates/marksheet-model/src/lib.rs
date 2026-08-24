@@ -1087,11 +1087,52 @@ impl Cell {
     }
 }
 
-/// A sparse rectangular CSV block.
+/// The delimiter encoding used by a sparse rectangular block.
+///
+/// Both encodings use RFC 4180-style quoting; only the field delimiter differs.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum BlockEncoding {
+    #[default]
+    Csv,
+    Pipe,
+}
+
+impl BlockEncoding {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Csv => "csv",
+            Self::Pipe => "pipe",
+        }
+    }
+
+    #[must_use]
+    pub const fn delimiter(self) -> u8 {
+        match self {
+            Self::Csv => b',',
+            Self::Pipe => b'|',
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "csv" => Some(Self::Csv),
+            "pipe" => Some(Self::Pipe),
+            _ => None,
+        }
+    }
+}
+
+/// A sparse rectangular delimited block.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Block {
     pub anchor: Coordinate,
     pub cells: Vec<Vec<Cell>>,
+    /// The source encoding is retained for canonical output and source-aware
+    /// edits, but omitted from the Draft 0.1 semantic projection.
+    #[serde(skip)]
+    pub encoding: BlockEncoding,
     pub origin: Option<Origin>,
 }
 impl Block {
@@ -1109,8 +1150,24 @@ impl Block {
         Ok(Self {
             anchor,
             cells,
+            encoding: BlockEncoding::Csv,
             origin: None,
         })
+    }
+
+    /// Creates a rectangular block with an explicit source encoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty or non-rectangular cell matrix.
+    pub fn new_with_encoding(
+        anchor: Coordinate,
+        cells: Vec<Vec<Cell>>,
+        encoding: BlockEncoding,
+    ) -> Result<Self, BlockError> {
+        let mut block = Self::new(anchor, cells)?;
+        block.encoding = encoding;
+        Ok(block)
     }
     /// # Errors
     ///

@@ -215,9 +215,9 @@ inputs!B7:D20
 Because sheet identifiers are restricted identifiers, quoted sheet names are
 not part of the core grammar.
 
-## 9. Blocks
+## 9. Delimited blocks
 
-An unnamed block places a rectangular CSV payload on the current sheet:
+An unnamed block places a rectangular delimited payload on the current sheet:
 
 ```text
 @block A1 csv
@@ -227,48 +227,59 @@ Gadget,2,8.00
 @end
 ```
 
-`A1` is the upper-left cell. The first CSV field maps to `A1`; subsequent fields
+`A1` is the upper-left cell. The first field maps to `A1`; subsequent fields
 advance across columns and subsequent records advance down rows.
 
 - A block MUST contain at least one record and one field.
 - Every record in a block MUST contain the same number of fields.
 - The `@end` terminator MUST appear alone on a physical line outside a quoted
-  CSV field.
-- To store a one-field row whose value is `@end`, the field MUST be CSV-quoted.
+  field.
+- To store a one-field row whose value is `@end`, the field MUST be quoted.
 - A block reserves its complete rectangular footprint, including blank fields.
 - Block footprints on the same sheet MUST NOT overlap.
 
 Sheets are sparse because any number of blocks can be anchored at distant
 coordinates without representing the intervening cells.
 
-### 9.1 CSV dialect
+### 9.1 Delimited dialects
 
-The core `csv` body follows the field, quote, and record rules of
-[RFC 4180](https://www.rfc-editor.org/rfc/rfc4180), with these requirements:
+The core supports the following bare encoding tokens on `@block` and `@table`:
 
-- the delimiter is comma;
+| Encoding | Delimiter | Intended use |
+| --- | --- | --- |
+| `csv` | `,` | RFC 4180 interchange and comma-oriented data |
+| `pipe` | `|` | Human-authored sheets whose values commonly contain commas |
+
+Both dialects follow the field, quote, and record rules of
+[RFC 4180](https://www.rfc-editor.org/rfc/rfc4180), except that `pipe` replaces
+RFC 4180's comma delimiter with `|`. In both dialects:
+
 - the quote character is `"`;
 - a quote inside a quoted field is written `""`;
-- quoted fields MAY contain commas and newlines;
+- quoted fields MAY contain the active delimiter and newlines;
 - LF and CRLF records are accepted;
 - a CRLF sequence inside a quoted field decodes to one LF scalar, while the
   original field bytes remain available to lossless source-aware tools;
 - canonical output uses LF; and
-- canonical output quotes a field only when required by CSV syntax or by the
+- canonical output quotes a field only when required by the selected dialect or by the
   `@end` terminator rule.
 
-CSV quoting does not make a value textual. Scalar interpretation happens after
-CSV decoding.
+An unquoted comma is ordinary data in a `pipe` body. An unquoted pipe is
+ordinary data in a `csv` body. A `pipe` field containing `|` MUST be quoted,
+just as a `csv` field containing `,` MUST be quoted.
+
+Delimited quoting does not make a value textual. Scalar interpretation happens
+after decoding.
 
 ## 10. Tables
 
 A table is a named block whose first record contains column headers:
 
 ```text
-@table costs A1 csv
-Item,Cost,Quantity,Subtotal
-Rent,1500,1,
-Utilities,200,1,
+@table costs A1 pipe
+Item|Cost|Quantity|Subtotal
+Rent|1500|1|
+Utilities|200|1|
 @end
 ```
 
@@ -1493,10 +1504,12 @@ sheet             = sheet_header, newline, { sheet_item } ;
 sheet_item        = blank | comment | block | table | fill |
                     apply | column | row | extension ;
 
-block             = "@block", space, cell, space, "csv", newline,
-                    csv_body, "@end", newline ;
+block             = "@block", space, cell, space, encoding, newline,
+                    delimited_body, "@end", newline ;
 table             = "@table", space, identifier, space, cell, space,
-                    "csv", newline, csv_body, "@end", newline ;
+                    encoding, newline, delimited_body, "@end", newline ;
+
+encoding          = "csv" | "pipe" ;
 
 identifier        = lower, { lower | digit | "_" } ;
 comment           = "#", { unicode_scalar }, newline ;

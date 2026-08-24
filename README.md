@@ -19,32 +19,37 @@ ordinary source-control workflows.
 
 @sheet inputs "Inputs"
 
-@table costs A1 csv
-Item,Cost,Quantity,Subtotal
-Rent,1500,1,
-Utilities,200,1,
-Groceries,360,1,
+@table costs A1 pipe
+Item|Cost|Quantity|Subtotal
+Rent|1500|1|
+Utilities|200|1|
+Groceries|360|1|
 @end
 
 @fill costs[Subtotal] =[@Cost]*[@Quantity]
 @apply costs[Cost] money
 @apply costs[Subtotal] money
 
-@block F1 csv
-Setting,Value
-Tax rate,0.2
+@block F1 pipe
+Setting|Value
+Tax rate|0.2
 @end
 
 @sheet summary "Summary"
 
-@block A1 csv
-Metric,Value
-Total,=SUM(costs[Subtotal])
-After tax,=B2*(1-tax_rate)
+@block A1 pipe
+Metric|Value
+Total|=SUM(costs[Subtotal])
+After tax|=B2*(1-tax_rate)
 @end
 
 @apply B2:B3 money
 ```
+
+Block and table bodies use either `csv` (comma) or `pipe` (`|`) encoding. Both
+use RFC 4180 quoting rules; `pipe` is generally easier to read when cells
+contain prose, addresses, or numbers with commas. See the
+[examples](examples/README.md) for four pipe workbooks and two CSV workbooks.
 
 ## Why Marksheet?
 
@@ -69,8 +74,10 @@ to trust the extension.
   strategy.
 - [Build prompt](BUILD_PROMPT.md) — a master prompt for a coding agent to build
   the reference implementation in tested vertical slices.
-- [Example workbook](examples/budget.ms) — a small workbook exercising the
-  draft core.
+- [Example workbooks](examples/README.md) — six small workbooks, curated from
+  the Excel corpus and exercising both pipe and CSV blocks.
+- [Zed preview integration](integrations/zed/README.md) — a project task that
+  launches the local viewer in the system browser.
 - [Attribution](ATTRIBUTION.md) — how the license handles copies, forks, and
   derivative works.
 

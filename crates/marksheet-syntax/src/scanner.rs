@@ -4,6 +4,7 @@ use crate::cst::{
     Cst, CsvBlock, CsvField, CsvKind, CsvRecord, Directive, ExtensionBlock, Line, Node, Span,
 };
 use crate::diagnostic::{Diagnostic, error};
+use marksheet_model::BlockEncoding;
 
 pub(crate) struct ScanResult {
     pub cst: Cst,
@@ -118,9 +119,14 @@ impl Scanner<'_> {
     fn scan_csv(&mut self, directive: Directive, kind: CsvKind) {
         let block_start = directive.line.span.start;
         let body_start = directive.line.span.end;
-        let (body_end, terminator, _ended_in_quotes) = find_csv_terminator(self.source, body_start);
-        let (records, mut csv_diagnostics) =
-            parse_csv(self.source, Span::new(body_start, body_end));
+        let encoding = block_encoding(self.source, directive.arguments);
+        let (body_end, terminator, _ended_in_quotes) =
+            find_csv_terminator(self.source, body_start, encoding.delimiter());
+        let (records, mut csv_diagnostics) = parse_csv(
+            self.source,
+            Span::new(body_start, body_end),
+            encoding.delimiter(),
+        );
         let malformed_csv = !csv_diagnostics.is_empty();
         self.diagnostics.append(&mut csv_diagnostics);
         if terminator.is_none() && !malformed_csv {
@@ -136,6 +142,7 @@ impl Scanner<'_> {
         let end = terminator.map_or(self.source.len(), |line| line.span.end);
         self.nodes.push(Node::CsvBlock(CsvBlock {
             kind,
+            encoding,
             directive,
             body: Span::new(body_start, body_end),
             records,
@@ -247,7 +254,7 @@ fn extension_payload_line(source: &[u8], start: usize) -> Line {
 
 /// Locate `@end` while deliberately tracking only quote state needed for the
 /// outer boundary. Detailed CSV errors are emitted by `parse_csv`.
-fn find_csv_terminator(source: &[u8], start: usize) -> (usize, Option<Line>, bool) {
+fn find_csv_terminator(source: &[u8], start: usize, delimiter: u8) -> (usize, Option<Line>, bool) {
     let mut cursor = start;
     let mut in_quotes = false;
     let mut at_field_start = true;
@@ -266,7 +273,7 @@ fn find_csv_terminator(source: &[u8], start: usize) -> (usize, Option<Line>, boo
                     in_quotes = true;
                     at_field_start = false;
                 }
-                b',' if !in_quotes => at_field_start = true,
+                byte if byte == delimiter && !in_quotes => at_field_start = true,
                 _ if !in_quotes => at_field_start = false,
                 _ => {}
             }
@@ -283,7 +290,7 @@ fn find_csv_terminator(source: &[u8], start: usize) -> (usize, Option<Line>, boo
 // One state machine owns quote transitions and exact spans; splitting it into
 // passes would risk disagreement at malformed recovery boundaries.
 #[allow(clippy::too_many_lines)]
-fn parse_csv(source: &[u8], body: Span) -> (Vec<CsvRecord>, Vec<Diagnostic>) {
+fn parse_csv(source: &[u8], body: Span, delimiter: u8) -> (Vec<CsvRecord>, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
     let mut records = Vec::new();
     if body.is_empty() {
@@ -339,7 +346,7 @@ fn parse_csv(source: &[u8], body: Span) -> (Vec<CsvRecord>, Vec<Diagnostic>) {
             }
         } else {
             while cursor < body.end
-                && source[cursor] != b','
+                && source[cursor] != delimiter
                 && source[cursor] != b'\n'
                 && source[cursor] != b'\r'
             {
@@ -358,11 +365,12 @@ fn parse_csv(source: &[u8], body: Span) -> (Vec<CsvRecord>, Vec<Diagnostic>) {
         if quoted
             && closed_quote
             && cursor < body.end
-            && !matches!(source[cursor], b',' | b'\n' | b'\r')
+            && source[cursor] != delimiter
+            && !matches!(source[cursor], b'\n' | b'\r')
         {
             let invalid_start = cursor;
             while cursor < body.end
-                && source[cursor] != b','
+                && source[cursor] != delimiter
                 && source[cursor] != b'\n'
                 && source[cursor] != b'\r'
             {
@@ -391,7 +399,7 @@ fn parse_csv(source: &[u8], body: Span) -> (Vec<CsvRecord>, Vec<Diagnostic>) {
             });
             break;
         }
-        if source[cursor] == b',' {
+        if source[cursor] == delimiter {
             cursor += 1;
             // A delimiter at the end of the body denotes a final blank field.
             if cursor == body.end {
@@ -442,6 +450,17 @@ fn parse_csv(source: &[u8], body: Span) -> (Vec<CsvRecord>, Vec<Diagnostic>) {
     (records, diagnostics)
 }
 
+/// Selects the scanner dialect before semantic validation. Invalid or quoted
+/// encoding tokens keep CSV recovery; lowering emits the precise diagnostic.
+fn block_encoding(source: &[u8], arguments: Span) -> BlockEncoding {
+    source[arguments.range()]
+        .split(u8::is_ascii_whitespace)
+        .rfind(|token| !token.is_empty())
+        .and_then(|token| std::str::from_utf8(token).ok())
+        .and_then(BlockEncoding::parse)
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -456,6 +475,20 @@ mod tests {
         assert_eq!(block.records.len(), 1);
         assert_eq!(block.records[0].fields[0].decoded, "a\n@end\nb");
         assert!(block.terminator.is_some());
+    }
+
+    #[test]
+    fn pipe_body_uses_pipe_as_its_only_field_delimiter() {
+        let source =
+            b"#!marksheet 0.1\n@sheet s \"S\"\n@block A1 pipe\n\"north|west\"|east, south\n@end\n";
+        let result = scan(source);
+        let Node::CsvBlock(block) = &result.cst.nodes[2] else {
+            panic!("expected delimited block");
+        };
+        assert_eq!(block.encoding, BlockEncoding::Pipe);
+        assert_eq!(block.records[0].fields[0].decoded, "north|west");
+        assert_eq!(block.records[0].fields[1].decoded, "east, south");
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     }
 
     #[test]

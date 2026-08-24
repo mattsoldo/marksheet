@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use marksheet_model::{ByteSpan, Coordinate, NameId, SheetId, StyleId, TableId};
+use marksheet_model::{BlockEncoding, ByteSpan, Coordinate, NameId, SheetId, StyleId, TableId};
 
 use crate::cst::{Cst, CsvBlock, CsvKind, Directive, ExtensionBlock, Line, Node, Span};
 
@@ -32,6 +32,8 @@ pub struct CellLocation {
     pub record: ByteSpan,
     /// The enclosing `@block` or `@table` construct.
     pub container: ByteSpan,
+    /// The delimiter encoding that owns this field.
+    pub encoding: BlockEncoding,
 }
 
 /// A source location for one `@block` or `@table`.
@@ -39,6 +41,8 @@ pub struct CellLocation {
 pub struct CsvBlockLocation {
     /// Whether this construct is an unnamed block or a named table.
     pub kind: CsvKind,
+    /// The block's field delimiter encoding.
+    pub encoding: BlockEncoding,
     /// The directive line.
     pub directive: DirectiveLocation,
     /// Table identifier token for `@table`; absent for `@block` or malformed
@@ -470,6 +474,7 @@ impl<'a> Builder<'a> {
         };
         let location = CsvBlockLocation {
             kind: block.kind,
+            encoding: block.encoding,
             directive,
             table_id,
             anchor,
@@ -526,6 +531,7 @@ impl<'a> Builder<'a> {
                         field: byte_span(field.span),
                         record: byte_span(record.span),
                         container: byte_span(block.span),
+                        encoding: block.encoding,
                     },
                 );
             }

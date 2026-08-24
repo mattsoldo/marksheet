@@ -73,14 +73,16 @@ fn format_directive(output: &mut Vec<u8>, source: &[u8], directive: &Directive) 
 
 fn format_csv_block(output: &mut Vec<u8>, source: &[u8], block: &CsvBlock) {
     format_directive(output, source, &block.directive);
+    let delimiter = block.encoding.delimiter();
     for record in &block.records {
         for (index, field) in record.fields.iter().enumerate() {
             if index != 0 {
-                output.push(b',');
+                output.push(delimiter);
             }
             let scalar = canonical_scalar(&Value::from_csv_field(&field.decoded));
             let must_quote_end = record.fields.len() == 1 && scalar == "@end";
-            output.extend_from_slice(csv_quote(&scalar, must_quote_end).as_bytes());
+            output
+                .extend_from_slice(delimited_quote(&scalar, must_quote_end, delimiter).as_bytes());
         }
         output.push(b'\n');
     }
@@ -296,11 +298,11 @@ fn canonical_formula(source: &str) -> String {
     format_formula(&formula).unwrap_or_else(|_| source.to_owned())
 }
 
-fn csv_quote(value: &str, force: bool) -> String {
+fn delimited_quote(value: &str, force: bool, delimiter: u8) -> String {
     if force
         || value
             .bytes()
-            .any(|byte| matches!(byte, b',' | b'"' | b'\n' | b'\r'))
+            .any(|byte| byte == delimiter || matches!(byte, b'"' | b'\n' | b'\r'))
     {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {

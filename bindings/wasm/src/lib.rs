@@ -1267,7 +1267,7 @@ fn validate_diagnostic_budget(source: &[u8], _limits: &SessionLimits) -> Result<
         match byte {
             b'\n' => records = records.saturating_add(1),
             b'=' => formulas = formulas.saturating_add(1),
-            b',' => delimiters = delimiters.saturating_add(1),
+            b',' | b'|' => delimiters = delimiters.saturating_add(1),
             _ => {}
         }
     }
@@ -1297,15 +1297,15 @@ fn validate_diagnostic_budget(source: &[u8], _limits: &SessionLimits) -> Result<
         ));
     }
     // Parsing materializes one cell per CSV field even when every field is
-    // blank. Bound every comma before lowering so a short one-line CSV record
-    // cannot force an unbounded authored-cell allocation. Counting comments
+    // blank. Bound every comma and pipe before lowering so a short one-line
+    // delimited record cannot force an unbounded authored-cell allocation. Counting comments
     // and quoted text is intentionally conservative: outer syntax state must
     // not be able to bypass this worker-side resource limit.
     if delimiters > MAX_CSV_FIELD_DELIMITERS {
         return Err(WorkerError::new(
             WorkerErrorCode::Limit,
             format!(
-                "source has {delimiters} CSV field delimiters, exceeding the {MAX_CSV_FIELD_DELIMITERS} worker limit"
+                "source has {delimiters} field delimiters, exceeding the {MAX_CSV_FIELD_DELIMITERS} worker limit"
             ),
         ));
     }

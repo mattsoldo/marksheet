@@ -719,7 +719,8 @@ fn plan_set_cell(
     } else {
         FieldContext::DelimitedRecord
     };
-    let replacement = encode_field(value, context).map_err(|error| encode_error(index, error))?;
+    let replacement = encode_field(value, context, location.encoding)
+        .map_err(|error| encode_error(index, error))?;
     push_patch(source, patches, location.field, replacement, index)
 }
 
@@ -776,10 +777,11 @@ fn plan_append_table_row(
     let mut record = Vec::new();
     for (field_index, field) in fields.iter().enumerate() {
         if field_index != 0 {
-            record.push(b',');
+            record.push(location.encoding.delimiter());
         }
         record.extend_from_slice(
-            &encode_field(field, field_context).map_err(|error| encode_error(index, error))?,
+            &encode_field(field, field_context, location.encoding)
+                .map_err(|error| encode_error(index, error))?,
         );
     }
     record.extend_from_slice(table_newline(source, location.body));
@@ -3211,6 +3213,39 @@ mod tests {
                 .source
                 .windows(5)
                 .any(|window| window == b"new\r\n")
+        );
+    }
+
+    #[test]
+    fn pipe_blocks_preserve_their_delimiter_through_source_aware_edits() {
+        let source =
+            b"#!marksheet 0.1\n@sheet s \"S\"\n@table items A1 pipe\nName|Amount\nRent|100\n@end\n";
+        let set = execute_one(
+            source,
+            EditOperation::SetCell {
+                sheet: sheet("s"),
+                coordinate: coordinate("A2"),
+                value: Value::Text("Rent|storage".to_owned()),
+            },
+        );
+        assert!(
+            set.source
+                .windows(b"\"Rent|storage\"|100".len())
+                .any(|window| window == b"\"Rent|storage\"|100")
+        );
+
+        let append = execute_one(
+            &set.source,
+            EditOperation::AppendTableRow {
+                table: table("items"),
+                fields: vec![Value::Text("Utilities".to_owned()), Value::Number(20.0)],
+            },
+        );
+        assert!(
+            append
+                .source
+                .windows(b"Utilities|20\n@end".len())
+                .any(|window| window == b"Utilities|20\n@end")
         );
     }
 

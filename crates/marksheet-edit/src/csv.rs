@@ -6,7 +6,7 @@
 
 use std::fmt::{self, Write as _};
 
-use marksheet_model::{CanonicalNumberError, Value, canonical_number};
+use marksheet_model::{BlockEncoding, CanonicalNumberError, Value, canonical_number};
 
 /// Context which affects the legal spelling of an otherwise independent CSV
 /// field.
@@ -73,10 +73,14 @@ impl From<CanonicalNumberError> for EncodeError {
 ///
 /// Returns an error when a manually-constructed model value has no portable
 /// Marksheet spelling (for example, a non-finite number).
-pub fn encode_field(value: &Value, context: FieldContext) -> Result<Vec<u8>, EncodeError> {
+pub fn encode_field(
+    value: &Value,
+    context: FieldContext,
+    encoding: BlockEncoding,
+) -> Result<Vec<u8>, EncodeError> {
     let scalar = encode_scalar(value)?;
     let must_quote = matches!(context, FieldContext::SoleFieldRecord) && scalar == "@end";
-    Ok(quote_csv_field(&scalar, must_quote))
+    Ok(quote_field(&scalar, must_quote, encoding.delimiter()))
 }
 
 /// Encodes a value to its decoded CSV scalar spelling, before RFC 4180 quoting.
@@ -227,11 +231,11 @@ fn encode_datetime_components(
     Ok(scalar)
 }
 
-fn quote_csv_field(scalar: &str, force: bool) -> Vec<u8> {
+fn quote_field(scalar: &str, force: bool, delimiter: u8) -> Vec<u8> {
     if !force
         && !scalar
             .bytes()
-            .any(|byte| matches!(byte, b',' | b'"' | b'\n' | b'\r'))
+            .any(|byte| byte == delimiter || matches!(byte, b'"' | b'\n' | b'\r'))
     {
         return scalar.as_bytes().to_vec();
     }
@@ -271,7 +275,8 @@ mod tests {
     }
 
     fn assert_round_trip(value: &Value, context: FieldContext) {
-        let encoded = encode_field(value, context).expect("representable value");
+        let encoded =
+            encode_field(value, context, BlockEncoding::Csv).expect("representable value");
         assert_eq!(parse_one_field(&encoded), *value, "encoded={encoded:?}");
     }
 
@@ -355,11 +360,37 @@ mod tests {
             ("a\nb", b"\"a\nb\"".as_slice()),
         ];
         for (text, expected) in cases {
-            let encoded =
-                encode_field(&Value::Text(text.to_owned()), FieldContext::DelimitedRecord).unwrap();
+            let encoded = encode_field(
+                &Value::Text(text.to_owned()),
+                FieldContext::DelimitedRecord,
+                BlockEncoding::Csv,
+            )
+            .unwrap();
             assert_eq!(encoded, expected);
             assert_round_trip(&Value::Text(text.to_owned()), FieldContext::SoleFieldRecord);
         }
+    }
+
+    #[test]
+    fn pipe_encoding_quotes_pipes_without_quoting_commas() {
+        assert_eq!(
+            encode_field(
+                &Value::Text("north|west, east".to_owned()),
+                FieldContext::DelimitedRecord,
+                BlockEncoding::Pipe,
+            )
+            .unwrap(),
+            b"\"north|west, east\""
+        );
+        assert_eq!(
+            encode_field(
+                &Value::Text("north, west".to_owned()),
+                FieldContext::DelimitedRecord,
+                BlockEncoding::Pipe,
+            )
+            .unwrap(),
+            b"north, west"
+        );
     }
 
     /// A quoted field would carry the raw byte into source, where SPEC
@@ -369,7 +400,7 @@ mod tests {
     fn text_holding_a_carriage_return_has_no_source_encoding() {
         for context in [FieldContext::DelimitedRecord, FieldContext::SoleFieldRecord] {
             assert_eq!(
-                encode_field(&Value::Text("a\rb".to_owned()), context),
+                encode_field(&Value::Text("a\rb".to_owned()), context, BlockEncoding::Csv),
                 Err(EncodeError::CarriageReturnInText)
             );
         }
@@ -383,11 +414,11 @@ mod tests {
     fn sole_end_field_is_quoted_but_delimited_end_field_is_not() {
         let value = Value::Text("@end".to_owned());
         assert_eq!(
-            encode_field(&value, FieldContext::SoleFieldRecord).unwrap(),
+            encode_field(&value, FieldContext::SoleFieldRecord, BlockEncoding::Csv).unwrap(),
             b"\"@end\""
         );
         assert_eq!(
-            encode_field(&value, FieldContext::DelimitedRecord).unwrap(),
+            encode_field(&value, FieldContext::DelimitedRecord, BlockEncoding::Csv).unwrap(),
             b"@end"
         );
         assert_round_trip(&value, FieldContext::SoleFieldRecord);
@@ -411,7 +442,11 @@ mod tests {
     #[test]
     fn rejects_non_finite_numbers() {
         assert_eq!(
-            encode_field(&Value::Number(f64::NAN), FieldContext::DelimitedRecord),
+            encode_field(
+                &Value::Number(f64::NAN),
+                FieldContext::DelimitedRecord,
+                BlockEncoding::Csv,
+            ),
             Err(EncodeError::NonFiniteNumber)
         );
     }

@@ -218,21 +218,21 @@ impl Lowerer<'_> {
         let Some(tokens) = self.exact_tokens(csv.directive.arguments, expected) else {
             return;
         };
-        // The grammar spells the encoding as a bare `csv` literal, so a JSON
-        // string that decodes to `csv` must not be accepted here.
+        // The grammar spells the encoding as a bare literal, so a JSON string
+        // that decodes to an encoding name must not be accepted here.
         let encoding = &tokens[expected - 1];
         if encoding.quoted {
             let span = encoding.span;
             self.invalid(span, "block encoding must not be a JSON string");
             return;
         }
-        if encoding.text != "csv" {
+        let Some(block_encoding) = marksheet_model::BlockEncoding::parse(&encoding.text) else {
             self.invalid(
                 csv.directive.arguments,
-                "only the csv block encoding is supported",
+                "block encoding must be csv or pipe",
             );
             return;
-        }
+        };
         let anchor_index = usize::from(csv.kind == CsvKind::Table);
         if tokens[anchor_index].quoted {
             self.diagnostics.push(error(
@@ -284,7 +284,7 @@ impl Lowerer<'_> {
             }
             cells.push(row);
         }
-        let Ok(mut block) = Block::new(anchor, cells) else {
+        let Ok(mut block) = Block::new_with_encoding(anchor, cells, block_encoding) else {
             self.diagnostics
                 .push(error("MS1204", "invalid rectangular block", csv.body));
             return;
