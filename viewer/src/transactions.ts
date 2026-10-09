@@ -98,9 +98,15 @@ export function escapeAuthoredText(text: string): string {
   return literal ? text : `'${text}`;
 }
 
-/** `String(-0)` is `"0"`, which would reparse as positive zero. */
+/**
+ * Marksheet's canonical number spelling (SPEC.md §11.1) is ECMAScript
+ * `Number::toString` with the exponent's `+` sign removed: shortest
+ * round-tripping digits, plain notation for decimal exponents in [-6, 21).
+ * `String(-0)` is `"0"`, which would reparse as positive zero, so negative
+ * zero is spelled `-0`.
+ */
 function authoredNumberText(value: number): string {
-  return Object.is(value, -0) ? "-0" : String(value);
+  return Object.is(value, -0) ? "-0" : String(value).replace("e+", "e");
 }
 
 function isIsoDate(source: string): boolean {

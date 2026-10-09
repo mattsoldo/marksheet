@@ -338,10 +338,33 @@ The number grammar is:
 -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?
 ```
 
-Core calculation uses IEEE 754 binary64 semantics. A canonical serializer emits
-the shortest decimal representation that round-trips to the same finite value.
-NaN and infinity are not source number literals; calculations that would
-produce them return an error.
+Core calculation uses IEEE 754 binary64 semantics. NaN and infinity are not
+source number literals; calculations that would produce them return an error.
+
+Both plain (`60000`) and exponent (`6e4`) spellings are valid input. The
+canonical spelling of a finite number is defined as follows, matching
+ECMAScript `Number::toString` except that the exponent carries no `+` sign:
+
+1. Zero is `0`; negative zero is `-0`.
+2. Otherwise, let `d1 d2 … dk` be the shortest sequence of decimal digits
+   (`d1` non-zero, `dk` non-zero unless `k = 1`) such that `±d1.d2…dk × 10^x`
+   round-trips to the same binary64 value. When several such sequences exist,
+   choose the one closest to the exact value; when two are equally close,
+   choose the one whose last digit `dk` is even.
+3. If `-6 <= x <= 20`, use plain positional notation with no exponent, no
+   superfluous leading zeroes (a value below one starts with `0.`), and no
+   trailing fractional zeroes or trailing `.`: `2000`, `60000`, `150000`,
+   `1500.5`, `0.32`, `0.000001`, `100000000000000000000`.
+4. Otherwise, use `d1`, then `.` and `d2…dk` when `k > 1`, then lowercase `e`,
+   then `x` in decimal with a leading `-` when negative, no `+`, and no leading
+   zeroes: `1e21`, `1.5e300`, `1e-7`, `1.5e-7`.
+5. Negative values are prefixed with `-`.
+
+The plain range keeps ordinary quantities such as budgets, fees, rates, and
+percentages readable in text editors and diffs, while values whose plain
+spelling would need more than 21 integer digits or more than five leading
+fractional zeroes use exponent notation. Every canonical spelling matches the
+number grammar above and parses to the same binary64 value.
 
 ### 11.2 Dates and datetimes
 
@@ -955,7 +978,8 @@ Canonical output MUST:
 5. Use lowercase directive names and identifiers.
 6. Use uppercase A1 column letters.
 7. Use JSON escaping for directive strings.
-8. Use canonical scalar spellings and minimal required CSV quoting.
+8. Use canonical scalar spellings (including the number spelling in section
+   11.1) and minimal required CSV quoting.
 9. Preserve authored directive order, property order, comments in their
    attached positions, sheet order, block order, table row order, and style
    application order.
@@ -978,8 +1002,8 @@ AST and MUST:
   retaining lowercase stable sheet, name, and table identifiers;
 - retain authored `$` markers and emit decimal row numbers without leading
   zeroes;
-- use the shortest finite decimal spelling that round-trips to the formula's
-  binary64 Number value, and use the canonical core error tokens;
+- spell each Number literal with the canonical number spelling in section
+  11.1, and use the canonical core error tokens;
 - delimit text with `"`, encode an embedded `"` as `""`, and preserve every
   other text scalar exactly;
 - emit structured selectors with exact `#Headers`, `#Data`, and `@` spelling,

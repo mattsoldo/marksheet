@@ -316,7 +316,12 @@ mod tests {
         assert_eq!(encode_scalar(&Value::Blank).unwrap(), "");
         assert_eq!(encode_scalar(&Value::Text(String::new())).unwrap(), "'");
         assert_eq!(encode_scalar(&Value::Number(-0.0)).unwrap(), "-0");
-        assert_eq!(encode_scalar(&Value::Number(1e20)).unwrap(), "1e20");
+        assert_eq!(
+            encode_scalar(&Value::Number(1e20)).unwrap(),
+            "100000000000000000000"
+        );
+        assert_eq!(encode_scalar(&Value::Number(60000.0)).unwrap(), "60000");
+        assert_eq!(encode_scalar(&Value::Number(1e21)).unwrap(), "1e21");
         assert_eq!(
             encode_scalar(&Value::from_csv_field("2024-02-29")).unwrap(),
             "2024-02-29"
