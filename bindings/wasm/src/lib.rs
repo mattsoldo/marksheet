@@ -2046,7 +2046,7 @@ mod tests {
 
         let error = WorkbenchSession::open(source, SessionLimits::default()).unwrap_err();
         assert_eq!(error.code, WorkerErrorCode::Limit);
-        assert!(error.message.contains("CSV field delimiters"));
+        assert!(error.message.contains("field delimiters"));
     }
 
     #[test]
