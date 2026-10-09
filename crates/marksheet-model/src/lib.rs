@@ -917,7 +917,8 @@ fn parse_number(value: &str) -> Option<f64> {
 /// Returns the canonical decimal spelling for a finite binary64 number.
 ///
 /// The digit sequence is the shortest one that round-trips to the same
-/// binary64 value. Placement follows the ECMAScript `Number::toString` rule:
+/// binary64 value, closest to the exact value, with exact ties resolved to
+/// an even last digit. Placement follows the ECMAScript `Number::toString` rule:
 /// with `e` the decimal exponent of the first significant digit (the value is
 /// `d.ddd × 10^e`), numbers with `-7 < e < 21` use plain positional notation
 /// (`60000`, `0.32`, `0.000001`, `100000000000000000000`), and all others use
@@ -941,30 +942,23 @@ pub fn canonical_number(value: f64) -> Result<String, CanonicalNumberError> {
         });
     }
 
-    // `LowerExp` without a precision emits the shortest round-tripping digits
-    // as `[-]d[.ddd]e<exponent>`, with no `+` sign or exponent padding.
-    let scientific = format!("{value:e}");
-    // Both fallbacks are unreachable for finite input; they keep the result
-    // a valid, round-tripping number literal regardless.
-    let Some((mantissa, exponent)) = scientific.split_once('e') else {
-        return Ok(scientific);
-    };
-    let Ok(exponent) = exponent.parse::<i32>() else {
-        return Ok(scientific);
-    };
-    if !(PLAIN_MIN_EXPONENT..PLAIN_MAX_EXPONENT).contains(&exponent) {
-        return Ok(scientific);
-    }
-
-    let (negative, mantissa) = match mantissa.strip_prefix('-') {
-        Some(unsigned) => (true, unsigned),
-        None => (false, mantissa),
-    };
-    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    let (digits, exponent) = shortest_digits(value.abs());
+    let digits = digits.to_string();
     let mut result = String::with_capacity(digits.len() + 24);
-    if negative {
+    if value.is_sign_negative() {
         result.push('-');
     }
+    if !(PLAIN_MIN_EXPONENT..PLAIN_MAX_EXPONENT).contains(&exponent) {
+        result.push_str(&digits[..1]);
+        if digits.len() > 1 {
+            result.push('.');
+            result.push_str(&digits[1..]);
+        }
+        result.push('e');
+        result.push_str(&exponent.to_string());
+        return Ok(result);
+    }
+
     // Exponent bounds above make these conversions lossless.
     let integer_digits = usize::try_from(exponent + 1).unwrap_or(0);
     if exponent < 0 {
@@ -984,6 +978,80 @@ pub fn canonical_number(value: f64) -> Result<String, CanonicalNumberError> {
         result.push_str(&digits[integer_digits..]);
     }
     Ok(result)
+}
+
+/// Returns the shortest round-tripping significand digits of a finite,
+/// positive binary64 value (as an integer without trailing zeroes) and the
+/// decimal exponent of its leading digit, so the value is
+/// `d1.d2…dk × 10^exponent`.
+///
+/// Rust's shortest formatter already picks the candidate closest to the exact
+/// value, but when the exact value lies exactly halfway between two equally
+/// short round-tripping candidates it does not promise the even one. That
+/// case is resolved here as ECMAScript `Number::toString` requires.
+fn shortest_digits(magnitude: f64) -> (u64, i32) {
+    let (mut digits, exponent) = parse_scientific(&format!("{magnitude:e}"));
+    let length = decimal_length(digits);
+    // A shortest binary64 significand has at most 17 digits, so ten times it
+    // plus five cannot overflow `u64`.
+    if digits % 2 == 1 && length <= 17 {
+        // A tie needs an exact expansion of `length + 1` significant digits,
+        // which a 41-digit rounding always shows unchanged; only then pay for
+        // the full expansion (binary64 values have at most 767 significant
+        // digits, so 800 is exact).
+        let rounded = parse_scientific_digits(&format!("{magnitude:.40e}"));
+        let exact = if rounded.0.len() == decimal_length(digits) as usize + 1 {
+            parse_scientific_digits(&format!("{magnitude:.800e}"))
+        } else {
+            rounded
+        };
+        let scale = exponent - i32::try_from(length).unwrap_or(0);
+        for (midpoint, alternative) in
+            [(digits * 10 - 5, digits - 1), (digits * 10 + 5, digits + 1)]
+        {
+            let midpoint_exponent =
+                scale + i32::try_from(decimal_length(midpoint)).unwrap_or(0) - 1;
+            let alternative_exponent =
+                scale + 1 + i32::try_from(decimal_length(alternative)).unwrap_or(0) - 1;
+            if alternative != 0
+                && exact == (midpoint.to_string(), midpoint_exponent)
+                && format!("{alternative}e{}", scale + 1)
+                    .parse::<f64>()
+                    .is_ok_and(|parsed| parsed.to_bits() == magnitude.to_bits())
+            {
+                let mut alternative = alternative;
+                while alternative % 10 == 0 {
+                    alternative /= 10;
+                }
+                return (alternative, alternative_exponent);
+            }
+        }
+    }
+    while digits % 10 == 0 && digits != 0 {
+        digits /= 10;
+    }
+    (digits, exponent)
+}
+
+/// Splits Rust `LowerExp` output for a positive value into trimmed significant
+/// digits and the exponent of the leading digit.
+fn parse_scientific_digits(text: &str) -> (String, i32) {
+    let (mantissa, exponent) = text.split_once('e').unwrap_or((text, "0"));
+    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+    let digits = digits.trim_end_matches('0');
+    (
+        if digits.is_empty() { "0" } else { digits }.to_owned(),
+        exponent.parse().unwrap_or(0),
+    )
+}
+
+fn parse_scientific(text: &str) -> (u64, i32) {
+    let (digits, exponent) = parse_scientific_digits(text);
+    (digits.parse().unwrap_or(0), exponent)
+}
+
+fn decimal_length(value: u64) -> u32 {
+    value.checked_ilog10().unwrap_or(0) + 1
 }
 
 /// Smallest decimal exponent (inclusive) spelled in plain notation.
@@ -1847,6 +1915,9 @@ mod tests {
             (1.23e-10, "1.23e-10"),
             (f64::MIN_POSITIVE, "2.2250738585072014e-308"),
             (5e-324, "5e-324"),
+            // Exact tie between ...562.2 and ...562.3: ECMAScript picks even.
+            (f64::from_bits(0x4317_9085_685d_83c9), "1658206780088562.2"),
+            (1_658_206_780_088_562.0 + 0.75, "1658206780088562.8"),
         ] {
             let actual = canonical_number(value).unwrap();
             assert_eq!(actual, expected, "canonical spelling of {value:?}");
@@ -1881,6 +1952,17 @@ mod tests {
                 values.push(value);
             }
         }
+        // Every quarter-odd value in [1e15, 2^51) lies exactly halfway
+        // between two 17-digit round-tripping spellings.
+        for _ in 0..5_000 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let integer = 1_000_000_000_000_000 + state % 1_000_000_000_000_000;
+            #[allow(clippy::cast_precision_loss)]
+            let integer = integer as f64;
+            values.extend([integer + 0.25, integer + 0.75, -(integer + 0.25)]);
+        }
         for value in values.into_iter().filter(|value| value.is_finite()) {
             let actual = canonical_number(value).unwrap();
             assert_eq!(
@@ -1892,23 +1974,74 @@ mod tests {
                 parse_number(&actual).map(f64::to_bits),
                 Some(value.to_bits())
             );
-            // Same significant digits as the shortest scientific spelling.
-            let shortest = format!("{value:e}");
-            let significant = |text: &str| -> String {
-                let mantissa = text.split('e').next().unwrap();
-                mantissa
-                    .chars()
-                    .filter(char::is_ascii_digit)
-                    .collect::<String>()
-                    .trim_start_matches('0')
-                    .trim_end_matches('0')
-                    .to_owned()
-            };
-            assert_eq!(significant(&actual), significant(&shortest), "{actual}");
+            assert_eq!(
+                significant(&actual),
+                reference_digits(value.abs()),
+                "{actual}"
+            );
             assert!(!actual.contains('+') && !actual.contains('E'));
             let magnitude = value.abs();
             let plain = value == 0.0 || (1e-6..1e21).contains(&magnitude);
             assert_eq!(!actual.contains('e'), plain, "{actual}");
         }
+    }
+
+    fn significant(text: &str) -> String {
+        let mantissa = text.split('e').next().unwrap();
+        mantissa
+            .chars()
+            .filter(char::is_ascii_digit)
+            .collect::<String>()
+            .trim_start_matches('0')
+            .trim_end_matches('0')
+            .to_owned()
+    }
+
+    /// Independent ECMAScript digit choice: Rust's shortest digits, except
+    /// that an exact halfway tie (the exact expansion is the k shortest
+    /// digits plus a final `5`) resolves to whichever round-tripping
+    /// truncation or round-up is even.
+    fn reference_digits(magnitude: f64) -> String {
+        let shortest = significant(&format!("{magnitude:e}"));
+        // A 41-digit rounding cannot hide a tie; it only screens out cheaply.
+        let rounded = significant(&format!("{magnitude:.40e}"));
+        if rounded.len() != shortest.len() + 1 {
+            return shortest;
+        }
+        let exact = significant(&format!("{magnitude:.800e}"));
+        let exponent: i32 = format!("{magnitude:.800e}")
+            .split('e')
+            .nth(1)
+            .unwrap()
+            .parse()
+            .unwrap();
+        if exact.len() != shortest.len() + 1 || !exact.ends_with('5') {
+            return shortest;
+        }
+        let down: u64 = exact[..shortest.len()].parse().unwrap();
+        let scale = exponent - i32::try_from(shortest.len()).unwrap() + 1;
+        let round_trips = |digits: u64| {
+            format!("{digits}e{scale}")
+                .parse::<f64>()
+                .unwrap()
+                .to_bits()
+                == magnitude.to_bits()
+        };
+        let candidates: Vec<u64> = [down, down + 1]
+            .into_iter()
+            .filter(|digits| round_trips(*digits))
+            .collect();
+        let chosen = match candidates.as_slice() {
+            [only] => *only,
+            [first, second] => {
+                if first % 2 == 0 {
+                    *first
+                } else {
+                    *second
+                }
+            }
+            _ => panic!("no round-tripping neighbour for {magnitude:e}"),
+        };
+        significant(&chosen.to_string())
     }
 }

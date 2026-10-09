@@ -349,7 +349,8 @@ ECMAScript `Number::toString` except that the exponent carries no `+` sign:
 2. Otherwise, let `d1 d2 … dk` be the shortest sequence of decimal digits
    (`d1` non-zero, `dk` non-zero unless `k = 1`) such that `±d1.d2…dk × 10^x`
    round-trips to the same binary64 value. When several such sequences exist,
-   choose the one closest to the exact value.
+   choose the one closest to the exact value; when two are equally close,
+   choose the one whose last digit `dk` is even.
 3. If `-6 <= x <= 20`, use plain positional notation with no exponent, no
    superfluous leading zeroes (a value below one starts with `0.`), and no
    trailing fractional zeroes or trailing `.`: `2000`, `60000`, `150000`,
