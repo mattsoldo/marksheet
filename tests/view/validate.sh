@@ -145,8 +145,8 @@ for entry in manifest["cases"]:
 
 budget = json.loads((root / "budget_open.json").read_text(encoding="utf-8"))
 save = budget["operations"][-1]["expect"]
-assert source_path(save["after_source"]).read_bytes().count(b"Tax rate,0.25") == 1
-assert source_path("../../examples/budget.ms").read_bytes().count(b"Tax rate,0.2") == 1
+assert source_path(save["after_source"]).read_bytes().count(b"Tax rate|0.25") == 1
+assert source_path("../../examples/budget.ms").read_bytes().count(b"Tax rate|0.2") == 1
 
 print(f"validated {len(manifest['cases'])} browser-session fixtures")
 PY
