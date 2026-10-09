@@ -381,7 +381,15 @@ mod numeric_and_text {
     fn numeric_text_uses_canonical_number_spelling() {
         assert_eq!(
             value("=CONCAT(1e20)", &empty()),
-            CalcValue::Text("1e20".to_owned())
+            CalcValue::Text("100000000000000000000".to_owned())
+        );
+        assert_eq!(
+            value("=CONCAT(6e4)", &empty()),
+            CalcValue::Text("60000".to_owned())
+        );
+        assert_eq!(
+            value("=CONCAT(1e21)", &empty()),
+            CalcValue::Text("1e21".to_owned())
         );
         assert_eq!(
             value("=CONCAT(1e-7)", &empty()),

@@ -183,6 +183,29 @@ describe("authoredCellText round-trips every authored value kind", () => {
   });
 });
 
+describe("authoredCellText spells numbers canonically", () => {
+  it.each<[number, string]>([
+    [0, "0"],
+    [-0, "-0"],
+    [2000, "2000"],
+    [60000, "60000"],
+    [150000, "150000"],
+    [-42, "-42"],
+    [0.32, "0.32"],
+    [1500.5, "1500.5"],
+    [0.000001, "0.000001"],
+    [1e15, "1000000000000000"],
+    [1e20, "100000000000000000000"],
+    [1e21, "1e21"],
+    [1e22, "1e22"],
+    [1e-7, "1e-7"],
+    [1.5e-7, "1.5e-7"],
+    [Number.MAX_VALUE, "1.7976931348623157e308"],
+  ])("spells %d as %s", (value, expected) => {
+    expect(authoredCellText({ kind: "number", value })).toBe(expected);
+  });
+});
+
 describe("escapeAuthoredText", () => {
   it.each([
     ["", "'"],

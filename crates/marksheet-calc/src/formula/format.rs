@@ -281,8 +281,15 @@ mod tests {
     #[test]
     fn canonicalizes_names_numbers_and_spacing() {
         assert_eq!(canonical("= sum ( 1.0, a1 ) "), "=SUM(1,A1)");
-        assert_eq!(canonical("=100000000000000000000"), "=1e20");
+        assert_eq!(
+            canonical("=100000000000000000000"),
+            "=100000000000000000000"
+        );
+        assert_eq!(canonical("=1e21"), "=1e21");
+        assert_eq!(canonical("=6e4"), "=60000");
+        assert_eq!(canonical("=1.5E5"), "=150000");
         assert_eq!(canonical("=0.0000001"), "=1e-7");
+        assert_eq!(canonical("=1e-6"), "=0.000001");
         assert_eq!(canonical("=-0.0"), "=-0");
     }
 

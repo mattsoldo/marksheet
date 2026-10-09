@@ -15,7 +15,7 @@ use marksheet_model::{
     ApplyTarget, Block, ByteSpan, Color, ColumnRange, Coordinate, Diagnostic, Fill, FillTarget,
     HorizontalAlignment, NameId, NameTarget, NumberFormat, Range, RowRange, SheetId, SheetItem,
     Style, StyleId, StyleProperties, Table, TableId, TableRegion, Value, VerticalAlignment,
-    Workbook,
+    Workbook, canonical_number,
 };
 use marksheet_syntax::{ParseOptions, ParsedDocument, SourceMap, parse_with_options};
 use serde::{Deserialize, Serialize};
@@ -1455,10 +1455,10 @@ fn format_row_range(rows: RowRange) -> String {
 }
 
 fn format_finite_number(value: f64) -> Option<String> {
-    // Rust's finite float formatter emits the JSON number grammar used by
-    // Marksheet (including exponent notation when needed). Non-finite values
-    // are excluded before this helper is called.
-    value.is_finite().then(|| value.to_string())
+    // Emit the same canonical spelling as `marksheet fmt`, so edited
+    // directives need no further normalization. Non-finite values are
+    // excluded before this helper is called.
+    canonical_number(value).ok()
 }
 
 fn append_sheet_directive(

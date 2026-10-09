@@ -477,11 +477,13 @@ mod tests {
     }
 
     #[test]
-    fn outer_scalar_numbers_use_canonical_exponents_and_signed_zero() {
-        let source =
-            b"#!marksheet 0.1\n\n@sheet s \"Sheet\"\n@block A1 csv\n1e+20,0.0000001,-0.0\n@end\n";
+    fn outer_scalar_numbers_use_canonical_spelling_and_signed_zero() {
+        let source = b"#!marksheet 0.1\n\n@sheet s \"Sheet\"\n@block A1 csv\n1e+20,0.0000001,-0.0,6e4,1.5E5,2e3,0.32,1e21,15e-8\n@end\n";
         let once = canonicalize(&parse(source)).expect("valid numeric scalars");
-        assert!(String::from_utf8_lossy(&once).contains("1e20,1e-7,-0\n"));
+        assert!(
+            String::from_utf8_lossy(&once)
+                .contains("100000000000000000000,1e-7,-0,60000,150000,2000,0.32,1e21,1.5e-7\n")
+        );
         assert_eq!(canonicalize(&parse(&once)).unwrap(), once);
     }
 
