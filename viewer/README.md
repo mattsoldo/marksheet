@@ -54,8 +54,9 @@ four columns of overscan, so at most 13,440 cells however large the screen.
 Scrolling near a window edge requests the next window and keeps the visible
 cells in place; jumping to a distant coordinate requests one window there. The
 reading view also clips the window to the sheet's `extent` (the bounding box of
-authored cells, fill destinations, and table or fill footprints reported by the
-worker) plus one column and two rows, so a small table reads as a table.
+authored cells, fill destinations, table or fill footprints, and `@apply` style
+targets, computed once by the worker) plus one column and two rows, so a small
+table reads as a table without hiding a styled banner below it.
 Details shows the full window for editing beyond the content. The tab title
 names the workbook and marks unsaved edits; all three themes pass an axe-core
 audit with no violations in both views.
@@ -124,6 +125,17 @@ System Access write permission or writable stream.
 Diagnostic rendering is deduplicated and capped at 100 DOM rows per refresh;
 the panel reports the total unique count and an overflow summary. This keeps a
 pathological diagnostic set bounded just like the sparse viewport.
+
+`npm run test:e2e` runs Playwright against the built viewer in real Chromium
+(build first; it serves `dist/` with `vite preview`). It checks what a DOM
+without layout cannot: the reading-view fit, scroll-driven window shifts on a
+tall and a wide sheet (never more than one bounded window of cells), keyboard
+focus across window shifts, returning to the same place after Details closes
+and reopens, the phone layout, recent-workbook and theme persistence across a
+reload, and an axe-core audit with zero violations in every theme and view.
+The suite asserts behavior rather than pixels, because fonts and anti-aliasing
+differ between machines; screenshots of every theme and view are attached to
+the HTML report, which CI uploads as the `viewer-playwright-report` artifact.
 
 `npm run smoke:wasm` invokes the generated ABI directly: it opens the real
 Budget workbook, verifies ordered sheets and `summary!B4 = 1648`, applies one

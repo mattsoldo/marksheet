@@ -272,3 +272,19 @@ jobs:
       - name: Smoke test real Wasm viewer flow
         working-directory: viewer
         run: npm run smoke:wasm
+
+      - name: Install Playwright Chromium
+        working-directory: viewer
+        run: npx playwright install --with-deps chromium
+
+      - name: Real-browser checks (layout, scrolling, accessibility)
+        working-directory: viewer
+        run: npm run test:e2e
+
+      - name: Upload real-browser report and screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: viewer-playwright-report
+          path: viewer/playwright-report/
+          retention-days: 14

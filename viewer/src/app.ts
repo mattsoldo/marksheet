@@ -110,6 +110,10 @@ export class ViewerApp {
   #anchor: Coordinate = { column: 1, row: 1 };
   /** Last known content extent per sheet; `null` is an empty sheet, absence is unknown. */
   #extents = new Map<string, A1Range | null>();
+  /** Where the last render should reveal: `#anchor`, clamped to the reading-view fit. */
+  #revealTarget: Coordinate = { column: 1, row: 1 };
+  /** Refreshes the user asked for (open, navigate, edit); scroll shifts wait for these. */
+  #userRefreshes = 0;
   #scrollFrame = 0;
   #shifting = false;
   #rescanAfterShift = false;
@@ -525,14 +529,13 @@ export class ViewerApp {
     if (!sheet) return false;
     const generation = this.#regionGate.begin();
     const limit = this.fitLimit();
-    if (limit) {
-      this.#anchor = {
-        column: Math.min(this.#anchor.column, limit.column),
-        row: Math.min(this.#anchor.row, limit.row),
-      };
-    }
-    const range = computeViewport(viewportForContainer(this.#anchor, this.gridShellSize()));
+    // Clamp only this request, so reopening Details returns to the unclamped position.
+    const anchor = limit
+      ? { column: Math.min(this.#anchor.column, limit.column), row: Math.min(this.#anchor.row, limit.row) }
+      : this.#anchor;
+    const range = computeViewport(viewportForContainer(anchor, this.gridShellSize()));
     this.setBusy(true, quiet ? undefined : `Loading ${sheet}…`);
+    if (!quiet) this.#userRefreshes += 1;
     try {
       const [envelope, calculation] = await Promise.all([
         this.adapter.visibleRegion(sheet, range),
@@ -572,6 +575,7 @@ export class ViewerApp {
         };
       }
       this.#region = mergedRegion;
+      this.#revealTarget = anchor;
       // Workers without the additive `extent` field leave the extent unknown, so nothing is clipped.
       if ("extent" in mergedRegion.sheet && mergedRegion.sheet.extent !== undefined) {
         this.#extents.set(sheet, mergedRegion.sheet.extent);
@@ -606,6 +610,7 @@ export class ViewerApp {
       if (this.#regionGate.isCurrent(generation)) this.setError(error);
       return false;
     } finally {
+      if (!quiet) this.#userRefreshes -= 1;
       if (this.#regionGate.isCurrent(generation)) this.setBusy(false);
     }
   }
@@ -751,6 +756,10 @@ export class ViewerApp {
     const grid = this.byId("grid");
     const empty = this.byId("grid-empty");
     const reference = reveal === "preserve" && !grid.hidden ? this.scrollReference() : undefined;
+    // Re-rendering replaces every cell; keep keyboard focus on the same coordinate.
+    const focused = grid.contains(document.activeElement)
+      ? (document.activeElement as HTMLElement).dataset.coordinate
+      : undefined;
     const limit = this.fitLimit();
     // The reading view stops at the content extent; the window itself stays bounded either way.
     const range = clipRange(region.range, limit) ?? { start: region.range.start, end: region.range.start };
@@ -819,6 +828,7 @@ export class ViewerApp {
     this.updateSelectionChrome();
     if (reference) this.restoreScroll(reference);
     else this.revealAnchor();
+    if (focused) grid.querySelector<HTMLElement>(`.grid-cell[data-coordinate="${focused}"]`)?.focus({ preventScroll: true });
     this.byId("viewport-status").textContent = `${region.sheet.label} · ${formatCoordinate(range.start)}:${formatCoordinate(range.end)} · ${region.cells.length} sparse / ${viewportCellCount(range)} rendered`;
   }
 
@@ -872,8 +882,8 @@ export class ViewerApp {
   private revealAnchor(): void {
     const { shell, headerHeight, rowHeaderWidth } = this.headerMetrics();
     const grid = this.byId("grid");
-    const row = grid.querySelector<HTMLElement>(`.row-header[data-row="${this.#anchor.row}"]`);
-    const column = grid.querySelector<HTMLElement>(`.column-header[data-column="${this.#anchor.column}"]`);
+    const row = grid.querySelector<HTMLElement>(`.row-header[data-row="${this.#revealTarget.row}"]`);
+    const column = grid.querySelector<HTMLElement>(`.column-header[data-column="${this.#revealTarget.column}"]`);
     shell.scrollTop = row ? row.offsetTop - headerHeight : 0;
     shell.scrollLeft = column ? column.offsetLeft - rowHeaderWidth : 0;
   }
@@ -900,6 +910,8 @@ export class ViewerApp {
     }
     const region = this.#region;
     if (!region || !this.#activeSheet || this.byId("grid").hidden) return;
+    // A jump or sheet switch is loading; its own render decides the window.
+    if (this.#userRefreshes > 0 || region.sheet.id !== this.#activeSheet) return;
     const { shell, headerHeight, rowHeaderWidth, rows, columns } = this.headerMetrics();
     const firstRowHeader = rows[0];
     const lastRowHeader = rows.at(-1);
@@ -922,16 +934,13 @@ export class ViewerApp {
       end: { row: Number(lastRowHeader.dataset.row), column: Number(lastColumnHeader.dataset.column) },
     };
     const spec = viewportForContainer(this.#anchor, this.gridShellSize());
-    const rowOverscan = spec.rowOverscan ?? spec.overscan;
-    const columnOverscan = spec.columnOverscan ?? spec.overscan;
     const limit = this.fitLimit();
     const anchor = { ...this.#anchor };
     if (lastRow >= rendered.end.row - 2 && (!limit || rendered.end.row < limit.row)) anchor.row = firstRow;
-    else if (firstRow <= rendered.start.row + 2 && rendered.start.row > 1) anchor.row = Math.max(1, firstRow - rowOverscan);
+    // Either way, the new window has `rowOverscan` rows above and below what is visible.
+    else if (firstRow <= rendered.start.row + 2 && rendered.start.row > 1) anchor.row = firstRow;
     if (lastColumn >= rendered.end.column - 1 && (!limit || rendered.end.column < limit.column)) anchor.column = firstColumn;
-    else if (firstColumn <= rendered.start.column + 1 && rendered.start.column > 1) {
-      anchor.column = Math.max(1, firstColumn - columnOverscan);
-    }
+    else if (firstColumn <= rendered.start.column + 1 && rendered.start.column > 1) anchor.column = firstColumn;
     const next = computeViewport({ ...spec, anchor });
     const current = region.range;
     if (next.start.row === current.start.row && next.start.column === current.start.column
@@ -976,7 +985,7 @@ export class ViewerApp {
         const keyboard = event as KeyboardEvent;
         if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(keyboard.key)) {
           keyboard.preventDefault();
-          void this.moveGridSelection(coordinate, keyboard.key);
+          void this.moveGridSelection(keyboard.key);
         }
       });
     }
@@ -1006,7 +1015,10 @@ export class ViewerApp {
     applyResolvedStyle(element, cell.style.properties, presentedValueKind(cell));
   }
 
-  private async moveGridSelection(origin: Coordinate, key: string): Promise<void> {
+  private async moveGridSelection(key: string): Promise<void> {
+    // Move from the selection, not the key's target: while a window loads, held keys
+    // keep landing on the previous cell and would otherwise collapse into one step.
+    const origin = this.#selected;
     const delta = key === "ArrowUp"
       ? { column: 0, row: -1 }
       : key === "ArrowDown"
@@ -1032,7 +1044,8 @@ export class ViewerApp {
       };
       await this.refreshVisibleRegion();
     }
-    this.root.querySelector<HTMLElement>(`.grid-cell[data-coordinate="${coordinateKey(next)}"]`)?.focus();
+    // Further keys may have moved the selection during the load; focus where it is now.
+    this.root.querySelector<HTMLElement>(`.grid-cell[data-coordinate="${coordinateKey(this.#selected)}"]`)?.focus();
   }
 
   private updateSelectionChrome(): void {

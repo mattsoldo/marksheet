@@ -12,10 +12,13 @@
     "preview": "vite preview",
     "smoke:wasm": "npm run prepare:wasm && node scripts/smoke-wasm.mjs",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.56.1",
     "@types/node": "^24.3.0",
+    "axe-core": "^4.10.2",
     "happy-dom": "^20.11.2",
     "typescript": "^5.9.2",
     "vite": "^7.1.2",

@@ -160,6 +160,8 @@ class MockAdapter implements WorkbenchAdapter {
   sheets = defaultSheets;
   styleRegions: StyledRegion[] = [];
   extent: A1Range | null | undefined;
+  /** Simulates a worker from before the additive `extent` field. */
+  omitExtent = false;
   cellValue: AuthoredValue = { kind: "formula", value: "=1+1" };
   cellCalculated: ScalarValue = { kind: "number", value: 2 };
   edit = vi.fn(async (_transaction: EditTransaction) => {
@@ -237,7 +239,8 @@ class MockAdapter implements WorkbenchAdapter {
   async visibleRegion(sheet: string, range: A1Range) {
     const visible = region(sheet, range, this.regionCompleteness, this.cellValue, this.cellCalculated);
     visible.style_regions = this.styleRegions;
-    if (this.extent !== undefined) visible.sheet.extent = this.extent;
+    if (this.omitExtent) Reflect.deleteProperty(visible.sheet, "extent");
+    else if (this.extent !== undefined) visible.sheet.extent = this.extent;
     const payload = {
       kind: "visible_region" as const,
       region: visible,
@@ -1289,6 +1292,19 @@ describe("viewer reading view and workbook navigation", () => {
 
     root.querySelector<HTMLButtonElement>("#toggle-details")!.click();
     await vi.waitFor(() => expect(root.querySelectorAll(".grid-cell")).toHaveLength(648));
+    expect(root.querySelector("#grid")?.classList.contains("grid-fitted")).toBe(false);
+    app.dispose();
+    root.remove();
+  });
+
+  it("does not clip when an older worker reports no extent", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    adapter.omitExtent = true;
+    const app = new ViewerApp(root, adapter, { storage: memoryStorage(), recentStore: new MemoryRecentStore() });
+    await app.openSource(encoder.encode("fixture"), "fixture.ms");
+    expect(root.querySelectorAll(".grid-cell")).toHaveLength(648);
     expect(root.querySelector("#grid")?.classList.contains("grid-fitted")).toBe(false);
     app.dispose();
     root.remove();
