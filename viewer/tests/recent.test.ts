@@ -83,6 +83,20 @@ describe("recent workbooks", () => {
     expect(new TextDecoder().decode(await store.source(entry.id))).toBe("a");
   });
 
+  it("retries every overlapping primary failure on the fallback", async () => {
+    const reject = () => new Promise<never>((_, fail) => setTimeout(() => fail(new Error("blocked")), 0));
+    const failing: RecentWorkbookStore = {
+      list: reject, source: reject, remember: reject, updateSource: reject, remove: reject, clear: reject,
+    };
+    const store = new FallbackRecentStore(failing);
+    const [listed, remembered] = await Promise.all([
+      store.list(),
+      store.remember({ name: "first.ms", sheetCount: 1, source: encoder.encode("a") }),
+    ]);
+    expect(listed).toEqual([]);
+    expect((await store.list()).map((entry) => entry.id)).toEqual([remembered.id]);
+  });
+
   it("asks only for read access when reopening a handle", async () => {
     const modes: string[] = [];
     const handle = {

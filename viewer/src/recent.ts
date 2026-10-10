@@ -223,13 +223,15 @@ export class FallbackRecentStore implements RecentWorkbookStore {
   clear() { return this.#run((store) => store.clear()); }
 
   async #run<T>(operation: (store: RecentWorkbookStore) => Promise<T>): Promise<T> {
+    const store = this.#active;
     try {
-      return await operation(this.#active);
+      return await operation(store);
     } catch (error) {
-      if (this.#fallback) throw error;
-      this.#fallback = this.createFallback();
+      // Only a failure of the fallback itself is final; overlapping primary failures retry there.
+      if (store === this.#fallback) throw error;
+      this.#fallback ??= this.createFallback();
       this.#active = this.#fallback;
-      return operation(this.#active);
+      return operation(this.#fallback);
     }
   }
 }

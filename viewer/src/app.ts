@@ -70,6 +70,8 @@ export interface ViewerOptions {
   recentStore?: RecentWorkbookStore;
   /** Theme, sidebar, and details preferences; defaults to `localStorage`. */
   storage?: Storage;
+  /** Asks before unsaved edits are replaced by another workbook; defaults to `window.confirm`. */
+  confirmDiscard?: (message: string) => boolean;
 }
 
 type DiagnosticScope = "document" | "viewport" | "calculation" | "error";
@@ -93,6 +95,7 @@ export class ViewerApp {
   #currentRecentId: string | undefined;
   #rememberGeneration = 0;
   #storage: Storage | undefined;
+  #confirmDiscard: (message: string) => boolean;
   #preferences: ViewerPreferences;
   readonly #keydown = (event: KeyboardEvent) => this.handleShortcut(event);
 
@@ -103,6 +106,7 @@ export class ViewerApp {
   ) {
     this.#recentStore = options.recentStore ?? createRecentStore();
     this.#storage = options.storage ?? browserStorage();
+    this.#confirmDiscard = options.confirmDiscard ?? defaultConfirm;
     this.#preferences = loadPreferences(this.#storage, prefersDarkScheme());
     this.renderShell();
     this.bindEvents();
@@ -147,6 +151,8 @@ export class ViewerApp {
       this.#selected = { column: 1, row: 1 };
       this.#dirty = false;
       this.updateWorkbookChrome();
+      // Until the store answers, a download save must not update another entry's copy.
+      this.#currentRecentId = recentId;
       // Remembering is a convenience and must never delay or fail an open.
       void this.rememberWorkbook(source, fileName, opened.snapshot.sheets.length, session, recentId);
       const refreshed = await this.refreshVisibleRegion();
@@ -377,6 +383,7 @@ export class ViewerApp {
       if (!handle) return;
       const file = await handle.getFile();
       const bytes = new Uint8Array(await file.arrayBuffer());
+      if (!this.confirmReplace(handle.name)) return;
       await this.openSource(bytes, handle.name, new LocalFileSession(handle, bytes));
     } catch (error) {
       if ((error as DOMException).name !== "AbortError") this.setError(error);
@@ -384,6 +391,7 @@ export class ViewerApp {
   }
 
   private async openBrowserFile(file: File): Promise<void> {
+    if (!this.confirmReplace(file.name)) return;
     try {
       await this.openSource(new Uint8Array(await file.arrayBuffer()), file.name);
     } catch {
@@ -989,6 +997,7 @@ export class ViewerApp {
       if (handle && handle.kind === "file") {
         const fileHandle = handle as unknown as RecentFileHandle;
         const bytes = new Uint8Array(await (await fileHandle.getFile()).arrayBuffer());
+        if (!this.confirmReplace(fileHandle.name)) return;
         await this.openSource(bytes, fileHandle.name, new LocalFileSession(fileHandle, bytes));
         return;
       }
@@ -1101,6 +1110,7 @@ export class ViewerApp {
           this.setStatus(`${entry.name} could not be read; it may have been moved or deleted`, "error");
           return;
         }
+        if (!this.confirmReplace(entry.name)) return;
         await this.openSource(bytes, entry.name, new LocalFileSession(entry.handle, bytes), entry.id);
         return;
       }
@@ -1110,6 +1120,7 @@ export class ViewerApp {
         await this.forgetRecent(entry.id);
         return;
       }
+      if (!this.confirmReplace(entry.name)) return;
       await this.openSource(bytes, entry.name, undefined, entry.id);
     } catch {
       // `openSource` already presents the structured worker error.
@@ -1126,6 +1137,16 @@ export class ViewerApp {
     await this.#recentStore.clear().catch(() => undefined);
     this.#currentRecentId = undefined;
     await this.refreshRecent();
+  }
+
+  /** Unsaved edits are only replaced after an explicit discard decision. */
+  private confirmReplace(nextName: string): boolean {
+    if (!this.#dirty || !this.#snapshot) return true;
+    const confirmed = this.#confirmDiscard(
+      `${this.#fileName} has unsaved edits. Discard them and open ${nextName}?`,
+    );
+    if (!confirmed) this.setStatus(`Kept ${this.#fileName}; save it before opening another workbook`, "warning");
+    return confirmed;
   }
 
   private updateFileBadge(): void {
@@ -1349,6 +1370,10 @@ function extensionOpenNotice(snapshot: WorkbookSnapshot): string | undefined {
   return warnings.length > 0
     ? `with extension warnings (${warnings.join("; ")}); calculation and rendering remain complete`
     : undefined;
+}
+
+function defaultConfirm(message: string): boolean {
+  return typeof window === "undefined" || typeof window.confirm !== "function" || window.confirm(message);
 }
 
 function isNarrowViewport(): boolean {

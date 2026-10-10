@@ -100,6 +100,8 @@ describe("deterministic core presentation", () => {
     expect(contrastingInk("#1f2937")).toBe("#f7f7f5");
     expect(contrastingInk("#1f2937ff")).toBe("#f7f7f5");
     expect(contrastingInk("#1f293720")).toBeUndefined();
+    expect(contrastingInk("#00000080")).toBeUndefined();
+    expect(contrastingInk("#000000fe")).toBeUndefined();
     expect(contrastingInk("navy")).toBeUndefined();
 
     const light = document.createElement("button");

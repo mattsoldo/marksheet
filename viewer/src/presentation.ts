@@ -102,13 +102,13 @@ export function applyResolvedStyle(
 }
 
 /**
- * Chooses dark or light ink for an opaque `#RRGGBB` or `#RRGGBBAA` fill.
- * Translucent fills blend with the theme canvas, so they keep the theme's ink.
+ * Chooses dark or light ink for an opaque `#RRGGBB` or `#RRGGBBff` fill.
+ * Any translucent fill blends with the theme canvas, so it keeps the theme's ink.
  */
 export function contrastingInk(fill: string): string | undefined {
   const match = /^#([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(fill);
   if (!match?.[1]) return undefined;
-  if (match[2] !== undefined && Number.parseInt(match[2], 16) < 0x80) return undefined;
+  if (match[2] !== undefined && match[2].toLowerCase() !== "ff") return undefined;
   const channels = [0, 2, 4].map((offset) => {
     const value = Number.parseInt(match[1]!.slice(offset, offset + 2), 16) / 255;
     return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;

@@ -1009,6 +1009,58 @@ describe("viewer reading view and workbook navigation", () => {
     root.remove();
   });
 
+  it("asks before a recent workbook replaces unsaved edits", async () => {
+    const recentStore = new MemoryRecentStore();
+    const confirmDiscard = vi.fn((_message: string) => false);
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    const app = new ViewerApp(root, adapter, { storage: memoryStorage(), recentStore, confirmDiscard });
+    await app.openSource(encoder.encode("first workbook"), "first.ms");
+    await app.openSource(encoder.encode("second workbook"), "second.ms");
+    const formula = root.querySelector<HTMLInputElement>("#formula-input")!;
+    formula.value = "=1+2";
+    formula.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await vi.waitFor(() => expect(root.querySelector("#file-badge")?.textContent).toBe("Edited"));
+    await vi.waitFor(() => expect(root.querySelectorAll(".recent-open")).toHaveLength(2));
+
+    const open = vi.spyOn(adapter, "open");
+    root.querySelectorAll<HTMLButtonElement>(".recent-open")[1]!.click();
+    await vi.waitFor(() => expect(confirmDiscard).toHaveBeenCalledTimes(1));
+    expect(confirmDiscard.mock.calls[0]?.[0]).toContain("second.ms has unsaved edits");
+    expect(open).not.toHaveBeenCalled();
+    expect(root.querySelector("#file-name")?.textContent).toBe("second.ms");
+
+    confirmDiscard.mockReturnValue(true);
+    root.querySelectorAll<HTMLButtonElement>(".recent-open")[1]!.click();
+    await vi.waitFor(() => expect(root.querySelector("#file-name")?.textContent).toBe("first.ms"));
+    expect(root.querySelector<HTMLElement>("#file-badge")!.hidden).toBe(true);
+    app.dispose();
+    root.remove();
+  });
+
+  it("never saves a new workbook's bytes into the previous recent entry", async () => {
+    const recentStore = new MemoryRecentStore();
+    const updateSource = vi.spyOn(recentStore, "updateSource");
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    const app = new ViewerApp(root, adapter, { storage: memoryStorage(), recentStore });
+    await app.openSource(encoder.encode("first workbook"), "first.ms");
+    await vi.waitFor(() => expect(root.querySelector(".recent-item.active")).not.toBeNull());
+    let release: (() => void) | undefined;
+    vi.spyOn(recentStore, "remember").mockImplementationOnce((request) => new Promise((resolve) => {
+      release = () => resolve(MemoryRecentStore.prototype.remember.call(recentStore, request));
+    }));
+    await app.openSource(encoder.encode("second workbook"), "second.ms");
+    root.querySelector<HTMLButtonElement>("#save-file")!.click();
+    await vi.waitFor(() => expect(root.querySelector("#status")?.textContent).toBe("Downloaded second.ms"));
+    expect(updateSource).not.toHaveBeenCalled();
+    release?.();
+    app.dispose();
+    root.remove();
+  });
+
   it("keeps the Edited badge when unparseable external bytes leave edits unsaved", async () => {
     const root = document.createElement("main");
     document.body.append(root);

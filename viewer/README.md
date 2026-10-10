@@ -27,7 +27,8 @@ and never leave the device. A workbook opened through the File System Access
 API (picker or drag-and-drop) is remembered by its file handle and reread from
 disk, after the browser asks for permission again. A workbook opened without a
 handle is remembered as a browser-local copy of its bytes, updated when Save
-downloads it. Entries can be removed one at a time or cleared. Theme, sidebar,
+downloads it. Opening another workbook over unsaved edits asks first.
+Entries can be removed one at a time or cleared. Theme, sidebar,
 and details choices are kept in `localStorage`. Both stores are optional
 conveniences: if storage is unavailable the viewer works the same and forgets
 on reload.
