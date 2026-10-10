@@ -1208,6 +1208,33 @@ describe("viewer reading view and workbook navigation", () => {
     root.remove();
   });
 
+  it("commits a typed formula before a Ctrl/⌘+S save", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    const app = new ViewerApp(root, adapter, { storage: memoryStorage(), recentStore: new MemoryRecentStore() });
+    await app.openSource(encoder.encode("fixture"), "fixture.ms");
+    const sourceBytes = vi.spyOn(adapter, "sourceBytes");
+    const formula = root.querySelector<HTMLInputElement>("#formula-input")!;
+    formula.focus();
+    formula.value = "=1+2";
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true }));
+    await vi.waitFor(() => expect(root.querySelector("#status")?.textContent).toBe("Downloaded fixture.ms"));
+    expect(adapter.edit).toHaveBeenCalledTimes(1);
+    expect(adapter.edit.mock.invocationCallOrder[0]!).toBeLessThan(sourceBytes.mock.invocationCallOrder.at(-1)!);
+
+    // A rejected edit must not be followed by a save of the old source.
+    adapter.edit.mockRejectedValueOnce(new Error("edit refused"));
+    const saves = sourceBytes.mock.calls.length;
+    formula.focus();
+    formula.value = "=9";
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true }));
+    await vi.waitFor(() => expect(root.querySelector("#status")?.textContent).toBe("edit refused"));
+    expect(sourceBytes.mock.calls.length).toBe(saves);
+    app.dispose();
+    root.remove();
+  });
+
   it("keeps the Edited badge when unparseable external bytes leave edits unsaved", async () => {
     const root = document.createElement("main");
     document.body.append(root);

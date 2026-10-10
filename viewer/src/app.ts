@@ -571,21 +571,22 @@ export class ViewerApp {
     }
   }
 
-  private async commitCell(source: string): Promise<void> {
+  /** Returns whether the worker accepted the edit. */
+  private async commitCell(source: string): Promise<boolean> {
     const cell = this.selectedCell();
     if (cell && "VirtualFill" in cell.source) {
       this.setStatus("Fill-derived cells are virtual and cannot be directly edited", "error");
-      return;
+      return false;
     }
-    await this.commitTransaction(setCellTransaction(this.requireSheet(), this.#selected, source));
+    return this.commitTransaction(setCellTransaction(this.requireSheet(), this.#selected, source));
   }
 
-  private async commitTransaction(transaction: ReturnType<typeof setCellTransaction>): Promise<void> {
+  private async commitTransaction(transaction: ReturnType<typeof setCellTransaction>): Promise<boolean> {
     if (!this.#snapshot?.editable) {
       this.setStatus("This workbook is view-only until its formula diagnostics are resolved", "error");
-      return;
+      return false;
     }
-    if (!this.beginMutation("Another save or edit is already in progress")) return;
+    if (!this.beginMutation("Another save or edit is already in progress")) return false;
     this.setBusy(true, "Planning source-aware edit…");
     try {
       const edited = responsePayload(await this.adapter.edit(transaction), "edited");
@@ -599,7 +600,7 @@ export class ViewerApp {
         this.updateSourceView();
       }
       const refreshed = await this.refreshVisibleRegion();
-      if (!refreshed) return;
+      if (!refreshed) return true;
       const patchSummary = edited.patches
         .map((patch) => `${patch.span.start}..${patch.span.end}`)
         .join(", ");
@@ -609,8 +610,10 @@ export class ViewerApp {
           : "Edit was a semantic no-op",
         "ok",
       );
+      return true;
     } catch (error) {
       this.setError(error);
+      return false;
     } finally {
       this.setBusy(false);
       this.endMutation();
@@ -969,7 +972,7 @@ export class ViewerApp {
       if (!this.#mutationBusy) void this.pickFile();
     } else if (key === "s" && this.#snapshot) {
       event.preventDefault();
-      void this.save();
+      void this.saveFromShortcut();
     } else if (key === "\\") {
       event.preventDefault();
       this.applyPreferences({ sidebarOpen: !this.#preferences.sidebarOpen }, !isNarrowViewport());
@@ -977,6 +980,16 @@ export class ViewerApp {
       event.preventDefault();
       this.applyPreferences({ detailsOpen: !this.#preferences.detailsOpen }, true);
     }
+  }
+
+  /** Ctrl/⌘+S from the formula bar first commits the typed value, as Enter would. */
+  private async saveFromShortcut(): Promise<void> {
+    const formula = this.byId<HTMLInputElement>("formula-input");
+    const pending = document.activeElement === formula
+      && !formula.disabled
+      && formula.value !== sourceText(this.selectedCell());
+    if (pending && !await this.commitCell(formula.value)) return;
+    await this.save();
   }
 
   private bindFileDrop(): void {
