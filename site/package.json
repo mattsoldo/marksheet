@@ -1,0 +1,23 @@
+{
+  "name": "@marksheet/site",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare:wasm": "bash ../viewer/scripts/prepare-wasm.sh \"$PWD/public/marksheet-wasm\"",
+    "predev": "npm run prepare:wasm",
+    "dev": "vite",
+    "prebuild": "npm run prepare:wasm",
+    "build": "tsc --noEmit && vite build",
+    "build:pages": "bash scripts/build-pages.sh",
+    "preview": "vite preview",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.1",
+    "@types/node": "^24.3.0",
+    "axe-core": "^4.10.2",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.2"
+  }
+}

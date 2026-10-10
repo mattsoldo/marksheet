@@ -5,7 +5,13 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 viewer_dir=$(cd -- "$script_dir/.." && pwd)
 repository_dir=$(cd -- "$viewer_dir/.." && pwd)
 binding_dir="$repository_dir/bindings/wasm"
-asset_root="$viewer_dir/public/marksheet-wasm"
+# The website stages its own copy of the same assets by passing a directory.
+asset_root="${1:-$viewer_dir/public/marksheet-wasm}"
+# The directory is deleted and recreated, so refuse anything but a staging directory.
+if [[ "$(basename -- "$asset_root")" != "marksheet-wasm" ]]; then
+  echo "asset directory must be named marksheet-wasm: $asset_root" >&2
+  exit 1
+fi
 artifact="$binding_dir/target/wasm32-unknown-unknown/release/marksheet_wasm.wasm"
 
 if ! command -v wasm-bindgen >/dev/null 2>&1; then
@@ -16,7 +22,7 @@ fi
 cargo build --manifest-path "$binding_dir/Cargo.toml" \
   --target wasm32-unknown-unknown --release
 
-# This exact directory is ignored and contains generated build inputs only.
+# The target directory is ignored and contains generated build inputs only.
 rm -rf -- "$asset_root"
 mkdir -p -- "$asset_root/pkg" "$asset_root/web"
 

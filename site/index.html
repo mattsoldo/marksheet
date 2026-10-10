@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Marksheet — Markdown for spreadsheets</title>
+    <meta
+      name="description"
+      content="Marksheet is an open, plain-text spreadsheet format. Sheets, formulas, tables and styles in one file that people can read, Git can diff, and agents can write."
+    />
+    <meta property="og:title" content="Marksheet — Markdown for spreadsheets" />
+    <meta
+      property="og:description"
+      content="An open, plain-text spreadsheet format for people, Git, and coding agents."
+    />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <div class="wrap header-inner">
+        <a class="brand" href="./" aria-label="Marksheet home">
+          <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+            <rect x="2" y="2" width="28" height="28" rx="7" class="mark-frame" />
+            <path d="M2 12h28M2 21h28M12 2v28M21 2v28" class="mark-lines" />
+            <rect x="12" y="12" width="9" height="9" class="mark-cell" />
+          </svg>
+          <span>Marksheet</span>
+        </a>
+        <nav class="site-nav" aria-label="Primary">
+          <a href="#playground">Playground</a>
+          <a href="#why">Why</a>
+          <a href="#features">Format</a>
+          <a href="#agents">Agents</a>
+          <a href="#docs">Docs</a>
+        </nav>
+        <div class="header-actions">
+          <a class="icon-link" href="https://github.com/mattsoldo/marksheet" aria-label="Marksheet on GitHub">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z" /></svg>
+          </a>
+          <a class="button button-small" href="./app/">Open the viewer</a>
+        </div>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-grid" aria-hidden="true"></div>
+        <div class="wrap hero-inner">
+          <p class="eyebrow">
+            <span class="pill">Draft 0.1</span>
+            An open, plain-text workbook format
+          </p>
+          <h1 id="hero-title">Markdown <span class="nowrap">for spreadsheets.</span></h1>
+          <p class="lede">
+            Sheets, formulas, tables and styles in one UTF-8 file. People can read it,
+            Git can diff it, agents can write it, and it still opens as a real,
+            calculating spreadsheet.
+          </p>
+          <div class="actions">
+            <a class="button button-primary" href="#playground">Try it live</a>
+            <a class="button" href="./app/">Open a workbook</a>
+            <a class="button button-ghost" href="https://github.com/mattsoldo/marksheet/blob/main/SPEC.md">Read the spec <span aria-hidden="true">→</span></a>
+          </div>
+        </div>
+      </section>
+
+      <section id="playground" class="playground-section" aria-labelledby="playground-title">
+        <div class="wrap">
+          <h2 id="playground-title" class="sr-only">Playground</h2>
+          <div class="window playground" data-playground>
+            <div class="window-bar">
+              <span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+              <label class="example-picker">
+                <span class="sr-only">Example workbook</span>
+                <select data-examples></select>
+              </label>
+              <span class="engine-status" data-status data-state="busy" role="status">Loading the engine…</span>
+            </div>
+            <div class="panes">
+              <div class="pane source-pane">
+                <div class="pane-head">
+                  <span class="file-name" data-file-name>budget.ms</span>
+                  <span class="pane-hint">Source · editable</span>
+                </div>
+                <div class="editor">
+                  <pre class="editor-highlight" aria-hidden="true" data-highlight></pre>
+                  <textarea
+                    data-editor
+                    spellcheck="false"
+                    autocapitalize="off"
+                    autocomplete="off"
+                    wrap="off"
+                    aria-label="Marksheet source"
+                  ></textarea>
+                </div>
+              </div>
+              <div class="pane grid-pane">
+                <div class="formula-bar">
+                  <span class="cell-ref" data-cell-ref></span>
+                  <span class="fx" aria-hidden="true">fx</span>
+                  <code class="cell-source" data-cell-source></code>
+                </div>
+                <div class="grid-scroll" id="playground-grid" data-grid tabindex="0" role="tabpanel" aria-label="Calculated sheet"></div>
+                <div class="sheet-tabs" role="tablist" aria-label="Sheets" data-tabs></div>
+              </div>
+            </div>
+            <ul class="diagnostics" data-diagnostics hidden aria-label="Diagnostics"></ul>
+          </div>
+          <p class="playground-caption">
+            The Rust reference engine, compiled to WebAssembly and running in this page.
+            Edit the source, click a cell to find the line that wrote it, or move the
+            caret to find the cell.
+          </p>
+        </div>
+      </section>
+
+      <section class="readers" aria-labelledby="readers-title">
+        <div class="wrap">
+          <p class="kicker"><span class="cellref">B1</span> One file, every reader</p>
+          <h2 id="readers-title">Spreadsheets deserve a source format.</h2>
+          <p class="section-lede">
+            Markdown gave documents a format that works for people, tools, and Git.
+            Spreadsheet data still bounces between binary workbooks, cloud services,
+            CSV fragments, and Markdown tables. Marksheet is the missing source format.
+          </p>
+          <div class="reader-cards">
+            <article class="card">
+              <span class="card-index">01</span>
+              <h3>People</h3>
+              <p>
+                Open it in any editor. A handful of obvious constructs —
+                <code>@sheet</code>, <code>@table</code>, <code>@name</code> — and the data
+                itself, in pipe or CSV rows.
+              </p>
+            </article>
+            <article class="card">
+              <span class="card-index">02</span>
+              <h3>Git</h3>
+              <p>
+                Change a number and the diff shows a number. Line-oriented blocks keep
+                reviews focused, and <code>marksheet diff</code> compares meaning, not spelling.
+              </p>
+            </article>
+            <article class="card">
+              <span class="card-index">03</span>
+              <h3>Agents</h3>
+              <p>
+                A small, deterministic grammar that is easy to generate and hard to
+                misread, with a portable skill, a local tool server, and versioned JSON.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="why" class="why" aria-labelledby="why-title">
+        <div class="wrap">
+          <p class="kicker"><span class="cellref">C1</span> Why Marksheet</p>
+          <h2 id="why-title">Everything else makes you choose.</h2>
+          <p class="section-lede">
+            Readable formats can't hold a workbook. Workbook formats can't be read.
+            Marksheet keeps the spreadsheet and the plain text.
+          </p>
+          <div class="compare-scroll" tabindex="0" role="region" aria-label="Format comparison">
+            <table class="compare">
+              <thead>
+                <tr>
+                  <th scope="col"><span class="sr-only">Capability</span></th>
+                  <th scope="col" class="is-us">Marksheet</th>
+                  <th scope="col">XLSX</th>
+                  <th scope="col">Cloud sheet</th>
+                  <th scope="col">CSV</th>
+                  <th scope="col">Markdown table</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">Readable as plain text</th>
+                  <td class="is-us"><span class="yes">Yes</span></td>
+                  <td><span class="no">No</span></td>
+                  <td><span class="no">No</span></td>
+                  <td><span class="yes">Yes</span></td>
+                  <td><span class="yes">Yes</span></td>
+                </tr>
+                <tr>
+                  <th scope="row">Focused, reviewable Git diffs</th>
+                  <td class="is-us"><span class="yes">Yes</span></td>
+                  <td><span class="no">No</span></td>
+                  <td><span class="no">No</span></td>
+                  <td><span class="yes">Yes</span></td>
+                  <td><span class="part">Partly</span></td>
+                </tr>
+                <tr>
+                  <th scope="row">Multiple sheets</th>
+                  <td class="is-us"><span class="yes">Yes</span></td>
+                  <td><span class="yes">Yes</span></td>
+                  <td><span class="yes">Yes</span></td>
+                  <td><span class="no">No</span></td>
+                  <td><span class="no">No</span></td>
+                </tr>
+                <tr>
+                  <th scope="row">Formulas, names and tables</th>
+                  <td class="is-us"><span class="yes">Yes</span></td>
+                  <td><span class="yes">Yes</span></td>
+                  <td><span class="yes">Yes</span></td>
+                  <td><span class="no">No</span></td>
+                  <td><span class="no">No</span></td>
+                </tr>
+                <tr>
+                  <th scope="row">Sparse placement at A1 coordinates</th>
+                  <td class="is-us"><span class="yes">Yes</span></td>
+                  <td><span class="yes">Yes</span></td>
+                  <td><span class="yes">Yes</span></td>
+                  <td><span class="no">No</span></td>
+                  <td><span class="no">No</span></td>
+                </tr>
+                <tr>
+                  <th scope="row">Styles and column geometry</th>
+                  <td class="is-us"><span class="yes">Yes</span></td>
+                  <td><span class="yes">Yes</span></td>
+                  <td><span class="yes">Yes</span></td>
+                  <td><span class="no">No</span></td>
+                  <td><span class="part">Alignment</span></td>
+                </tr>
+                <tr>
+                  <th scope="row">No app, account, or service required</th>
+                  <td class="is-us"><span class="yes">Yes</span></td>
+                  <td><span class="part">Needs an app</span></td>
+                  <td><span class="no">No</span></td>
+                  <td><span class="yes">Yes</span></td>
+                  <td><span class="yes">Yes</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="diffs" aria-labelledby="diffs-title">
+        <div class="wrap split">
+          <div class="split-copy">
+            <p class="kicker"><span class="cellref">D1</span> Review</p>
+            <h2 id="diffs-title">Reviews like code. <span class="muted">Because it is.</span></h2>
+            <p>
+              Raise the grocery budget, add a line item, nudge the tax rate. The pull request
+              shows three edited rows, not a re-zipped binary.
+            </p>
+            <p>
+              <code>marksheet diff</code> goes further: it compares the calculated workbook
+              model, so reformatting is silent and real changes are named cell by cell.
+              It exits <code>0</code> when two files mean the same thing, <code>1</code> when
+              they don't — a ready-made CI gate.
+            </p>
+          </div>
+          <div class="stack">
+            <figure class="window code-window">
+              <figcaption class="window-bar"><span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="window-title">git diff budget.ms</span></figcaption>
+              <pre class="code diff" tabindex="0"><code><span class="d-hunk">@@ -16,7 +16,8 @@</span>
+ Item|Cost|Quantity|Subtotal
+ Rent|1500|1|
+ Utilities|200|1|
+<span class="d-del">-Groceries|360|1|</span>
+<span class="d-add">+Groceries|420|1|</span>
+<span class="d-add">+Internet|65|1|</span>
+ @end
+<span class="d-hunk">@@ -29,7 +30,7 @@</span>
+ @block F1 pipe
+ Setting|Value
+<span class="d-del">-Tax rate|0.2</span>
+<span class="d-add">+Tax rate|0.22</span>
+ @end</code></pre>
+            </figure>
+            <figure class="window code-window">
+              <figcaption class="window-bar"><span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="window-title">marksheet diff old.ms budget.ms</span></figcaption>
+              <pre class="code" tabindex="0"><code>changed cell inputs!A5: &lt;absent&gt; -&gt; text "Internet"
+changed cell inputs!B4: number 360 -&gt; number 420
+changed cell inputs!B5: &lt;absent&gt; -&gt; number 65
+changed cell inputs!C5: &lt;absent&gt; -&gt; number 1
+changed cell inputs!D5: &lt;absent&gt; -&gt; blank
+changed cell inputs!G2: number 0.2 -&gt; number 0.22
+<span class="t-dim">… and the costs table grew from 3 to 4 rows</span></code></pre>
+            </figure>
+          </div>
+        </div>
+      </section>
+
+      <section id="features" class="features" aria-labelledby="features-title">
+        <div class="wrap">
+          <p class="kicker"><span class="cellref">E1</span> The format</p>
+          <h2 id="features-title">A real workbook, in a few obvious lines.</h2>
+          <p class="section-lede">
+            Marksheet keeps the parts of a spreadsheet that make it understandable, and
+            leaves charts, validation and the rest to declarative extensions.
+          </p>
+          <div class="feature-grid">
+            <article class="feature">
+              <h3>Sparse sheets</h3>
+              <p>Place rectangular blocks at any A1 anchor. Empty cells cost nothing.</p>
+              <pre class="snippet" data-ms>@block F1 pipe
+Setting|Value
+Tax rate|0.2
+@end</pre>
+            </article>
+            <article class="feature">
+              <h3>Tables and fills</h3>
+              <p>Named tables with structured references, and one formula for a whole column.</p>
+              <pre class="snippet" data-ms>@fill costs[Subtotal] =[@Cost]*[@Quantity]</pre>
+            </article>
+            <article class="feature">
+              <h3>Workbook names</h3>
+              <p>Readable formulas that refer forward, across sheets, to cells and tables.</p>
+              <pre class="snippet" data-ms>@name tax_rate = inputs!G2
+@name cost_values = costs[Cost]</pre>
+            </article>
+            <article class="feature">
+              <h3>Styles and geometry</h3>
+              <p>Reusable named styles, applied to ranges or table regions. Widths in familiar units.</p>
+              <pre class="snippet" data-ms>@style money number=currency currency="USD"
+@apply costs[Cost] money
+@column A width=18</pre>
+            </article>
+            <article class="feature">
+              <h3>Deterministic calculation</h3>
+              <p>
+                The <code>portable-a1@1</code> profile has no clocks, randomness, I/O or
+                network. Same file, same answer, everywhere.
+              </p>
+            </article>
+            <article class="feature">
+              <h3>Lossless editing</h3>
+              <p>
+                Edits are semantic transactions that return byte patches and exact inverses.
+                Comments, spacing and spelling survive every save.
+              </p>
+            </article>
+            <article class="feature">
+              <h3>XLSX and CSV conversion</h3>
+              <p>
+                Deterministic import and export, with a report of what was exact,
+                approximated, omitted or unsupported. Nothing disappears silently.
+              </p>
+            </article>
+            <article class="feature">
+              <h3>Safe by construction</h3>
+              <p>
+                Extensions are declarative. A workbook never selects, downloads or
+                executes code; applications decide what they trust.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="agents" class="agents" aria-labelledby="agents-title">
+        <div class="wrap split">
+          <div class="split-copy">
+            <p class="kicker"><span class="cellref">F1</span> Built for agents</p>
+            <h2 id="agents-title">The spreadsheet your agent can actually edit.</h2>
+            <p>
+              No desktop automation, no cloud API, no reverse-engineered ZIP. An agent reads
+              and writes Marksheet with ordinary file operations, and the CLI gives it
+              precise, source-aware tools when it wants them.
+            </p>
+            <ul class="checklist">
+              <li><strong>A portable skill</strong> that teaches the format and its workflows.</li>
+              <li><strong>A local tool server</strong> with a stable, checked JSON schema.</li>
+              <li><strong>Harness profiles</strong> for Claude Code and Codex, proven on one task corpus.</li>
+              <li><strong>Versioned JSON</strong> from <code>get</code>, <code>set</code>, <code>calc</code> and <code>diff</code>.</li>
+            </ul>
+            <a class="text-link" href="https://github.com/mattsoldo/marksheet/blob/main/integrations/skill/SKILL.md">Read the agent skill <span aria-hidden="true">→</span></a>
+          </div>
+          <figure class="window code-window terminal">
+            <figcaption class="window-bar"><span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="window-title">Terminal</span></figcaption>
+            <pre class="code" tabindex="0"><code><span class="t-prompt">$</span> marksheet check budget.ms
+<span class="t-prompt">$</span> marksheet set budget.ms tax_rate 0.25
+<span class="t-dim">{ "version": "marksheet-edit@1", "status": "ok",
+  "changed": true, "patches": [
+    { "start": 822, "end": 825, "replacement": "0.25" }
+  ], … }</span>
+<span class="t-prompt">$</span> marksheet calc budget.ms --sheet summary \
+    --range A1:B4 --format text
+summary!A1:B4
+Metric             |  Value
+Total costs        |  2060
+Average line item  |  686.6666666666666
+After tax          |  1545</code></pre>
+          </figure>
+        </div>
+      </section>
+
+      <section class="viewer-promo" aria-labelledby="viewer-title">
+        <div class="wrap">
+          <p class="kicker"><span class="cellref">G1</span> The viewer</p>
+          <h2 id="viewer-title">A spreadsheet window onto plain text.</h2>
+          <p class="section-lede">
+            The Marksheet viewer opens workbooks straight from your disk. It starts with
+            just the sheet, and opens up the source, diagnostics, and an editor when you
+            want them. Nothing is uploaded.
+          </p>
+          <div class="themes">
+            <figure class="theme theme-paper">
+              <div class="mini-sheet" aria-hidden="true">
+                <span class="h">Item</span><span class="h">Cost</span>
+                <span>Rent</span><span class="n">$1,500.00</span>
+                <span>Utilities</span><span class="n">$200.00</span>
+                <span>Groceries</span><span class="n">$360.00</span>
+              </div>
+              <figcaption><strong>Paper</strong> Quiet, warm and typographic</figcaption>
+            </figure>
+            <figure class="theme theme-ledger">
+              <div class="mini-sheet" aria-hidden="true">
+                <span class="h">Item</span><span class="h">Cost</span>
+                <span>Rent</span><span class="n">$1,500.00</span>
+                <span>Utilities</span><span class="n">$200.00</span>
+                <span>Groceries</span><span class="n">$360.00</span>
+              </div>
+              <figcaption><strong>Ledger</strong> Crisp gridlines and structure</figcaption>
+            </figure>
+            <figure class="theme theme-graphite">
+              <div class="mini-sheet" aria-hidden="true">
+                <span class="h">Item</span><span class="h">Cost</span>
+                <span>Rent</span><span class="n">$1,500.00</span>
+                <span>Utilities</span><span class="n">$200.00</span>
+                <span>Groceries</span><span class="n">$360.00</span>
+              </div>
+              <figcaption><strong>Graphite</strong> A low-glare dark workspace</figcaption>
+            </figure>
+          </div>
+          <ul class="viewer-points">
+            <li>Reading view first, details on demand</li>
+            <li>Recent workbooks in a collapsible sidebar</li>
+            <li>Saves refuse to overwrite outside changes</li>
+            <li>Keyboard and screen-reader friendly</li>
+          </ul>
+          <a class="button button-primary" href="./app/">Open the viewer</a>
+        </div>
+      </section>
+
+      <section class="start" aria-labelledby="start-title">
+        <div class="wrap">
+          <p class="kicker"><span class="cellref">H1</span> Get started</p>
+          <h2 id="start-title">Three commands to a calculated workbook.</h2>
+          <ol class="steps">
+            <li class="step">
+              <h3>Build the CLI</h3>
+              <pre class="code"><code>git clone https://github.com/mattsoldo/marksheet
+cd marksheet
+cargo build --release -p marksheet-cli</code></pre>
+            </li>
+            <li class="step">
+              <h3>Write a workbook</h3>
+              <pre class="code" data-ms>#!marksheet 0.1
+@sheet main "Lunch"
+@block A1 pipe
+Item|Cost
+Coffee|4.5
+Bagel|3
+Total|=SUM(B2:B3)
+@end</pre>
+            </li>
+            <li class="step">
+              <h3>Check and calculate</h3>
+              <pre class="code"><code>marksheet check lunch.ms
+marksheet calc lunch.ms --sheet main \
+  --range A1:B4 --format text</code></pre>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="docs" class="docs" aria-labelledby="docs-title">
+        <div class="wrap">
+          <p class="kicker"><span class="cellref">I1</span> Documentation</p>
+          <h2 id="docs-title">Designed in public.</h2>
+          <p class="section-lede">
+            Marksheet is a Draft 0.1 format with a tested Rust reference implementation,
+            a byte-level conformance corpus, and an independent Python consumer. The format
+            may still change before 1.0.
+          </p>
+          <div class="doc-grid">
+            <a class="doc-card" href="https://github.com/mattsoldo/marksheet/blob/main/SPEC.md">
+              <span class="doc-type">Normative</span>
+              <strong>Format specification</strong>
+              <span>Syntax, data model, formula profile, formatting, extensions and conformance.</span>
+            </a>
+            <a class="doc-card" href="https://github.com/mattsoldo/marksheet/blob/main/PRODUCT.md">
+              <span class="doc-type">Product</span>
+              <strong>Product specification</strong>
+              <span>The problem, the promise, who it is for, and the design principles.</span>
+            </a>
+            <a class="doc-card" href="https://github.com/mattsoldo/marksheet/blob/main/IMPLEMENTATION.md">
+              <span class="doc-type">Reference</span>
+              <strong>Implementation</strong>
+              <span>Parser, model, calculation, editing, the viewer, the CLI, and testing.</span>
+            </a>
+            <a class="doc-card" href="https://github.com/mattsoldo/marksheet/tree/main/examples">
+              <span class="doc-type">Examples</span>
+              <strong>Example workbooks</strong>
+              <span>Six small workbooks curated from real Excel files.</span>
+            </a>
+            <a class="doc-card" href="https://github.com/mattsoldo/marksheet/tree/main/integrations">
+              <span class="doc-type">Integrations</span>
+              <strong>Agents and editors</strong>
+              <span>The skill, the tool server, harness profiles, and a Zed preview task.</span>
+            </a>
+            <a class="doc-card" href="https://github.com/mattsoldo/marksheet/blob/main/CONTRIBUTING.md">
+              <span class="doc-type">Community</span>
+              <strong>Contributing</strong>
+              <span>How to propose changes to the format and the implementation.</span>
+            </a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap footer-inner">
+        <span class="brand brand-small">
+          <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+            <rect x="2" y="2" width="28" height="28" rx="7" class="mark-frame" />
+            <path d="M2 12h28M2 21h28M12 2v28M21 2v28" class="mark-lines" />
+            <rect x="12" y="12" width="9" height="9" class="mark-cell" />
+          </svg>
+          Marksheet
+        </span>
+        <span>Draft 0.1 · <a href="https://github.com/mattsoldo/marksheet/blob/main/LICENSE">MIT License</a> · <a href="https://github.com/mattsoldo/marksheet">GitHub</a></span>
+      </div>
+    </footer>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
