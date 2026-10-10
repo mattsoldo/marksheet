@@ -237,11 +237,15 @@ export class FallbackRecentStore implements RecentWorkbookStore {
 }
 
 /**
- * Asks for read access once per reopen; the call must follow a user gesture.
- * Write access is requested by the browser when Save creates a writable.
+ * Ensures access to a handle; the request must follow a user gesture. Reopening
+ * asks only for `read`; Save asks for `readwrite` from its own click, because
+ * `createWritable()` fails rather than prompting when write access is not granted.
  */
-export async function ensureHandlePermission(handle: RecentFileHandle): Promise<boolean> {
-  const descriptor = { mode: "read" } as const;
+export async function ensureHandlePermission(
+  handle: RecentFileHandle,
+  mode: "read" | "readwrite" = "read",
+): Promise<boolean> {
+  const descriptor = { mode };
   if (!handle.queryPermission) return true;
   if (await handle.queryPermission(descriptor) === "granted") return true;
   return (await handle.requestPermission?.(descriptor)) === "granted";

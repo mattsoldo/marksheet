@@ -1156,6 +1156,41 @@ describe("viewer reading view and workbook navigation", () => {
     root.remove();
   });
 
+  it("requests write access from the Save click before touching the file", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    const base = encoder.encode("fixture");
+    const modes: string[] = [];
+    let grant: PermissionState = "denied";
+    const createWritable = vi.fn(async () => ({ write: vi.fn(async () => undefined), close: vi.fn(async () => undefined) }));
+    const handle = {
+      name: "fixture.ms",
+      getFile: vi.fn(async () => ({ arrayBuffer: async () => base.buffer })),
+      createWritable,
+      queryPermission: vi.fn(async ({ mode }: { mode: string }) => { modes.push(`query:${mode}`); return "prompt" as PermissionState; }),
+      requestPermission: vi.fn(async ({ mode }: { mode: string }) => { modes.push(`request:${mode}`); return grant; }),
+    };
+    const app = new ViewerApp(root, adapter, { storage: memoryStorage(), recentStore: new MemoryRecentStore() });
+    await app.openSource(base, "fixture.ms", new LocalFileSession(handle, base));
+    const formula = root.querySelector<HTMLInputElement>("#formula-input")!;
+    formula.value = "=1+2";
+    formula.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await vi.waitFor(() => expect(root.querySelector("#file-badge")?.textContent).toBe("Edited"));
+
+    root.querySelector<HTMLButtonElement>("#save-file")!.click();
+    await vi.waitFor(() => expect(root.querySelector("#status")?.textContent).toContain("Permission to save fixture.ms was not granted"));
+    expect(modes).toEqual(["query:readwrite", "request:readwrite"]);
+    expect(handle.getFile).not.toHaveBeenCalled();
+    expect(createWritable).not.toHaveBeenCalled();
+
+    grant = "granted";
+    root.querySelector<HTMLButtonElement>("#save-file")!.click();
+    await vi.waitFor(() => expect(createWritable).toHaveBeenCalledTimes(1));
+    app.dispose();
+    root.remove();
+  });
+
   it("keeps the Edited badge when unparseable external bytes leave edits unsaved", async () => {
     const root = document.createElement("main");
     document.body.append(root);

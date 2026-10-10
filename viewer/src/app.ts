@@ -414,6 +414,12 @@ export class ViewerApp {
     this.setBusy(true, "Checking local file…");
     try {
       if (this.#fileSession) {
+        // Request write access first, while the Save click still grants user activation.
+        const handle = this.#fileSession.handle as RecentFileHandle;
+        if (!await ensureHandlePermission(handle, "readwrite")) {
+          this.setStatus(`Permission to save ${this.#fileName} was not granted; no bytes were written`, "error");
+          return;
+        }
         const result = await this.#fileSession.save(this.adapter);
         this.#source = this.#fileSession.baseSource;
         this.updateSourceView();
