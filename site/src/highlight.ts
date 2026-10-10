@@ -4,7 +4,7 @@
  * as plain text.
  */
 
-type Body = { kind: "rows"; delimiter: "|" | ","; header: boolean } | { kind: "payload" };
+type Body = { kind: "rows"; delimiter: "|" | ","; header: boolean; quoted: boolean } | { kind: "payload" };
 
 const BODY_DIRECTIVES = new Set(["block", "table", "extension"]);
 
@@ -20,14 +20,17 @@ export function highlightLines(source: string): string[] {
   return source.split("\n").map((raw) => {
     const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
     if (body) {
-      if (line === "@end") {
+      // A quoted field may span lines, and `@end` inside one is data (SPEC §9).
+      if (line === "@end" && !(body.kind === "rows" && body.quoted)) {
         body = undefined;
         return span("directive", line);
       }
       if (body.kind === "payload") return span("payload", line);
       const header = body.header;
       body.header = false;
-      return highlightRow(line, body.delimiter, header);
+      const row = highlightRow(line, body.delimiter, header, body.quoted);
+      body.quoted = row.quoted;
+      return row.html;
     }
     if (line.startsWith("#!")) return span("shebang", line);
     if (/^\s*#/.test(line)) return span("comment", line);
@@ -37,7 +40,7 @@ export function highlightLines(source: string): string[] {
     if (BODY_DIRECTIVES.has(name)) {
       body = name === "extension"
         ? { kind: "payload" }
-        : { kind: "rows", delimiter: /\bcsv\s*$/.test(line) ? "," : "|", header: name === "table" };
+        : { kind: "rows", delimiter: /\bcsv\s*$/.test(line) ? "," : "|", header: name === "table", quoted: false };
     }
     return span("directive", `@${name}`) + highlightArguments(line.slice(name.length + 1));
   });
@@ -76,9 +79,16 @@ function highlightArguments(rest: string): string {
   return html;
 }
 
-function highlightRow(line: string, delimiter: "|" | ",", header: boolean): string {
-  return splitFields(line, delimiter)
+function highlightRow(
+  line: string,
+  delimiter: "|" | ",",
+  header: boolean,
+  continued: boolean,
+): { html: string; quoted: boolean } {
+  const { fields, quoted } = splitFields(line, delimiter, continued);
+  const html = fields
     .map((field, position) => {
+      if (position === 0 && continued) return span("string", field);
       const separator = position === 0 ? "" : span("delimiter", delimiter);
       if (header) return separator + span("header", field);
       if (field.startsWith("=")) return separator + span("formula", field);
@@ -87,13 +97,16 @@ function highlightRow(line: string, delimiter: "|" | ",", header: boolean): stri
       return separator + escapeHtml(field);
     })
     .join("");
+  return { html, quoted };
 }
 
-/** Splits on delimiters outside RFC 4180 quotes, keeping each field's spelling. */
-function splitFields(line: string, delimiter: string): string[] {
+/**
+ * Splits on delimiters outside RFC 4180 quotes, keeping each field's spelling.
+ * `quoted` carries a field that is still open from the previous line.
+ */
+function splitFields(line: string, delimiter: string, quoted: boolean): { fields: string[]; quoted: boolean } {
   const fields: string[] = [];
   let current = "";
-  let quoted = false;
   for (const character of line) {
     if (character === '"') quoted = !quoted;
     if (character === delimiter && !quoted) {
@@ -104,7 +117,7 @@ function splitFields(line: string, delimiter: string): string[] {
     }
   }
   fields.push(current);
-  return fields;
+  return { fields, quoted };
 }
 
 function span(kind: string, text: string): string {

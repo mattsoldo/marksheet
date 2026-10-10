@@ -146,7 +146,7 @@ export class Playground {
       if (generation !== this.#generation) return;
       this.#rendered = { bytes, snapshot, region };
       this.#renderTabs(snapshot);
-      this.#renderGrid(region);
+      this.#renderGrid(region, reading?.calculated ?? false);
       const diagnostics = uniqueDiagnostics([...snapshot.diagnostics, ...(region?.diagnostics ?? [])]);
       // Each response caps its own list, and their scopes overlap (a cycle is reported by the
       // workbook and by its calculation), so the largest single report is a safe lower bound.
@@ -170,9 +170,9 @@ export class Playground {
     } catch (error) {
       // A rejected source leaves the worker usable; anything else (a crashed or
       // cancelled worker) leaves the client without one, so start over next time.
-      if (!(error instanceof WorkerProtocolError)) this.#resetClient();
+      if (!isDocumentError(error)) this.#resetClient();
       if (generation !== this.#generation) return;
-      if (error instanceof WorkerProtocolError) {
+      if (isDocumentError(error)) {
         // The last good grid stays on screen; the source explains what broke.
         this.#renderDiagnostics(bytes, error.diagnostics, error.diagnostics_omitted, error.message);
         this.#setStatus("error", "The source has an error · showing the last good result");
@@ -207,7 +207,7 @@ export class Playground {
       // A workbook can be viewable but not calculable (a required extension is
       // unavailable): keep the projection and show authored values instead.
       client.calculate(sheet, range).catch((error: unknown) => {
-        if (error instanceof WorkerProtocolError) return error;
+        if (isDocumentError(error)) return error;
         throw error;
       }),
     ]);
@@ -282,7 +282,7 @@ export class Playground {
     next.click();
   }
 
-  #renderGrid(region: VisibleRegion | undefined): void {
+  #renderGrid(region: VisibleRegion | undefined, calculated: boolean): void {
     this.#cells.clear();
     if (!region) {
       this.#grid.replaceChildren(emptyMessage("This workbook has no sheets yet. Add a line such as @sheet main."));
@@ -300,7 +300,7 @@ export class Playground {
     table.className = "sheet";
     const caption = document.createElement("caption");
     caption.className = "sr-only";
-    caption.textContent = `${region.sheet.label || region.sheet.id}, calculated`;
+    caption.textContent = `${region.sheet.label || region.sheet.id}, ${calculated ? "calculated" : "authored values, not calculated"}`;
     const colgroup = document.createElement("colgroup");
     colgroup.append(Object.assign(document.createElement("col"), { className: "row-number" }));
     const head = document.createElement("tr");
@@ -490,6 +490,14 @@ export class Playground {
     this.#paint();
     this.#schedule(0);
   }
+}
+
+/**
+ * The worker rejected this document (or this request) but is still healthy. A
+ * session or protocol failure, such as a Wasm module that failed to load, is not.
+ */
+function isDocumentError(error: unknown): error is WorkerProtocolError {
+  return error instanceof WorkerProtocolError && error.code !== "session" && error.code !== "protocol";
 }
 
 function headerCell(text: string, className: string): HTMLTableCellElement {

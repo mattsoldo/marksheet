@@ -75,6 +75,19 @@ test("shows authored values when a workbook cannot be calculated", async ({ page
   await expect(cell(page, "B2")).toHaveText("4.5");
   await expect(cell(page, "B3")).toHaveText("=B2*2");
   await expect(page.locator("[data-diagnostics]")).toContainText("MS3101");
+  // Screen readers must hear the same status as the page shows.
+  await expect(page.locator("[data-grid] caption")).toHaveText("Premiums, authored values, not calculated");
+});
+
+test("highlights an @end inside a quoted field as data", async ({ page }) => {
+  await page.getByLabel("Marksheet source").fill(
+    '#!marksheet 0.1\n@sheet s "S"\n@block A1 csv\nNote,Value\n"first\n@end\nlast",1\n@end\n',
+  );
+  await calculated(page);
+  const lines = page.locator("[data-highlight] .line");
+  await expect(lines.nth(5)).toHaveText("@end");
+  await expect(lines.nth(5).locator(".tok-directive")).toHaveCount(0);
+  await expect(lines.nth(7).locator(".tok-directive")).toHaveText("@end");
 });
 
 test("links cells to the source lines that wrote them", async ({ page }) => {
@@ -138,6 +151,17 @@ test("starts a fresh worker after the engine crashes", async ({ page }) => {
   await editSource(page, (source) => source.replace("Rent|1500|1|", "Rent|1700|1|"));
   await calculated(page);
   await expect(cell(page, "D2")).toHaveText("$1,700.00");
+});
+
+test("starts a fresh worker after the engine fails to load", async ({ page }) => {
+  // A failed module download makes the worker answer every request with a session error.
+  let failures = 1;
+  await page.route("**/marksheet_wasm_bg.wasm", (route) => (failures-- > 0 ? route.abort() : route.continue()));
+  await page.goto("/");
+  await expect(page.locator("[data-status]")).toHaveAttribute("data-state", "error");
+  await editSource(page, (source) => source.replace("Rent|1500|1|", "Rent|1800|1|"));
+  await calculated(page);
+  await expect(cell(page, "D2")).toHaveText("$1,800.00");
 });
 
 test("serves the full viewer beneath app/ with a working engine", async ({ page }) => {
