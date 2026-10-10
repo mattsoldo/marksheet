@@ -74,6 +74,9 @@ export class Playground {
     this.#diagnostics = this.#part("[data-diagnostics]");
 
     this.#editor.addEventListener("input", () => {
+      // Marks are line numbers in the last accepted source; an edit can move them, so drop
+      // them until a successful update re-marks the selected cell.
+      this.#markedLines = [];
       this.#paint();
       this.#schedule();
     });

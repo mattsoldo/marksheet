@@ -132,8 +132,12 @@ test("keeps keyboard focus on the sheet tabs", async ({ page }) => {
 
 test("does not mark source lines from an older grid", async ({ page }) => {
   // A rejected edit that shifts every line keeps the previous grid on screen.
+  await cell(page, "G2").click();
+  await expect(page.locator("[data-highlight] .is-marked")).toHaveText("Tax rate|0.2");
   await editSource(page, (source) => source.replace("#!marksheet 0.1\n", "#!marksheet 0.1\n@bogus\n"));
   await expect(page.locator("[data-status]")).toHaveAttribute("data-state", "error");
+  // The selection made before the edit must not keep marking a line that has since moved.
+  await expect(page.locator("[data-highlight] .is-marked")).toHaveCount(0);
   await cell(page, "G2").click();
   await expect(page.locator("[data-cell-ref]")).toHaveText("G2");
   await expect(page.locator("[data-highlight] .is-marked")).toHaveCount(0);
