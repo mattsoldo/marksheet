@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { MAX_RECENT_WORKBOOKS, MemoryRecentStore, formatRelativeTime, type RecentFileHandle } from "../src/recent";
+import {
+  FallbackRecentStore,
+  MAX_RECENT_WORKBOOKS,
+  MemoryRecentStore,
+  ensureHandlePermission,
+  formatRelativeTime,
+  type RecentFileHandle,
+  type RecentWorkbookStore,
+} from "../src/recent";
 import { defaultPreferences, loadPreferences, savePreferences } from "../src/preferences";
 
 const encoder = new TextEncoder();
@@ -57,6 +65,33 @@ describe("recent workbooks", () => {
     expect(await store.list()).toHaveLength(MAX_RECENT_WORKBOOKS - 1);
     await store.clear();
     expect(await store.list()).toEqual([]);
+  });
+
+  it("falls back to memory for the session when the primary store fails at runtime", async () => {
+    const failing: RecentWorkbookStore = {
+      list: async () => { throw new Error("open blocked"); },
+      source: async () => { throw new Error("open blocked"); },
+      remember: async () => { throw new Error("open blocked"); },
+      updateSource: async () => { throw new Error("open blocked"); },
+      remove: async () => { throw new Error("open blocked"); },
+      clear: async () => { throw new Error("open blocked"); },
+    };
+    const store = new FallbackRecentStore(failing);
+    expect(await store.list()).toEqual([]);
+    const entry = await store.remember({ name: "a.ms", sheetCount: 1, source: encoder.encode("a") });
+    expect((await store.list()).map((item) => item.id)).toEqual([entry.id]);
+    expect(new TextDecoder().decode(await store.source(entry.id))).toBe("a");
+  });
+
+  it("asks only for read access when reopening a handle", async () => {
+    const modes: string[] = [];
+    const handle = {
+      ...fakeHandle("a.ms", {}),
+      queryPermission: async ({ mode }: { mode: string }) => { modes.push(`query:${mode}`); return "prompt" as PermissionState; },
+      requestPermission: async ({ mode }: { mode: string }) => { modes.push(`request:${mode}`); return "granted" as PermissionState; },
+    } as RecentFileHandle;
+    expect(await ensureHandlePermission(handle)).toBe(true);
+    expect(modes).toEqual(["query:read", "request:read"]);
   });
 
   it("formats relative times without locale dependence", () => {

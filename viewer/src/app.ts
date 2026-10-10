@@ -417,8 +417,11 @@ export class ViewerApp {
     } catch (error) {
       if (error instanceof ExternalFileChangeError) {
         this.#source = error.externalSource.slice();
-        this.#dirty = false;
-        this.updateFileBadge();
+        // Unparseable external bytes leave the edited session in the worker, still unsaved.
+        if (error.workerReplaced) {
+          this.#dirty = false;
+          this.updateFileBadge();
+        }
         this.updateSourceView();
         if (error.workerReplaced) await this.afterSourceReplacement();
         else this.renderDiagnostics(errorDiagnostics(error.reparseError), {

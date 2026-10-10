@@ -1008,4 +1008,30 @@ describe("viewer reading view and workbook navigation", () => {
     app.dispose();
     root.remove();
   });
+
+  it("keeps the Edited badge when unparseable external bytes leave edits unsaved", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    adapter.replaceSource = vi.fn(async () => { throw new Error("cannot parse external source"); });
+    const base = encoder.encode("fixture");
+    const session = new LocalFileSession({
+      getFile: vi.fn(async () => ({ arrayBuffer: async () => Uint8Array.of(0xff).buffer })),
+      createWritable: vi.fn(),
+    }, base);
+    const app = new ViewerApp(root, adapter, { storage: memoryStorage(), recentStore: new MemoryRecentStore() });
+    await app.openSource(base, "fixture.ms", session);
+    const formula = root.querySelector<HTMLInputElement>("#formula-input")!;
+    formula.value = "=1+2";
+    formula.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    const badge = root.querySelector<HTMLElement>("#file-badge")!;
+    await vi.waitFor(() => expect(badge.textContent).toBe("Edited"));
+
+    root.querySelector<HTMLButtonElement>("#save-file")!.click();
+    await vi.waitFor(() => expect(root.querySelector("#status")?.textContent).toContain("could not be parsed"));
+    expect(badge.hidden).toBe(false);
+    expect(badge.textContent).toBe("Edited");
+    app.dispose();
+    root.remove();
+  });
 });

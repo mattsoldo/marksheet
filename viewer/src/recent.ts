@@ -193,16 +193,53 @@ export class IndexedDbRecentStore implements RecentWorkbookStore {
 /** Prefers IndexedDB and degrades to a session-only store when it is unavailable. */
 export function createRecentStore(): RecentWorkbookStore {
   try {
-    if (typeof indexedDB !== "undefined" && indexedDB) return new IndexedDbRecentStore(indexedDB);
+    if (typeof indexedDB !== "undefined" && indexedDB) {
+      return new FallbackRecentStore(new IndexedDbRecentStore(indexedDB));
+    }
   } catch {
     // Some privacy modes throw on access; remembering is a convenience only.
   }
   return new MemoryRecentStore();
 }
 
-/** Asks for read/write access once per reopen; the call must follow a user gesture. */
+/**
+ * Uses the primary store until any operation fails, then switches to memory
+ * for the rest of the session. Restricted storage modes can expose
+ * `indexedDB` but reject `open()` or later writes.
+ */
+export class FallbackRecentStore implements RecentWorkbookStore {
+  #active: RecentWorkbookStore;
+  #fallback: RecentWorkbookStore | undefined;
+
+  constructor(primary: RecentWorkbookStore, private readonly createFallback = () => new MemoryRecentStore()) {
+    this.#active = primary;
+  }
+
+  list() { return this.#run((store) => store.list()); }
+  source(id: string) { return this.#run((store) => store.source(id)); }
+  remember(request: RememberRequest) { return this.#run((store) => store.remember(request)); }
+  updateSource(id: string, source: Uint8Array) { return this.#run((store) => store.updateSource(id, source)); }
+  remove(id: string) { return this.#run((store) => store.remove(id)); }
+  clear() { return this.#run((store) => store.clear()); }
+
+  async #run<T>(operation: (store: RecentWorkbookStore) => Promise<T>): Promise<T> {
+    try {
+      return await operation(this.#active);
+    } catch (error) {
+      if (this.#fallback) throw error;
+      this.#fallback = this.createFallback();
+      this.#active = this.#fallback;
+      return operation(this.#active);
+    }
+  }
+}
+
+/**
+ * Asks for read access once per reopen; the call must follow a user gesture.
+ * Write access is requested by the browser when Save creates a writable.
+ */
 export async function ensureHandlePermission(handle: RecentFileHandle): Promise<boolean> {
-  const descriptor = { mode: "readwrite" } as const;
+  const descriptor = { mode: "read" } as const;
   if (!handle.queryPermission) return true;
   if (await handle.queryPermission(descriptor) === "granted") return true;
   return (await handle.requestPermission?.(descriptor)) === "granted";
