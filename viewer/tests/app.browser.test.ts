@@ -1191,6 +1191,23 @@ describe("viewer reading view and workbook navigation", () => {
     root.remove();
   });
 
+  it("clears the fallback file input so the same file can be chosen again", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const app = new ViewerApp(root, new MockAdapter(), { storage: memoryStorage(), recentStore: new MemoryRecentStore() });
+    const input = root.querySelector<HTMLInputElement>("#file-input")!;
+    const file = new File(["fixture"], "picked.ms");
+    Object.defineProperty(input, "files", { configurable: true, value: [file] });
+    input.value = "";
+    let cleared = false;
+    Object.defineProperty(input, "value", { configurable: true, get: () => "", set: (value: string) => { cleared = value === ""; } });
+    input.dispatchEvent(new Event("change"));
+    expect(cleared).toBe(true);
+    await vi.waitFor(() => expect(root.querySelector("#file-name")?.textContent).toBe("picked.ms"));
+    app.dispose();
+    root.remove();
+  });
+
   it("keeps the Edited badge when unparseable external bytes leave edits unsaved", async () => {
     const root = document.createElement("main");
     document.body.append(root);

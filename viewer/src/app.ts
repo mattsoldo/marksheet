@@ -314,7 +314,10 @@ export class ViewerApp {
     this.bindFileDrop();
     document.addEventListener("keydown", this.#keydown);
     this.byId<HTMLInputElement>("file-input").addEventListener("change", (event) => {
-      const file = (event.currentTarget as HTMLInputElement).files?.[0];
+      const input = event.currentTarget as HTMLInputElement;
+      const file = input.files?.[0];
+      // Clear the selection so choosing the same file again (e.g. after declining) fires `change`.
+      input.value = "";
       if (file) void this.openBrowserFile(file);
     });
     this.byId("save-file").addEventListener("click", () => void this.save());
