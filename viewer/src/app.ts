@@ -29,6 +29,23 @@ import {
 } from "./transactions";
 import { computeViewport, viewportCellCount } from "./viewport";
 import { formatSourceBytes, sourceSelectionOffsets } from "./source-view";
+import {
+  THEMES,
+  browserStorage,
+  loadPreferences,
+  prefersDarkScheme,
+  savePreferences,
+  type ThemeId,
+  type ViewerPreferences,
+} from "./preferences";
+import {
+  createRecentStore,
+  ensureHandlePermission,
+  formatRelativeTime,
+  type RecentFileHandle,
+  type RecentWorkbook,
+  type RecentWorkbookStore,
+} from "./recent";
 import type { WorkbenchAdapter } from "./worker-adapter";
 import { StaleResponseGate, responsePayload } from "./worker-adapter";
 
@@ -42,6 +59,19 @@ interface FilePickerWindow extends Window {
       abort(): Promise<void>;
     }>;
   }>>;
+}
+
+interface DroppedItem extends DataTransferItem {
+  getAsFileSystemHandle?: () => Promise<{ kind: string } | null>;
+}
+
+export interface ViewerOptions {
+  /** Remembered workbooks; defaults to IndexedDB with an in-memory fallback. */
+  recentStore?: RecentWorkbookStore;
+  /** Theme, sidebar, and details preferences; defaults to `localStorage`. */
+  storage?: Storage;
+  /** Asks before unsaved edits are replaced by another workbook; defaults to `window.confirm`. */
+  confirmDiscard?: (message: string) => boolean;
 }
 
 type DiagnosticScope = "document" | "viewport" | "calculation" | "error";
@@ -59,22 +89,51 @@ export class ViewerApp {
   #source: Uint8Array<ArrayBufferLike> = new Uint8Array();
   #disposed = false;
   #mutationBusy = false;
+  #dirty = false;
+  #recentStore: RecentWorkbookStore;
+  #recent: RecentWorkbook[] = [];
+  #currentRecentId: string | undefined;
+  #rememberGeneration = 0;
+  /** Recent-store operations run one at a time, in request order. */
+  #recentQueue: Promise<unknown> = Promise.resolve();
+  #storage: Storage | undefined;
+  #confirmDiscard: (message: string) => boolean;
+  #preferences: ViewerPreferences;
+  readonly #keydown = (event: KeyboardEvent) => this.handleShortcut(event);
 
   constructor(
     private readonly root: HTMLElement,
     private readonly adapter: WorkbenchAdapter,
+    options: ViewerOptions = {},
   ) {
+    this.#recentStore = options.recentStore ?? createRecentStore();
+    this.#storage = options.storage ?? browserStorage();
+    this.#confirmDiscard = options.confirmDiscard ?? defaultConfirm;
+    this.#preferences = loadPreferences(this.#storage, prefersDarkScheme());
     this.renderShell();
     this.bindEvents();
+    this.applyPreferences(isNarrowViewport() ? { sidebarOpen: false } : {});
+    void this.refreshRecent();
+  }
+
+  /** Workbooks remembered on this device, most recent first. */
+  get recentWorkbooks(): readonly RecentWorkbook[] {
+    return this.#recent;
   }
 
   dispose(): void {
     this.#disposed = true;
+    document.removeEventListener("keydown", this.#keydown);
     this.#regionGate.invalidate();
     this.adapter.dispose();
   }
 
-  async openSource(source: Uint8Array, fileName = "workbook.ms", session?: LocalFileSession): Promise<void> {
+  async openSource(
+    source: Uint8Array,
+    fileName = "workbook.ms",
+    session?: LocalFileSession,
+    recentId?: string,
+  ): Promise<void> {
     if (!this.beginMutation("Another open, save, or edit is already in progress")) {
       throw new Error("another open, save, or edit is already in progress");
     }
@@ -92,7 +151,12 @@ export class ViewerApp {
       this.#fileSession = session;
       this.#activeSheet = opened.snapshot.sheets[0]?.id;
       this.#selected = { column: 1, row: 1 };
+      this.#dirty = false;
       this.updateWorkbookChrome();
+      // Until the store answers, a download save must not update another entry's copy.
+      this.#currentRecentId = recentId;
+      // Remembering is a convenience and must never delay or fail an open.
+      void this.rememberWorkbook(source, fileName, opened.snapshot.sheets.length, session, recentId);
       const refreshed = await this.refreshVisibleRegion();
       if (refreshed) {
         const snapshot = this.#snapshot ?? opened.snapshot;
@@ -118,78 +182,146 @@ export class ViewerApp {
   }
 
   private renderShell(): void {
+    const themeOptions = THEMES.map((theme) => `
+      <button class="theme-option" type="button" role="radio" data-theme-option="${theme.id}" aria-checked="false" title="${theme.description}">
+        <span class="theme-swatch theme-swatch-${theme.id}" aria-hidden="true"><span></span><span></span><span></span></span>
+        <span>${theme.label}</span>
+      </button>`).join("");
     this.root.innerHTML = `
-      <div class="app-shell">
-        <header class="topbar">
-          <div class="brand"><span class="brand-mark" aria-hidden="true">M</span> Marksheet</div>
-          <span class="file-name" id="file-name">No workbook open</span>
-          <div class="topbar-actions">
-            <input class="sr-only" id="file-input" type="file" accept=".ms,text/plain" />
-            <button id="open-file" type="button">Open local file</button>
-            <button id="save-file" class="primary" type="button" disabled>Save</button>
-            <button id="cancel-work" type="button" disabled>Cancel work</button>
+      <div class="app-shell" id="app-shell" data-sidebar="open" data-details="closed">
+        <aside class="sidebar" id="sidebar" aria-label="Workbooks">
+          <div class="sidebar-header">
+            <div class="brand"><span class="brand-mark" aria-hidden="true">${ICONS.mark}</span><span>Marksheet</span></div>
+            <button id="close-sidebar" class="icon-button sidebar-close" type="button" aria-label="Close workbook list">${ICONS.close}</button>
           </div>
-        </header>
-        <div class="toolbar" aria-label="Editing controls">
-          <button id="pan-up" type="button" title="Move viewport up">↑</button>
-          <button id="pan-left" type="button" title="Move viewport left">←</button>
-          <button id="pan-right" type="button" title="Move viewport right">→</button>
-          <button id="pan-down" type="button" title="Move viewport down">↓</button>
-          <label>Style <input id="style-id" size="9" placeholder="money" /></label>
-          <label><input id="style-bold" type="checkbox" /> Bold</label>
-          <label>Fill <input id="style-fill" type="color" value="#1f6feb" /></label>
-          <label>Number <select id="style-number"><option value="">Unspecified</option><option>General</option><option>Integer</option><option>Decimal</option><option>Percent</option><option>Currency</option><option>Date</option><option>DateTime</option></select></label>
-          <label>Currency <input id="style-currency" size="4" maxlength="3" value="USD" aria-label="ISO currency code" /></label>
-          <button id="define-style" type="button">Define</button>
-          <button id="apply-style" type="button">Apply</button>
-          <label>Name <input id="name-id" size="9" placeholder="tax_rate" /></label>
-          <button id="set-name" type="button">Set target</button>
-          <label>Width <input id="column-width" type="number" min="1" step="0.5" size="5" /></label>
-          <label>Height <input id="row-height" type="number" min="1" step="0.5" size="5" /></label>
-          <span class="toolbar-spacer"></span>
-          <button id="toggle-source" type="button" aria-pressed="true">Source</button>
-        </div>
-        <section class="workspace">
-          <section class="sheet-workspace" aria-label="Workbook">
-            <nav class="sheet-tabs" id="sheet-tabs" aria-label="Sheets"></nav>
+          <input class="sr-only" id="file-input" type="file" accept=".ms,text/plain" tabindex="-1" />
+          <button id="open-file" class="sidebar-open" type="button">${ICONS.plus}<span>Open workbook</span><kbd>${MOD_KEY}O</kbd></button>
+          <section class="sidebar-section" aria-labelledby="recent-heading">
+            <div class="sidebar-label">
+              <span id="recent-heading">Recent</span>
+              <button id="clear-recent" class="link-button" type="button" hidden>Clear</button>
+            </div>
+            <ul class="recent-list" id="recent-list"></ul>
+            <p class="recent-empty" id="recent-empty">Workbooks you open are remembered here, on this device only.</p>
+          </section>
+          <section class="sidebar-footer" aria-labelledby="theme-heading">
+            <div class="sidebar-label"><span id="theme-heading">Appearance</span></div>
+            <div class="theme-picker" role="radiogroup" aria-labelledby="theme-heading">${themeOptions}</div>
+          </section>
+        </aside>
+        <div class="sidebar-scrim" id="sidebar-scrim" aria-hidden="true"></div>
+        <div class="main-column">
+          <header class="topbar">
+            <button id="toggle-sidebar" class="icon-button" type="button" aria-controls="sidebar" aria-expanded="true" title="Workbooks (${MOD_KEY}\\)">${ICONS.sidebar}<span class="sr-only">Toggle workbook list</span></button>
+            <div class="title-group">
+              <span class="file-name" id="file-name">No workbook open</span>
+              <span class="file-badge" id="file-badge" hidden></span>
+            </div>
+            <div class="topbar-actions">
+              <button id="cancel-work" class="ghost" type="button" disabled>Cancel</button>
+              <button id="toggle-details" class="ghost details-toggle" type="button" aria-pressed="false" aria-controls="details-bar inspector" title="Formula bar, formatting, source, and diagnostics (${MOD_KEY}/)">${ICONS.details}<span>Details</span><span class="count-badge" id="details-badge" hidden></span></button>
+              <button id="save-file" class="primary" type="button" disabled>Save</button>
+            </div>
+          </header>
+          <nav class="sheet-tabs" id="sheet-tabs" aria-label="Sheets" hidden></nav>
+          <div class="details-bar" id="details-bar" hidden>
             <div class="formula-strip">
               <label class="sr-only" for="name-box">Name box</label>
-              <input class="cell-address" id="name-box" value="A1" aria-label="Coordinate, range, or declared name" />
+              <input class="cell-address" id="name-box" value="A1" aria-label="Coordinate, range, or declared name" spellcheck="false" />
+              <span class="formula-glyph" aria-hidden="true">fx</span>
               <label class="sr-only" for="formula-input">Formula or cell value</label>
-              <input id="formula-input" placeholder="Select an authored cell to edit" disabled />
+              <input id="formula-input" placeholder="Select an authored cell to edit" disabled spellcheck="false" />
             </div>
-            <div class="grid-shell" id="grid-shell">
-              <div class="empty-state" id="grid-empty">Open a .ms file to inspect its sparse workbook.</div>
-              <div class="grid" id="grid" role="grid" aria-label="Workbook cells" hidden></div>
+            <div class="toolbar" aria-label="Editing controls">
+              <div class="tool-group" aria-label="Style">
+                <label class="field"><span>Style</span><input id="style-id" size="9" placeholder="money" /></label>
+                <label class="check"><input id="style-bold" type="checkbox" /> <span>Bold</span></label>
+                <label class="field color"><span>Fill</span><input id="style-fill" type="color" value="#1f6feb" /></label>
+                <label class="field"><span>Number</span><select id="style-number"><option value="">Unspecified</option><option>General</option><option>Integer</option><option>Decimal</option><option>Percent</option><option>Currency</option><option>Date</option><option>DateTime</option></select></label>
+                <label class="field"><span>Currency</span><input id="style-currency" size="4" maxlength="3" value="USD" aria-label="ISO currency code" /></label>
+                <button id="define-style" type="button">Define</button>
+                <button id="apply-style" type="button">Apply</button>
+              </div>
+              <div class="tool-group" aria-label="Name">
+                <label class="field"><span>Name</span><input id="name-id" size="9" placeholder="tax_rate" /></label>
+                <button id="set-name" type="button">Set target</button>
+              </div>
+              <div class="tool-group" aria-label="Geometry">
+                <label class="field"><span>Width</span><input id="column-width" type="number" min="1" step="0.5" size="5" /></label>
+                <label class="field"><span>Height</span><input id="row-height" type="number" min="1" step="0.5" size="5" /></label>
+              </div>
             </div>
+          </div>
+          <section class="workspace">
+            <section class="sheet-workspace" aria-label="Workbook">
+              <div class="progress" aria-hidden="true"></div>
+              <div class="grid-shell" id="grid-shell">
+                <div class="empty-state" id="grid-empty">
+                  <div class="empty-card">
+                    <div class="empty-art" aria-hidden="true">${ICONS.emptyGrid}</div>
+                    <h1>Open a Marksheet workbook</h1>
+                    <p>Drop a <code>.ms</code> file here or choose one from this device. Workbooks are read and calculated locally.</p>
+                    <button id="open-file-empty" class="primary" type="button">Choose a file</button>
+                  </div>
+                </div>
+                <div class="grid" id="grid" role="grid" aria-label="Workbook cells" hidden></div>
+              </div>
+            </section>
+            <aside class="inspector-panel" id="inspector" aria-label="Source and diagnostics" hidden>
+              <section class="source-panel">
+                <div class="panel-title" id="source-title">Exact source bytes</div>
+                <textarea id="source-view" readonly spellcheck="false" aria-label="Exact workbook source"></textarea>
+              </section>
+              <section class="diagnostics" aria-live="polite">
+                <div class="diagnostics-header"><span class="panel-title">Diagnostics</span><span class="count-pill" id="diagnostic-count">0</span></div>
+                <div id="diagnostic-list"><span class="file-name">No diagnostics.</span></div>
+              </section>
+            </aside>
           </section>
-          <aside class="inspector-panel" id="inspector">
-            <section class="source-panel">
-              <div class="panel-title" id="source-title">Exact source bytes</div>
-              <textarea id="source-view" readonly spellcheck="false" aria-label="Exact workbook source"></textarea>
-            </section>
-            <section class="diagnostics" aria-live="polite">
-              <div class="diagnostics-header"><span class="panel-title">Diagnostics</span><span id="diagnostic-count">0</span></div>
-              <div id="diagnostic-list"><span class="file-name">No diagnostics.</span></div>
-            </section>
-          </aside>
-        </section>
-        <footer class="statusbar" aria-live="polite">
-          <span id="status" class="status-ok">Ready</span>
-          <span id="viewport-status">No viewport</span>
-        </footer>
+          <footer class="statusbar" aria-live="polite">
+            <span id="status" class="status-ok">Ready</span>
+            <div class="pan-controls" aria-label="Move viewport">
+              <button id="pan-left" class="icon-button" type="button" title="Move viewport left">${ICONS.left}</button>
+              <button id="pan-up" class="icon-button" type="button" title="Move viewport up">${ICONS.up}</button>
+              <button id="pan-down" class="icon-button" type="button" title="Move viewport down">${ICONS.down}</button>
+              <button id="pan-right" class="icon-button" type="button" title="Move viewport right">${ICONS.right}</button>
+            </div>
+            <span id="viewport-status">No viewport</span>
+          </footer>
+          <div class="drop-overlay" aria-hidden="true"><div>Drop to open workbook</div></div>
+        </div>
       </div>`;
   }
 
   private bindEvents(): void {
     this.byId("open-file").addEventListener("click", () => void this.pickFile());
+    this.byId("open-file-empty").addEventListener("click", () => void this.pickFile());
+    this.byId("toggle-sidebar").addEventListener("click", () => {
+      this.applyPreferences({ sidebarOpen: !this.#preferences.sidebarOpen }, !isNarrowViewport());
+    });
+    this.byId("close-sidebar").addEventListener("click", () => this.applyPreferences({ sidebarOpen: false }, !isNarrowViewport()));
+    this.byId("sidebar-scrim").addEventListener("click", () => this.applyPreferences({ sidebarOpen: false }, false));
+    this.byId("toggle-details").addEventListener("click", () => {
+      this.applyPreferences({ detailsOpen: !this.#preferences.detailsOpen }, true);
+    });
+    this.byId("clear-recent").addEventListener("click", () => void this.clearRecent());
+    for (const option of this.root.querySelectorAll<HTMLButtonElement>("[data-theme-option]")) {
+      option.addEventListener("click", () => {
+        const theme = THEMES.find((candidate) => candidate.id === option.dataset.themeOption);
+        if (theme) this.applyPreferences({ theme: theme.id }, true);
+      });
+    }
+    this.bindFileDrop();
+    document.addEventListener("keydown", this.#keydown);
     this.byId<HTMLInputElement>("file-input").addEventListener("change", (event) => {
-      const file = (event.currentTarget as HTMLInputElement).files?.[0];
+      const input = event.currentTarget as HTMLInputElement;
+      const file = input.files?.[0];
+      // Clear the selection so choosing the same file again (e.g. after declining) fires `change`.
+      input.value = "";
       if (file) void this.openBrowserFile(file);
     });
     this.byId("save-file").addEventListener("click", () => void this.save());
     this.byId("cancel-work").addEventListener("click", () => void this.cancelWork());
-    this.byId("toggle-source").addEventListener("click", () => this.toggleSource());
     this.byId("pan-up").addEventListener("click", () => void this.pan(0, -20));
     this.byId("pan-down").addEventListener("click", () => void this.pan(0, 20));
     this.byId("pan-left").addEventListener("click", () => void this.pan(-8, 0));
@@ -256,6 +388,7 @@ export class ViewerApp {
       if (!handle) return;
       const file = await handle.getFile();
       const bytes = new Uint8Array(await file.arrayBuffer());
+      if (!this.confirmReplace(handle.name)) return;
       await this.openSource(bytes, handle.name, new LocalFileSession(handle, bytes));
     } catch (error) {
       if ((error as DOMException).name !== "AbortError") this.setError(error);
@@ -263,8 +396,17 @@ export class ViewerApp {
   }
 
   private async openBrowserFile(file: File): Promise<void> {
+    let bytes: Uint8Array;
     try {
-      await this.openSource(new Uint8Array(await file.arrayBuffer()), file.name);
+      bytes = new Uint8Array(await file.arrayBuffer());
+    } catch (error) {
+      this.setError(error);
+      return;
+    }
+    // Confirm after the read so no edit can land between the decision and the replacement.
+    if (!this.confirmReplace(file.name)) return;
+    try {
+      await this.openSource(bytes, file.name);
     } catch {
       // `openSource` already presents the structured worker error.
     }
@@ -275,20 +417,35 @@ export class ViewerApp {
     this.setBusy(true, "Checking local file…");
     try {
       if (this.#fileSession) {
+        // Request write access first, while the Save click still grants user activation.
+        if (!await this.ensureWritePermission()) return;
         const result = await this.#fileSession.save(this.adapter);
         this.#source = this.#fileSession.baseSource;
         this.updateSourceView();
+        this.#dirty = false;
+        this.updateFileBadge();
         this.setStatus(result === "saved" ? "Saved focused source patches" : "No changes to save", "ok");
       } else {
         const payload = responsePayload(await this.adapter.sourceBytes(), "source_bytes");
         const source = Uint8Array.from(payload.source);
         downloadSource(source, this.#fileName);
         this.#source = source;
+        this.#dirty = false;
+        this.updateFileBadge();
+        // Queued behind any pending registration, so the entry id is known when this runs.
+        await this.withRecentStore(async (store) => {
+          if (this.#currentRecentId) await store.updateSource(this.#currentRecentId, source);
+        }).catch(() => undefined);
         this.setStatus(`Downloaded ${this.#fileName}`, "ok");
       }
     } catch (error) {
       if (error instanceof ExternalFileChangeError) {
         this.#source = error.externalSource.slice();
+        // Unparseable external bytes leave the edited session in the worker, still unsaved.
+        if (error.workerReplaced) {
+          this.#dirty = false;
+          this.updateFileBadge();
+        }
         this.updateSourceView();
         if (error.workerReplaced) await this.afterSourceReplacement();
         else this.renderDiagnostics(errorDiagnostics(error.reparseError), {
@@ -410,32 +567,36 @@ export class ViewerApp {
     }
   }
 
-  private async commitCell(source: string): Promise<void> {
+  /** Returns whether the worker accepted the edit. */
+  private async commitCell(source: string): Promise<boolean> {
     const cell = this.selectedCell();
     if (cell && "VirtualFill" in cell.source) {
       this.setStatus("Fill-derived cells are virtual and cannot be directly edited", "error");
-      return;
+      return false;
     }
-    await this.commitTransaction(setCellTransaction(this.requireSheet(), this.#selected, source));
+    return this.commitTransaction(setCellTransaction(this.requireSheet(), this.#selected, source));
   }
 
-  private async commitTransaction(transaction: ReturnType<typeof setCellTransaction>): Promise<void> {
+  private async commitTransaction(transaction: ReturnType<typeof setCellTransaction>): Promise<boolean> {
     if (!this.#snapshot?.editable) {
       this.setStatus("This workbook is view-only until its formula diagnostics are resolved", "error");
-      return;
+      return false;
     }
-    if (!this.beginMutation("Another save or edit is already in progress")) return;
+    if (!this.beginMutation("Another save or edit is already in progress")) return false;
     this.setBusy(true, "Planning source-aware edit…");
     try {
       const edited = responsePayload(await this.adapter.edit(transaction), "edited");
       this.#snapshot = edited.snapshot;
       if (edited.changed) {
+        // The worker has committed the edit even if reading its bytes back fails.
+        this.#dirty = true;
+        this.updateFileBadge();
         const source = responsePayload(await this.adapter.sourceBytes(), "source_bytes");
         this.#source = Uint8Array.from(source.source);
         this.updateSourceView();
       }
       const refreshed = await this.refreshVisibleRegion();
-      if (!refreshed) return;
+      if (!refreshed) return true;
       const patchSummary = edited.patches
         .map((patch) => `${patch.span.start}..${patch.span.end}`)
         .join(", ");
@@ -445,8 +606,10 @@ export class ViewerApp {
           : "Edit was a semantic no-op",
         "ok",
       );
+      return true;
     } catch (error) {
       this.setError(error);
+      return false;
     } finally {
       this.setBusy(false);
       this.endMutation();
@@ -494,14 +657,18 @@ export class ViewerApp {
 
   private updateWorkbookChrome(): void {
     this.byId("file-name").textContent = this.#fileName;
+    this.updateFileBadge();
     this.updateEditingState();
     const tabs = this.byId("sheet-tabs");
+    tabs.hidden = !this.#snapshot;
     tabs.replaceChildren();
+    tabs.setAttribute("role", "tablist");
     for (const sheet of this.#snapshot?.sheets ?? []) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "sheet-tab";
       button.textContent = sheet.label;
+      button.setAttribute("role", "tab");
       button.title = `${sheet.id} · ${sheet.authored_cell_count} authored cells`;
       button.setAttribute("aria-selected", String(sheet.id === this.#activeSheet));
       button.addEventListener("click", () => {
@@ -555,6 +722,7 @@ export class ViewerApp {
     for (const [columnIndex, column] of columns.entries()) {
       const header = this.gridElement("div", "column-header", columnName(column), undefined, "columnheader");
       header.setAttribute("aria-colindex", String(columnIndex + 2));
+      header.dataset.column = String(column);
       headerRow.append(header);
     }
     grid.append(headerRow);
@@ -567,6 +735,7 @@ export class ViewerApp {
       gridRow.setAttribute("aria-rowindex", String(rowIndex + 2));
       const header = this.gridElement("div", "row-header", String(row), undefined, "rowheader");
       header.style.height = height;
+      header.dataset.row = String(row);
       header.setAttribute("aria-colindex", "1");
       gridRow.append(header);
       for (const [columnIndex, column] of columns.entries()) {
@@ -608,7 +777,10 @@ export class ViewerApp {
         this.#selected = coordinate;
         this.updateSelectionChrome();
       });
-      element.addEventListener("dblclick", () => this.byId<HTMLInputElement>("formula-input").focus());
+      element.addEventListener("dblclick", () => {
+        if (!this.#preferences.detailsOpen) this.applyPreferences({ detailsOpen: true }, true);
+        this.byId<HTMLInputElement>("formula-input").focus();
+      });
       element.addEventListener("keydown", (event) => {
         const keyboard = event as KeyboardEvent;
         if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(keyboard.key)) {
@@ -674,6 +846,12 @@ export class ViewerApp {
       element.classList.toggle("cell-selected", element.dataset.coordinate === key);
       element.tabIndex = element.dataset.coordinate === key ? 0 : -1;
     }
+    for (const header of this.root.querySelectorAll<HTMLElement>(".column-header, .row-header")) {
+      header.classList.toggle(
+        "header-active",
+        header.dataset.column === String(this.#selected.column) || header.dataset.row === String(this.#selected.row),
+      );
+    }
     this.byId<HTMLInputElement>("name-box").value = formatCoordinate(this.#selected);
     const selected = this.selectedCell();
     const formula = this.byId<HTMLInputElement>("formula-input");
@@ -692,6 +870,7 @@ export class ViewerApp {
     const unique = dedupeDiagnostics(diagnostics);
     const rendered = unique.slice(0, ViewerApp.MAX_RENDERED_DIAGNOSTICS);
     const truncatedScopes = diagnosticOmissionEntries(omissions);
+    this.updateDetailsBadge(unique, truncatedScopes.reduce((total, [, count]) => total + count, 0));
     this.byId("diagnostic-count").textContent = truncatedScopes.length > 0
       ? `${rendered.length} rendered · ${truncatedScopes.map(([scope, count]) => `${scope} +${count}`).join(" · ")}`
       : unique.length > rendered.length
@@ -757,12 +936,306 @@ export class ViewerApp {
       : "Exact source bytes (hex; invalid UTF-8)";
   }
 
-  private toggleSource(): void {
-    const inspector = this.byId("inspector");
-    const button = this.byId("toggle-source");
-    const hidden = inspector.hidden;
-    inspector.hidden = !hidden;
-    button.setAttribute("aria-pressed", String(hidden));
+  private applyPreferences(changes: Partial<ViewerPreferences>, persist = false): void {
+    this.#preferences = { ...this.#preferences, ...changes };
+    if (persist) savePreferences(this.#storage, this.#preferences);
+    const { theme, sidebarOpen, detailsOpen } = this.#preferences;
+    const shell = this.byId("app-shell");
+    shell.dataset.theme = theme;
+    shell.dataset.sidebar = sidebarOpen ? "open" : "closed";
+    shell.dataset.details = detailsOpen ? "open" : "closed";
+    document.documentElement.dataset.theme = theme;
+    this.byId("sidebar").toggleAttribute("inert", !sidebarOpen);
+    this.byId("toggle-sidebar").setAttribute("aria-expanded", String(sidebarOpen));
+    this.byId("toggle-details").setAttribute("aria-pressed", String(detailsOpen));
+    this.byId("details-bar").hidden = !detailsOpen;
+    this.byId("inspector").hidden = !detailsOpen;
+    for (const option of this.root.querySelectorAll<HTMLElement>("[data-theme-option]")) {
+      option.setAttribute("aria-checked", String(option.dataset.themeOption === theme));
+    }
+  }
+
+  /** The active theme, exposed for embedding hosts and tests. */
+  get theme(): ThemeId {
+    return this.#preferences.theme;
+  }
+
+  private handleShortcut(event: KeyboardEvent): void {
+    if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+    const key = event.key.toLowerCase();
+    if (key === "o") {
+      event.preventDefault();
+      if (!this.#mutationBusy) void this.pickFile();
+    } else if (key === "s" && this.#snapshot) {
+      event.preventDefault();
+      void this.saveFromShortcut();
+    } else if (key === "\\") {
+      event.preventDefault();
+      this.applyPreferences({ sidebarOpen: !this.#preferences.sidebarOpen }, !isNarrowViewport());
+    } else if (key === "/") {
+      event.preventDefault();
+      this.applyPreferences({ detailsOpen: !this.#preferences.detailsOpen }, true);
+    }
+  }
+
+  /** Ctrl/⌘+S from the formula bar first commits the typed value, as Enter would. */
+  private async saveFromShortcut(): Promise<void> {
+    const formula = this.byId<HTMLInputElement>("formula-input");
+    const pending = document.activeElement === formula
+      && !formula.disabled
+      && formula.value !== sourceText(this.selectedCell());
+    // Ask for write access before the edit's awaits can outlive the key press's user activation.
+    if (pending && !await this.ensureWritePermission().catch((error: unknown) => {
+      this.setError(error);
+      return false;
+    })) return;
+    if (pending && !await this.commitCell(formula.value)) return;
+    await this.save();
+  }
+
+  /** True when there is no local file handle, or write access is granted. */
+  private async ensureWritePermission(): Promise<boolean> {
+    if (!this.#fileSession) return true;
+    const handle = this.#fileSession.handle as RecentFileHandle;
+    if (await ensureHandlePermission(handle, "readwrite")) return true;
+    this.setStatus(`Permission to save ${this.#fileName} was not granted; no bytes were written`, "error");
+    return false;
+  }
+
+  private bindFileDrop(): void {
+    const shell = this.byId("app-shell");
+    let depth = 0;
+    const carriesFiles = (event: DragEvent) => Boolean(event.dataTransfer?.types.includes("Files"));
+    shell.addEventListener("dragenter", (event) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      depth += 1;
+      shell.toggleAttribute("data-dropping", true);
+    });
+    shell.addEventListener("dragover", (event) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    });
+    shell.addEventListener("dragleave", () => {
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) shell.toggleAttribute("data-dropping", false);
+    });
+    shell.addEventListener("drop", (event) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      depth = 0;
+      shell.toggleAttribute("data-dropping", false);
+      void this.openDrop(event.dataTransfer);
+    });
+  }
+
+  private async openDrop(transfer: DataTransfer | null): Promise<void> {
+    if (!transfer || this.#mutationBusy) return;
+    const item = [...transfer.items].find((candidate) => candidate.kind === "file") as DroppedItem | undefined;
+    const file = transfer.files[0];
+    // Request the handle synchronously: the transfer is only readable during the drop event.
+    const handlePromise = item?.getAsFileSystemHandle?.().catch(() => null);
+    try {
+      const handle = await handlePromise;
+      if (handle && handle.kind === "file") {
+        const fileHandle = handle as unknown as RecentFileHandle;
+        const bytes = new Uint8Array(await (await fileHandle.getFile()).arrayBuffer());
+        if (!this.confirmReplace(fileHandle.name)) return;
+        await this.openSource(bytes, fileHandle.name, new LocalFileSession(fileHandle, bytes));
+        return;
+      }
+      if (file) await this.openBrowserFile(file);
+    } catch (error) {
+      this.setError(error);
+    }
+  }
+
+  private async rememberWorkbook(
+    source: Uint8Array,
+    name: string,
+    sheetCount: number,
+    session: LocalFileSession | undefined,
+    recentId: string | undefined,
+  ): Promise<void> {
+    const generation = ++this.#rememberGeneration;
+    const handle = session?.handle as RecentFileHandle | undefined;
+    await this.withRecentStore(async (store) => {
+      try {
+        const entry = await store.remember({
+          name,
+          sheetCount,
+          source,
+          ...(handle ? { handle } : {}),
+          ...(recentId ? { id: recentId } : {}),
+        });
+        if (generation === this.#rememberGeneration) this.#currentRecentId = entry.id;
+      } catch {
+        // Remembering is best effort: storage may be full or disabled.
+        if (generation === this.#rememberGeneration) this.#currentRecentId = undefined;
+      }
+    });
+    await this.refreshRecent();
+  }
+
+  /**
+   * Serializes every recent-store operation, so a lookup, insert, eviction,
+   * save, forget, or clear never interleaves with another one.
+   */
+  private withRecentStore<T>(task: (store: RecentWorkbookStore) => Promise<T>): Promise<T> {
+    const run = this.#recentQueue.then(() => task(this.#recentStore));
+    this.#recentQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async refreshRecent(): Promise<void> {
+    try {
+      this.#recent = await this.withRecentStore((store) => store.list());
+    } catch {
+      this.#recent = [];
+    }
+    if (!this.#disposed) this.renderRecent();
+  }
+
+  private renderRecent(): void {
+    const list = this.byId("recent-list");
+    list.replaceChildren();
+    this.byId("recent-empty").hidden = this.#recent.length > 0;
+    this.byId("clear-recent").hidden = this.#recent.length === 0;
+    const now = Date.now();
+    for (const entry of this.#recent) {
+      const item = document.createElement("li");
+      item.className = "recent-item";
+      item.dataset.recentId = entry.id;
+      const current = entry.id === this.#currentRecentId && Boolean(this.#snapshot);
+      item.classList.toggle("active", current);
+
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "recent-open";
+      if (current) open.setAttribute("aria-current", "page");
+      open.title = entry.handle
+        ? `${entry.name}\nReopens the file on disk`
+        : `${entry.name}\nReopens the copy stored in this browser`;
+      const icon = document.createElement("span");
+      icon.className = "recent-icon";
+      icon.setAttribute("aria-hidden", "true");
+      icon.innerHTML = ICONS.file;
+      const text = document.createElement("span");
+      text.className = "recent-text";
+      const name = document.createElement("span");
+      name.className = "recent-name";
+      name.textContent = entry.name;
+      const meta = document.createElement("span");
+      meta.className = "recent-meta";
+      const sheets = `${entry.sheetCount} sheet${entry.sheetCount === 1 ? "" : "s"}`;
+      meta.textContent = `${formatRelativeTime(entry.openedAt, now)} · ${sheets}`;
+      text.append(name, meta);
+      open.append(icon, text);
+      open.addEventListener("click", () => void this.openRecent(entry));
+
+      const forget = document.createElement("button");
+      forget.type = "button";
+      forget.className = "recent-forget icon-button";
+      forget.setAttribute("aria-label", `Forget ${entry.name}`);
+      forget.title = "Remove from recent";
+      forget.innerHTML = ICONS.close;
+      forget.addEventListener("click", () => void this.forgetRecent(entry.id));
+
+      item.append(open, forget);
+      list.append(item);
+    }
+  }
+
+  private async openRecent(entry: RecentWorkbook): Promise<void> {
+    if (this.#mutationBusy) {
+      this.setStatus("Another open, save, or edit is already in progress", "warning");
+      return;
+    }
+    if (isNarrowViewport()) this.applyPreferences({ sidebarOpen: false });
+    let opening = false;
+    try {
+      if (entry.handle) {
+        if (!await ensureHandlePermission(entry.handle)) {
+          this.setStatus(`Permission to open ${entry.name} was not granted`, "error");
+          return;
+        }
+        let bytes: Uint8Array;
+        try {
+          bytes = new Uint8Array(await (await entry.handle.getFile()).arrayBuffer());
+        } catch {
+          this.setStatus(`${entry.name} could not be read; it may have been moved or deleted`, "error");
+          return;
+        }
+        if (!this.confirmReplace(entry.name)) return;
+        opening = true;
+        await this.openSource(bytes, entry.name, new LocalFileSession(entry.handle, bytes), entry.id);
+        return;
+      }
+      const bytes = await this.withRecentStore((store) => store.source(entry.id));
+      if (!bytes) {
+        this.setStatus(`The stored copy of ${entry.name} is no longer available`, "error");
+        await this.forgetRecent(entry.id);
+        return;
+      }
+      if (!this.confirmReplace(entry.name)) return;
+      opening = true;
+      await this.openSource(bytes, entry.name, undefined, entry.id);
+    } catch (error) {
+      // `openSource` already presents its structured worker error; earlier failures are ours to show.
+      if (!opening) this.setError(error);
+    }
+  }
+
+  private async forgetRecent(id: string): Promise<void> {
+    // Queued after any registration in flight, so it cannot recreate what is removed.
+    await this.withRecentStore(async (store) => {
+      await store.remove(id);
+      if (this.#currentRecentId === id) this.#currentRecentId = undefined;
+    }).catch(() => undefined);
+    await this.refreshRecent();
+  }
+
+  private async clearRecent(): Promise<void> {
+    await this.withRecentStore(async (store) => {
+      await store.clear();
+      this.#currentRecentId = undefined;
+    }).catch(() => undefined);
+    await this.refreshRecent();
+  }
+
+  /** Unsaved edits are only replaced after an explicit discard decision. */
+  private confirmReplace(nextName: string): boolean {
+    if (!this.#dirty || !this.#snapshot) return true;
+    const confirmed = this.#confirmDiscard(
+      `${this.#fileName} has unsaved edits. Discard them and open ${nextName}?`,
+    );
+    if (!confirmed) this.setStatus(`Kept ${this.#fileName}; save it before opening another workbook`, "warning");
+    return confirmed;
+  }
+
+  private updateFileBadge(): void {
+    const badge = this.byId("file-badge");
+    const label = !this.#snapshot
+      ? ""
+      : !this.#snapshot.editable
+        ? "View only"
+        : this.#dirty
+          ? "Edited"
+          : "";
+    badge.textContent = label;
+    badge.hidden = label === "";
+    badge.dataset.kind = this.#snapshot && !this.#snapshot.editable ? "readonly" : "edited";
+  }
+
+  private updateDetailsBadge(diagnostics: Diagnostic[], omitted: number): void {
+    const badge = this.byId("details-badge");
+    const errors = diagnostics.filter((diagnostic) => diagnostic.severity === "error").length;
+    const total = diagnostics.length + omitted;
+    badge.hidden = total === 0;
+    badge.textContent = String(total);
+    badge.dataset.severity = errors > 0 ? "error" : "warning";
+    badge.title = `${total} diagnostic${total === 1 ? "" : "s"}`;
   }
 
   private selectionRange(): A1Range {
@@ -781,6 +1254,7 @@ export class ViewerApp {
 
   private setBusy(busy: boolean, message?: string): void {
     this.byId<HTMLButtonElement>("cancel-work").disabled = !busy;
+    this.byId("app-shell").toggleAttribute("data-busy", busy);
     if (message) this.setStatus(message, "warning");
   }
 
@@ -962,3 +1436,34 @@ function extensionOpenNotice(snapshot: WorkbookSnapshot): string | undefined {
     ? `with extension warnings (${warnings.join("; ")}); calculation and rendering remain complete`
     : undefined;
 }
+
+function defaultConfirm(message: string): boolean {
+  return typeof window === "undefined" || typeof window.confirm !== "function" || window.confirm(message);
+}
+
+function isNarrowViewport(): boolean {
+  try {
+    return typeof matchMedia === "function" && matchMedia("(max-width: 760px)").matches;
+  } catch {
+    return false;
+  }
+}
+
+const MOD_KEY = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform ?? "") ? "⌘" : "Ctrl+";
+
+const svg = (body: string, size = 16) =>
+  `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${body}</svg>`;
+
+const ICONS = {
+  mark: `<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect x="1.5" y="1.5" width="13" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M1.5 6h13M6 6v8.5" stroke="currentColor" stroke-width="1.5"/></svg>`,
+  plus: svg(`<path d="M8 3.5v9M3.5 8h9"/>`),
+  close: svg(`<path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/>`),
+  sidebar: svg(`<rect x="2" y="2.5" width="12" height="11" rx="2"/><path d="M6.5 2.5v11"/>`),
+  details: svg(`<rect x="2" y="2.5" width="12" height="11" rx="2"/><path d="M9.5 2.5v11M11.25 5.5h.5M11.25 8h.5"/>`),
+  file: svg(`<rect x="2.5" y="2" width="11" height="12" rx="2"/><path d="M2.5 6h11M2.5 10h11M6.5 6v8"/>`),
+  left: svg(`<path d="M10 3.5L5.5 8l4.5 4.5"/>`),
+  right: svg(`<path d="M6 3.5L10.5 8 6 12.5"/>`),
+  up: svg(`<path d="M3.5 10L8 5.5l4.5 4.5"/>`),
+  down: svg(`<path d="M3.5 6L8 10.5 12.5 6"/>`),
+  emptyGrid: `<svg width="120" height="84" viewBox="0 0 120 84" fill="none" aria-hidden="true" focusable="false"><rect x="1" y="1" width="118" height="82" rx="10" class="art-frame"/><path d="M1 21h118M1 41h118M1 61h118M33 1v82M62 1v82M91 1v82" class="art-line"/><rect x="34" y="22" width="27" height="18" class="art-cell"/><path d="M70 50h14M41 70h14M99 30h12" class="art-ink"/></svg>`,
+} as const;

@@ -455,7 +455,9 @@ the same logical API in a desktop host.
 
 Primary components:
 
-- workbook and sheet navigation;
+- workbook and sheet navigation, including device-local recent workbooks;
+- a reading view that shows only the rendered sheet, with editing and
+  inspection surfaces available on demand;
 - a virtualized grid that requests only visible cell regions;
 - formula bar and name box;
 - style and geometry controls;

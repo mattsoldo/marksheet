@@ -10,9 +10,32 @@ renderer-neutral viewport model to the pure-Rust `marksheet-view` crate.
 Viewer types are re-exported directly from the binding's generated
 `protocol.d.ts`; this package does not maintain a second wire model.
 
+The viewer opens in a **reading view** that shows only the rendered sheet:
+sheet tabs, the grid, and a slim status bar. **Details** (`Ctrl/⌘ + /`, or
+double-clicking a cell) expands the formula bar, editing controls, layer cues,
+the exact source view, and diagnostics; a badge on the button counts
+diagnostics while it is collapsed. Three themes share one token set:
+**Paper** (warm and typographic, horizontal rules only), **Ledger** (crisp
+gridlines and monospaced figures), and **Graphite** (a low-glare dark
+workspace, chosen by default when the OS prefers dark). An authored fill with
+no authored text color gets dark or light ink by luminance so it stays legible
+in every theme.
+
+A collapsible sidebar (`Ctrl/⌘ + \`) lists up to 12 recently opened
+workbooks, most recent first. They are remembered in this browser's IndexedDB
+and never leave the device. A workbook opened through the File System Access
+API (picker or drag-and-drop) is remembered by its file handle and reread from
+disk, after the browser asks for permission again. A workbook opened without a
+handle is remembered as a browser-local copy of its bytes, updated when Save
+downloads it. Opening another workbook over unsaved edits asks first.
+Entries can be removed one at a time or cleared. Theme, sidebar,
+and details choices are kept in `localStorage`. Both stores are optional
+conveniences: if storage is unavailable the viewer works the same and forgets
+on reload.
+
 The viewer provides:
 
-- local `.ms` open, guarded File System Access saves when a browser supplies a
+- local `.ms` open (picker, drag-and-drop, or a recent workbook), guarded File System Access saves when a browser supplies a
   file handle, and an explicit download fallback otherwise;
 - source-order sheet tabs and a finite 30×12 viewport with three-cell overscan;
 - separate authored, formula, calculated, virtual-fill, resolved-style, and
@@ -101,7 +124,7 @@ JavaScript glue, and Wasm files are present.
 
 Run `npm run dev`, open the displayed local URL in a browser, and choose
 `../examples/budget.ms`. Confirm the `Inputs` and `Summary` tabs remain in
-source order, select the declared name `tax_rate` using the name box, change
+source order, open **Details**, select the declared name `tax_rate` using the name box, change
 `0.2` to `0.25`,
 then select `summary!B4` and confirm the calculated value is `1545`. The source
 view should show only the focused source change.

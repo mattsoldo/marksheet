@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ViewerApp } from "../src/app";
 import { LocalFileSession } from "../src/local-file";
+import { MemoryRecentStore } from "../src/recent";
 import type {
   A1Range,
   AuthoredValue,
@@ -887,6 +888,401 @@ describe("viewer browser shell", () => {
         properties: expect.objectContaining({ number: "Currency", currency: "USD" }),
       })],
     }));
+    app.dispose();
+    root.remove();
+  });
+});
+
+describe("viewer reading view and workbook navigation", () => {
+  function memoryStorage(): Storage {
+    const values = new Map<string, string>();
+    return {
+      get length() { return values.size; },
+      clear: () => values.clear(),
+      getItem: (key) => values.get(key) ?? null,
+      key: (index) => [...values.keys()][index] ?? null,
+      removeItem: (key) => { values.delete(key); },
+      setItem: (key, value) => { values.set(key, value); },
+    };
+  }
+
+  function mount(storage = memoryStorage(), recentStore = new MemoryRecentStore()) {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    const app = new ViewerApp(root, adapter, { storage, recentStore });
+    return { root, adapter, app, storage, recentStore };
+  }
+
+  it("starts with only the rendered sheet and expands details on request", async () => {
+    const { root, app, storage } = mount();
+    await app.openSource(encoder.encode("fixture"), "fixture.ms");
+    const details = root.querySelector<HTMLElement>("#details-bar")!;
+    const inspector = root.querySelector<HTMLElement>("#inspector")!;
+    expect(details.hidden).toBe(true);
+    expect(inspector.hidden).toBe(true);
+    expect(root.querySelector("#grid")?.hasAttribute("hidden")).toBe(false);
+
+    root.querySelector<HTMLButtonElement>("#toggle-details")!.click();
+    expect(details.hidden).toBe(false);
+    expect(inspector.hidden).toBe(false);
+    expect(root.querySelector("#toggle-details")?.getAttribute("aria-pressed")).toBe("true");
+    expect(JSON.parse(storage.getItem("marksheet.viewer.preferences") ?? "{}").detailsOpen).toBe(true);
+    app.dispose();
+    root.remove();
+  });
+
+  it("opens details from a double-clicked cell for editing", async () => {
+    const { root, app } = mount();
+    await app.openSource(encoder.encode("fixture"), "fixture.ms");
+    root.querySelector<HTMLElement>("[data-coordinate='1:1']")!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    expect(root.querySelector<HTMLElement>("#details-bar")!.hidden).toBe(false);
+    expect(document.activeElement?.id).toBe("formula-input");
+    app.dispose();
+    root.remove();
+  });
+
+  it("applies and remembers one of the three themes", () => {
+    const storage = memoryStorage();
+    const first = mount(storage);
+    expect(first.app.theme).toBe("paper");
+    first.root.querySelector<HTMLButtonElement>("[data-theme-option='ledger']")!.click();
+    expect(first.root.querySelector<HTMLElement>("#app-shell")!.dataset.theme).toBe("ledger");
+    expect(first.root.querySelector("[data-theme-option='ledger']")?.getAttribute("aria-checked")).toBe("true");
+    first.app.dispose();
+    first.root.remove();
+
+    const second = mount(storage);
+    expect(second.app.theme).toBe("ledger");
+    second.app.dispose();
+    second.root.remove();
+  });
+
+  it("collapses the workbook sidebar and keeps that choice", () => {
+    const storage = memoryStorage();
+    const { root, app } = mount(storage);
+    const toggle = root.querySelector<HTMLButtonElement>("#toggle-sidebar")!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    toggle.click();
+    expect(root.querySelector<HTMLElement>("#app-shell")!.dataset.sidebar).toBe("closed");
+    expect(root.querySelector("#sidebar")?.hasAttribute("inert")).toBe(true);
+    expect(JSON.parse(storage.getItem("marksheet.viewer.preferences") ?? "{}").sidebarOpen).toBe(false);
+    app.dispose();
+    root.remove();
+  });
+
+  it("remembers opened workbooks and reopens a stored copy from the sidebar", async () => {
+    const recentStore = new MemoryRecentStore();
+    const { root, app, adapter } = mount(memoryStorage(), recentStore);
+    await app.openSource(encoder.encode("first workbook"), "first.ms");
+    await app.openSource(encoder.encode("second workbook"), "second.ms");
+    await vi.waitFor(() => expect([...root.querySelectorAll(".recent-name")].map((name) => name.textContent))
+      .toEqual(["second.ms", "first.ms"]));
+    expect(root.querySelector(".recent-item.active .recent-name")?.textContent).toBe("second.ms");
+
+    const open = vi.spyOn(adapter, "open");
+    root.querySelectorAll<HTMLButtonElement>(".recent-open")[1]!.click();
+    await vi.waitFor(() => expect(root.querySelector("#file-name")?.textContent).toBe("first.ms"));
+    expect(new TextDecoder().decode(open.mock.calls[0]?.[0])).toBe("first workbook");
+    await vi.waitFor(() => expect(root.querySelector(".recent-item.active .recent-name")?.textContent).toBe("first.ms"));
+    expect(app.recentWorkbooks).toHaveLength(2);
+
+    root.querySelector<HTMLButtonElement>("[aria-label='Forget second.ms']")!.click();
+    await vi.waitFor(() => expect(root.querySelectorAll(".recent-item")).toHaveLength(1));
+    root.querySelector<HTMLButtonElement>("#clear-recent")!.click();
+    await vi.waitFor(() => expect(root.querySelector<HTMLElement>("#recent-empty")!.hidden).toBe(false));
+    app.dispose();
+    root.remove();
+  });
+
+  it("marks edits and view-only workbooks beside the file name", async () => {
+    const { root, app, adapter } = mount();
+    await app.openSource(encoder.encode("fixture"), "fixture.ms");
+    const badge = root.querySelector<HTMLElement>("#file-badge")!;
+    expect(badge.hidden).toBe(true);
+    const formula = root.querySelector<HTMLInputElement>("#formula-input")!;
+    formula.value = "=1+2";
+    formula.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await vi.waitFor(() => expect(adapter.edit).toHaveBeenCalled());
+    await vi.waitFor(() => expect(badge.textContent).toBe("Edited"));
+    app.dispose();
+    root.remove();
+  });
+
+  it("asks before a recent workbook replaces unsaved edits", async () => {
+    const recentStore = new MemoryRecentStore();
+    const confirmDiscard = vi.fn((_message: string) => false);
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    const app = new ViewerApp(root, adapter, { storage: memoryStorage(), recentStore, confirmDiscard });
+    await app.openSource(encoder.encode("first workbook"), "first.ms");
+    await app.openSource(encoder.encode("second workbook"), "second.ms");
+    const formula = root.querySelector<HTMLInputElement>("#formula-input")!;
+    formula.value = "=1+2";
+    formula.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await vi.waitFor(() => expect(root.querySelector("#file-badge")?.textContent).toBe("Edited"));
+    await vi.waitFor(() => expect(root.querySelectorAll(".recent-open")).toHaveLength(2));
+
+    const open = vi.spyOn(adapter, "open");
+    root.querySelectorAll<HTMLButtonElement>(".recent-open")[1]!.click();
+    await vi.waitFor(() => expect(confirmDiscard).toHaveBeenCalledTimes(1));
+    expect(confirmDiscard.mock.calls[0]?.[0]).toContain("second.ms has unsaved edits");
+    expect(open).not.toHaveBeenCalled();
+    expect(root.querySelector("#file-name")?.textContent).toBe("second.ms");
+
+    confirmDiscard.mockReturnValue(true);
+    root.querySelectorAll<HTMLButtonElement>(".recent-open")[1]!.click();
+    await vi.waitFor(() => expect(root.querySelector("#file-name")?.textContent).toBe("first.ms"));
+    expect(root.querySelector<HTMLElement>("#file-badge")!.hidden).toBe(true);
+    app.dispose();
+    root.remove();
+  });
+
+  it("applies a save made before registration to the new recent entry only", async () => {
+    const recentStore = new MemoryRecentStore();
+    const updateSource = vi.spyOn(recentStore, "updateSource");
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    const app = new ViewerApp(root, adapter, { storage: memoryStorage(), recentStore });
+    await app.openSource(encoder.encode("first workbook"), "first.ms");
+    await vi.waitFor(() => expect(root.querySelector(".recent-item.active")).not.toBeNull());
+    let release: (() => void) | undefined;
+    vi.spyOn(recentStore, "remember").mockImplementationOnce((request) => new Promise((resolve) => {
+      release = () => resolve(MemoryRecentStore.prototype.remember.call(recentStore, request));
+    }));
+    await app.openSource(encoder.encode("second workbook"), "second.ms");
+    root.querySelector<HTMLButtonElement>("#save-file")!.click();
+    await vi.waitFor(() => expect(release).toBeDefined());
+    expect(updateSource).not.toHaveBeenCalled();
+    release?.();
+    await vi.waitFor(() => expect(root.querySelector("#status")?.textContent).toBe("Downloaded second.ms"));
+    const second = (await recentStore.list()).find((entry) => entry.name === "second.ms");
+    expect(updateSource).toHaveBeenCalledTimes(1);
+    expect(updateSource.mock.calls[0]?.[0]).toBe(second?.id);
+    app.dispose();
+    root.remove();
+  });
+
+  it("clears recents after a pending registration instead of being repopulated by it", async () => {
+    const recentStore = new MemoryRecentStore();
+    const root = document.createElement("main");
+    document.body.append(root);
+    const app = new ViewerApp(root, new MockAdapter(), { storage: memoryStorage(), recentStore });
+    await app.openSource(encoder.encode("first workbook"), "first.ms");
+    await vi.waitFor(() => expect(root.querySelector<HTMLElement>("#clear-recent")!.hidden).toBe(false));
+    let release: (() => void) | undefined;
+    vi.spyOn(recentStore, "remember").mockImplementationOnce((request) => new Promise((resolve) => {
+      release = () => resolve(MemoryRecentStore.prototype.remember.call(recentStore, request));
+    }));
+    await app.openSource(encoder.encode("second workbook"), "second.ms");
+    root.querySelector<HTMLButtonElement>("#clear-recent")!.click();
+    await vi.waitFor(() => expect(release).toBeDefined());
+    release?.();
+    await vi.waitFor(() => expect(root.querySelector<HTMLElement>("#recent-empty")!.hidden).toBe(false));
+    expect(await recentStore.list()).toEqual([]);
+    app.dispose();
+    root.remove();
+  });
+
+  it("runs recent-store operations one at a time across overlapping opens and Clear", async () => {
+    const recentStore = new MemoryRecentStore();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const releases: Array<() => void> = [];
+    const original = recentStore.remember.bind(recentStore);
+    vi.spyOn(recentStore, "remember").mockImplementation((request) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      return new Promise((resolve) => {
+        releases.push(() => { inFlight -= 1; resolve(original(request)); });
+      });
+    });
+    const root = document.createElement("main");
+    document.body.append(root);
+    const clear = vi.spyOn(recentStore, "clear");
+    const app = new ViewerApp(root, new MockAdapter(), { storage: memoryStorage(), recentStore });
+    await app.openSource(encoder.encode("first workbook"), "first.ms");
+    await app.openSource(encoder.encode("second workbook"), "second.ms");
+    root.querySelector<HTMLButtonElement>("#clear-recent")!.click();
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+    releases[0]!();
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    expect(clear).not.toHaveBeenCalled();
+    releases[1]!();
+    await vi.waitFor(() => expect(clear).toHaveBeenCalledTimes(1));
+    await clear.mock.results[0]?.value;
+    await vi.waitFor(async () => expect(await recentStore.list()).toEqual([]));
+    await vi.waitFor(() => expect(root.querySelectorAll(".recent-item")).toHaveLength(0));
+    expect(maxInFlight).toBe(1);
+    app.dispose();
+    root.remove();
+  });
+
+  it("marks a committed edit even when reading its source back fails", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    const app = new ViewerApp(root, adapter, { storage: memoryStorage(), recentStore: new MemoryRecentStore() });
+    await app.openSource(encoder.encode("fixture"), "fixture.ms");
+    adapter.sourceBytes = vi.fn(async () => { throw new Error("worker lost"); });
+    const formula = root.querySelector<HTMLInputElement>("#formula-input")!;
+    formula.value = "=1+2";
+    formula.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await vi.waitFor(() => expect(root.querySelector("#status")?.textContent).toContain("worker lost"));
+    expect(root.querySelector("#file-badge")?.textContent).toBe("Edited");
+    app.dispose();
+    root.remove();
+  });
+
+  it("reports a recent workbook's permission failure instead of doing nothing", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const app = new ViewerApp(root, new MockAdapter(), { storage: memoryStorage(), recentStore: new MemoryRecentStore() });
+    const base = encoder.encode("fixture");
+    const handle = {
+      name: "stored.ms",
+      getFile: vi.fn(async () => ({ arrayBuffer: async () => base.buffer })),
+      createWritable: vi.fn(),
+      queryPermission: vi.fn(async () => { throw new Error("permission state unavailable"); }),
+    };
+    await app.openSource(base, "stored.ms", new LocalFileSession(handle, base));
+    await vi.waitFor(() => expect(root.querySelectorAll(".recent-open")).toHaveLength(1));
+    root.querySelector<HTMLButtonElement>(".recent-open")!.click();
+    await vi.waitFor(() => expect(root.querySelector("#status")?.textContent).toBe("permission state unavailable"));
+    expect(root.querySelector("#status")?.className).toBe("status-error");
+    app.dispose();
+    root.remove();
+  });
+
+  it("requests write access from the Save click before touching the file", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    const base = encoder.encode("fixture");
+    const modes: string[] = [];
+    let grant: PermissionState = "denied";
+    const createWritable = vi.fn(async () => ({ write: vi.fn(async () => undefined), close: vi.fn(async () => undefined) }));
+    const handle = {
+      name: "fixture.ms",
+      getFile: vi.fn(async () => ({ arrayBuffer: async () => base.buffer })),
+      createWritable,
+      queryPermission: vi.fn(async ({ mode }: { mode: string }) => { modes.push(`query:${mode}`); return "prompt" as PermissionState; }),
+      requestPermission: vi.fn(async ({ mode }: { mode: string }) => { modes.push(`request:${mode}`); return grant; }),
+    };
+    const app = new ViewerApp(root, adapter, { storage: memoryStorage(), recentStore: new MemoryRecentStore() });
+    await app.openSource(base, "fixture.ms", new LocalFileSession(handle, base));
+    const formula = root.querySelector<HTMLInputElement>("#formula-input")!;
+    formula.value = "=1+2";
+    formula.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await vi.waitFor(() => expect(root.querySelector("#file-badge")?.textContent).toBe("Edited"));
+
+    root.querySelector<HTMLButtonElement>("#save-file")!.click();
+    await vi.waitFor(() => expect(root.querySelector("#status")?.textContent).toContain("Permission to save fixture.ms was not granted"));
+    expect(modes).toEqual(["query:readwrite", "request:readwrite"]);
+    expect(handle.getFile).not.toHaveBeenCalled();
+    expect(createWritable).not.toHaveBeenCalled();
+
+    grant = "granted";
+    root.querySelector<HTMLButtonElement>("#save-file")!.click();
+    await vi.waitFor(() => expect(createWritable).toHaveBeenCalledTimes(1));
+    app.dispose();
+    root.remove();
+  });
+
+  it("clears the fallback file input so the same file can be chosen again", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const app = new ViewerApp(root, new MockAdapter(), { storage: memoryStorage(), recentStore: new MemoryRecentStore() });
+    const input = root.querySelector<HTMLInputElement>("#file-input")!;
+    const file = new File(["fixture"], "picked.ms");
+    Object.defineProperty(input, "files", { configurable: true, value: [file] });
+    input.value = "";
+    let cleared = false;
+    Object.defineProperty(input, "value", { configurable: true, get: () => "", set: (value: string) => { cleared = value === ""; } });
+    input.dispatchEvent(new Event("change"));
+    expect(cleared).toBe(true);
+    await vi.waitFor(() => expect(root.querySelector("#file-name")?.textContent).toBe("picked.ms"));
+    app.dispose();
+    root.remove();
+  });
+
+  it("commits a typed formula before a Ctrl/⌘+S save", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    const app = new ViewerApp(root, adapter, { storage: memoryStorage(), recentStore: new MemoryRecentStore() });
+    await app.openSource(encoder.encode("fixture"), "fixture.ms");
+    const sourceBytes = vi.spyOn(adapter, "sourceBytes");
+    const formula = root.querySelector<HTMLInputElement>("#formula-input")!;
+    formula.focus();
+    formula.value = "=1+2";
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true }));
+    await vi.waitFor(() => expect(root.querySelector("#status")?.textContent).toBe("Downloaded fixture.ms"));
+    expect(adapter.edit).toHaveBeenCalledTimes(1);
+    expect(adapter.edit.mock.invocationCallOrder[0]!).toBeLessThan(sourceBytes.mock.invocationCallOrder.at(-1)!);
+
+    // A rejected edit must not be followed by a save of the old source.
+    adapter.edit.mockRejectedValueOnce(new Error("edit refused"));
+    const saves = sourceBytes.mock.calls.length;
+    formula.focus();
+    formula.value = "=9";
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true }));
+    await vi.waitFor(() => expect(root.querySelector("#status")?.textContent).toBe("edit refused"));
+    expect(sourceBytes.mock.calls.length).toBe(saves);
+    app.dispose();
+    root.remove();
+  });
+
+  it("asks for write access before committing a typed formula on Ctrl/⌘+S", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    const base = encoder.encode("fixture");
+    const order: string[] = [];
+    const handle = {
+      name: "fixture.ms",
+      getFile: vi.fn(async () => ({ arrayBuffer: async () => base.buffer })),
+      createWritable: vi.fn(async () => ({ write: vi.fn(async () => undefined), close: vi.fn(async () => undefined) })),
+      queryPermission: vi.fn(async () => "prompt" as PermissionState),
+      requestPermission: vi.fn(async () => { order.push("permission"); return "denied" as PermissionState; }),
+    };
+    const app = new ViewerApp(root, adapter, { storage: memoryStorage(), recentStore: new MemoryRecentStore() });
+    await app.openSource(base, "fixture.ms", new LocalFileSession(handle, base));
+    adapter.edit.mockImplementation(async () => { order.push("edit"); throw new Error("not expected"); });
+    const formula = root.querySelector<HTMLInputElement>("#formula-input")!;
+    formula.focus();
+    formula.value = "=1+2";
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true }));
+    await vi.waitFor(() => expect(root.querySelector("#status")?.textContent).toContain("Permission to save fixture.ms was not granted"));
+    expect(order).toEqual(["permission"]);
+    app.dispose();
+    root.remove();
+  });
+
+  it("keeps the Edited badge when unparseable external bytes leave edits unsaved", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    adapter.replaceSource = vi.fn(async () => { throw new Error("cannot parse external source"); });
+    const base = encoder.encode("fixture");
+    const session = new LocalFileSession({
+      getFile: vi.fn(async () => ({ arrayBuffer: async () => Uint8Array.of(0xff).buffer })),
+      createWritable: vi.fn(),
+    }, base);
+    const app = new ViewerApp(root, adapter, { storage: memoryStorage(), recentStore: new MemoryRecentStore() });
+    await app.openSource(base, "fixture.ms", session);
+    const formula = root.querySelector<HTMLInputElement>("#formula-input")!;
+    formula.value = "=1+2";
+    formula.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    const badge = root.querySelector<HTMLElement>("#file-badge")!;
+    await vi.waitFor(() => expect(badge.textContent).toBe("Edited"));
+
+    root.querySelector<HTMLButtonElement>("#save-file")!.click();
+    await vi.waitFor(() => expect(root.querySelector("#status")?.textContent).toContain("could not be parsed"));
+    expect(badge.hidden).toBe(false);
+    expect(badge.textContent).toBe("Edited");
     app.dispose();
     root.remove();
   });

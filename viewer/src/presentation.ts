@@ -73,7 +73,12 @@ export function applyResolvedStyle(
   if (properties.bold === true) element.style.fontWeight = "700";
   if (properties.italic === true) element.style.fontStyle = "italic";
   if (typeof properties.text_color === "string") element.style.color = properties.text_color;
-  if (typeof properties.fill === "string") element.style.backgroundColor = properties.fill;
+  if (typeof properties.fill === "string") {
+    element.style.backgroundColor = properties.fill;
+    // An authored fill without an authored text color must stay legible in every viewer theme.
+    const ink = typeof properties.text_color === "string" ? undefined : contrastingInk(properties.fill);
+    if (ink) element.style.color = ink;
+  }
   if (validSize(properties.font_size)) element.style.fontSize = `${cssNumber(properties.font_size)}pt`;
 
   const alignment = normalizeEnum(properties.align) ?? "general";
@@ -94,6 +99,38 @@ export function applyResolvedStyle(
       ? "flex-end"
       : "center";
   if (properties.wrap === true) element.style.whiteSpace = "normal";
+}
+
+/**
+ * Chooses dark or light ink for an opaque `#RRGGBB` or `#RRGGBBff` fill.
+ * Any translucent fill blends with the theme canvas, so it keeps the theme's ink.
+ */
+export function contrastingInk(fill: string): string | undefined {
+  const match = /^#([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(fill);
+  if (!match?.[1]) return undefined;
+  if (match[2] !== undefined && match[2].toLowerCase() !== "ff") return undefined;
+  const background = relativeLuminance(match[1]);
+  // Pick whichever actual ink has the higher WCAG contrast against the fill.
+  return contrastRatio(background, DARK_INK_LUMINANCE) >= contrastRatio(background, LIGHT_INK_LUMINANCE)
+    ? DARK_INK
+    : LIGHT_INK;
+}
+
+const DARK_INK = "#1d1c1a";
+const LIGHT_INK = "#f7f7f5";
+const DARK_INK_LUMINANCE = relativeLuminance(DARK_INK.slice(1));
+const LIGHT_INK_LUMINANCE = relativeLuminance(LIGHT_INK.slice(1));
+
+function relativeLuminance(hex: string): number {
+  const [red = 0, green = 0, blue = 0] = [0, 2, 4].map((offset) => {
+    const value = Number.parseInt(hex.slice(offset, offset + 2), 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+function contrastRatio(first: number, second: number): number {
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
 }
 
 export function presentedValueKind(cell: PresentedCell): ScalarValue["kind"] | AuthoredValue["kind"] {

@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import {
   applyResolvedStyle,
   columnTrackCss,
+  contrastingInk,
   emptyStyleProperties,
   formatPresentedCell,
   rowHeightCss,
@@ -92,5 +93,26 @@ describe("deterministic core presentation", () => {
     emptyText.source = { Authored: { value: { kind: "text", value: "" }, source_span: null } };
     expect(formatPresentedCell(blank, "en-US")).toBe("");
     expect(formatPresentedCell(emptyText, "en-US")).toBe('""');
+  });
+
+  it("keeps authored fills legible without overriding an authored text color", () => {
+    expect(contrastingInk("#e8eef7")).toBe("#1d1c1a");
+    expect(contrastingInk("#1f2937")).toBe("#f7f7f5");
+    expect(contrastingInk("#1f2937ff")).toBe("#f7f7f5");
+    expect(contrastingInk("#1f293720")).toBeUndefined();
+    expect(contrastingInk("#00000080")).toBeUndefined();
+    expect(contrastingInk("#000000fe")).toBeUndefined();
+    expect(contrastingInk("navy")).toBeUndefined();
+    // Midtones use whichever actual ink contrasts more (light ink ≈4.2:1 vs dark ≈3.8:1 here).
+    expect(contrastingInk("#777777")).toBe("#f7f7f5");
+    expect(contrastingInk("#888888")).toBe("#1d1c1a");
+
+    const light = document.createElement("button");
+    applyResolvedStyle(light, { ...emptyStyleProperties(), fill: "#e8eef7" }, "text");
+    expect(light.style.color).toBe("#1d1c1a");
+
+    const authored = document.createElement("button");
+    applyResolvedStyle(authored, { ...emptyStyleProperties(), fill: "#e8eef7", text_color: "#ff0000" }, "text");
+    expect(authored.style.color).toBe("#ff0000");
   });
 });
