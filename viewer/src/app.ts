@@ -418,11 +418,7 @@ export class ViewerApp {
     try {
       if (this.#fileSession) {
         // Request write access first, while the Save click still grants user activation.
-        const handle = this.#fileSession.handle as RecentFileHandle;
-        if (!await ensureHandlePermission(handle, "readwrite")) {
-          this.setStatus(`Permission to save ${this.#fileName} was not granted; no bytes were written`, "error");
-          return;
-        }
+        if (!await this.ensureWritePermission()) return;
         const result = await this.#fileSession.save(this.adapter);
         this.#source = this.#fileSession.baseSource;
         this.updateSourceView();
@@ -988,8 +984,22 @@ export class ViewerApp {
     const pending = document.activeElement === formula
       && !formula.disabled
       && formula.value !== sourceText(this.selectedCell());
+    // Ask for write access before the edit's awaits can outlive the key press's user activation.
+    if (pending && !await this.ensureWritePermission().catch((error: unknown) => {
+      this.setError(error);
+      return false;
+    })) return;
     if (pending && !await this.commitCell(formula.value)) return;
     await this.save();
+  }
+
+  /** True when there is no local file handle, or write access is granted. */
+  private async ensureWritePermission(): Promise<boolean> {
+    if (!this.#fileSession) return true;
+    const handle = this.#fileSession.handle as RecentFileHandle;
+    if (await ensureHandlePermission(handle, "readwrite")) return true;
+    this.setStatus(`Permission to save ${this.#fileName} was not granted; no bytes were written`, "error");
+    return false;
   }
 
   private bindFileDrop(): void {

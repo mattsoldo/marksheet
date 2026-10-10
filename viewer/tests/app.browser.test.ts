@@ -1235,6 +1235,32 @@ describe("viewer reading view and workbook navigation", () => {
     root.remove();
   });
 
+  it("asks for write access before committing a typed formula on Ctrl/⌘+S", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    const base = encoder.encode("fixture");
+    const order: string[] = [];
+    const handle = {
+      name: "fixture.ms",
+      getFile: vi.fn(async () => ({ arrayBuffer: async () => base.buffer })),
+      createWritable: vi.fn(async () => ({ write: vi.fn(async () => undefined), close: vi.fn(async () => undefined) })),
+      queryPermission: vi.fn(async () => "prompt" as PermissionState),
+      requestPermission: vi.fn(async () => { order.push("permission"); return "denied" as PermissionState; }),
+    };
+    const app = new ViewerApp(root, adapter, { storage: memoryStorage(), recentStore: new MemoryRecentStore() });
+    await app.openSource(base, "fixture.ms", new LocalFileSession(handle, base));
+    adapter.edit.mockImplementation(async () => { order.push("edit"); throw new Error("not expected"); });
+    const formula = root.querySelector<HTMLInputElement>("#formula-input")!;
+    formula.focus();
+    formula.value = "=1+2";
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true }));
+    await vi.waitFor(() => expect(root.querySelector("#status")?.textContent).toContain("Permission to save fixture.ms was not granted"));
+    expect(order).toEqual(["permission"]);
+    app.dispose();
+    root.remove();
+  });
+
   it("keeps the Edited badge when unparseable external bytes leave edits unsaved", async () => {
     const root = document.createElement("main");
     document.body.append(root);
