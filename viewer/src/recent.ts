@@ -99,10 +99,26 @@ const ENTRIES = "recent";
 const SOURCES = "recent-sources";
 
 /** Browser-local persistence. Nothing leaves the device. */
+/** Runs a task exclusively; used to make read-modify-write updates atomic. */
+export type ExclusiveRunner = <T>(task: () => Promise<T>) => Promise<T>;
+
+/**
+ * Every same-origin tab shares one IndexedDB database, so read-modify-write
+ * updates take an origin-wide Web Lock where the browser provides one.
+ */
+export async function originLock<T>(task: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator === "undefined" ? undefined : navigator.locks;
+  if (!locks) return task();
+  return await locks.request("marksheet-viewer-recent", task) as T;
+}
+
 export class IndexedDbRecentStore implements RecentWorkbookStore {
   #database: Promise<IDBDatabase> | undefined;
 
-  constructor(private readonly factory: IDBFactory) {}
+  constructor(
+    private readonly factory: IDBFactory,
+    private readonly exclusive: ExclusiveRunner = originLock,
+  ) {}
 
   async list(): Promise<RecentWorkbook[]> {
     const entries = await this.#request<RecentWorkbook[]>(ENTRIES, "readonly", (store) => store.getAll());
@@ -114,7 +130,11 @@ export class IndexedDbRecentStore implements RecentWorkbookStore {
     return value instanceof Uint8Array ? value.slice() : undefined;
   }
 
-  async remember(request: RememberRequest): Promise<RecentWorkbook> {
+  remember(request: RememberRequest): Promise<RecentWorkbook> {
+    return this.exclusive(() => this.#remember(request));
+  }
+
+  async #remember(request: RememberRequest): Promise<RecentWorkbook> {
     const entries = await this.list();
     const id = request.id && entries.some((entry) => entry.id === request.id)
       ? request.id
@@ -136,13 +156,15 @@ export class IndexedDbRecentStore implements RecentWorkbookStore {
     return record.entry;
   }
 
-  async updateSource(id: string, source: Uint8Array): Promise<void> {
-    const entry = (await this.list()).find((candidate) => candidate.id === id);
-    if (!entry || entry.handle) return;
-    const database = await this.#open();
-    await transactionDone(database, [ENTRIES, SOURCES], (transaction) => {
-      transaction.objectStore(ENTRIES).put({ ...entry, byteLength: source.byteLength });
-      transaction.objectStore(SOURCES).put(source.slice(), id);
+  updateSource(id: string, source: Uint8Array): Promise<void> {
+    return this.exclusive(async () => {
+      const entry = (await this.list()).find((candidate) => candidate.id === id);
+      if (!entry || entry.handle) return;
+      const database = await this.#open();
+      await transactionDone(database, [ENTRIES, SOURCES], (transaction) => {
+        transaction.objectStore(ENTRIES).put({ ...entry, byteLength: source.byteLength });
+        transaction.objectStore(SOURCES).put(source.slice(), id);
+      });
     });
   }
 

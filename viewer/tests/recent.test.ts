@@ -5,6 +5,7 @@ import {
   MemoryRecentStore,
   ensureHandlePermission,
   formatRelativeTime,
+  originLock,
   type RecentFileHandle,
   type RecentWorkbookStore,
 } from "../src/recent";
@@ -95,6 +96,20 @@ describe("recent workbooks", () => {
     ]);
     expect(listed).toEqual([]);
     expect((await store.list()).map((entry) => entry.id)).toEqual([remembered.id]);
+  });
+
+  it("takes the origin-wide Web Lock for read-modify-write updates when available", async () => {
+    const requests: string[] = [];
+    const locks = { request: async (name: string, task: () => Promise<unknown>) => { requests.push(name); return task(); } };
+    const original = Object.getOwnPropertyDescriptor(navigator, "locks");
+    Object.defineProperty(navigator, "locks", { configurable: true, value: locks });
+    try {
+      expect(await originLock(async () => 7)).toBe(7);
+      expect(requests).toEqual(["marksheet-viewer-recent"]);
+    } finally {
+      if (original) Object.defineProperty(navigator, "locks", original);
+      else Reflect.deleteProperty(navigator, "locks");
+    }
   });
 
   it("asks only for read access when reopening a handle", async () => {
