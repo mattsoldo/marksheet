@@ -94,6 +94,7 @@ export class ViewerApp {
   #recent: RecentWorkbook[] = [];
   #currentRecentId: string | undefined;
   #rememberGeneration = 0;
+  #pendingRemember: Promise<void> = Promise.resolve();
   #storage: Storage | undefined;
   #confirmDiscard: (message: string) => boolean;
   #preferences: ViewerPreferences;
@@ -154,7 +155,7 @@ export class ViewerApp {
       // Until the store answers, a download save must not update another entry's copy.
       this.#currentRecentId = recentId;
       // Remembering is a convenience and must never delay or fail an open.
-      void this.rememberWorkbook(source, fileName, opened.snapshot.sheets.length, session, recentId);
+      this.#pendingRemember = this.rememberWorkbook(source, fileName, opened.snapshot.sheets.length, session, recentId);
       const refreshed = await this.refreshVisibleRegion();
       if (refreshed) {
         const snapshot = this.#snapshot ?? opened.snapshot;
@@ -417,6 +418,8 @@ export class ViewerApp {
         this.#source = source;
         this.#dirty = false;
         this.updateFileBadge();
+        // A save right after opening applies to the entry once its id is known.
+        await this.#pendingRemember;
         if (this.#currentRecentId) {
           await this.#recentStore.updateSource(this.#currentRecentId, source).catch(() => undefined);
         }

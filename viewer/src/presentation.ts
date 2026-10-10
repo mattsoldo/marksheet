@@ -109,14 +109,28 @@ export function contrastingInk(fill: string): string | undefined {
   const match = /^#([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(fill);
   if (!match?.[1]) return undefined;
   if (match[2] !== undefined && match[2].toLowerCase() !== "ff") return undefined;
-  const channels = [0, 2, 4].map((offset) => {
-    const value = Number.parseInt(match[1]!.slice(offset, offset + 2), 16) / 255;
+  const background = relativeLuminance(match[1]);
+  // Pick whichever actual ink has the higher WCAG contrast against the fill.
+  return contrastRatio(background, DARK_INK_LUMINANCE) >= contrastRatio(background, LIGHT_INK_LUMINANCE)
+    ? DARK_INK
+    : LIGHT_INK;
+}
+
+const DARK_INK = "#1d1c1a";
+const LIGHT_INK = "#f7f7f5";
+const DARK_INK_LUMINANCE = relativeLuminance(DARK_INK.slice(1));
+const LIGHT_INK_LUMINANCE = relativeLuminance(LIGHT_INK.slice(1));
+
+function relativeLuminance(hex: string): number {
+  const [red = 0, green = 0, blue = 0] = [0, 2, 4].map((offset) => {
+    const value = Number.parseInt(hex.slice(offset, offset + 2), 16) / 255;
     return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
   });
-  const [red = 0, green = 0, blue = 0] = channels;
-  const luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
-  // Equal-contrast crossover between near-black and near-white ink.
-  return luminance > 0.179 ? "#1d1c1a" : "#f7f7f5";
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+function contrastRatio(first: number, second: number): number {
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
 }
 
 export function presentedValueKind(cell: PresentedCell): ScalarValue["kind"] | AuthoredValue["kind"] {

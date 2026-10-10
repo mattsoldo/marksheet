@@ -103,6 +103,9 @@ describe("deterministic core presentation", () => {
     expect(contrastingInk("#00000080")).toBeUndefined();
     expect(contrastingInk("#000000fe")).toBeUndefined();
     expect(contrastingInk("navy")).toBeUndefined();
+    // Midtones use whichever actual ink contrasts more (light ink ≈4.2:1 vs dark ≈3.8:1 here).
+    expect(contrastingInk("#777777")).toBe("#f7f7f5");
+    expect(contrastingInk("#888888")).toBe("#1d1c1a");
 
     const light = document.createElement("button");
     applyResolvedStyle(light, { ...emptyStyleProperties(), fill: "#e8eef7" }, "text");

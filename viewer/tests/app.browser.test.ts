@@ -1039,7 +1039,7 @@ describe("viewer reading view and workbook navigation", () => {
     root.remove();
   });
 
-  it("never saves a new workbook's bytes into the previous recent entry", async () => {
+  it("applies a save made before registration to the new recent entry only", async () => {
     const recentStore = new MemoryRecentStore();
     const updateSource = vi.spyOn(recentStore, "updateSource");
     const root = document.createElement("main");
@@ -1054,9 +1054,13 @@ describe("viewer reading view and workbook navigation", () => {
     }));
     await app.openSource(encoder.encode("second workbook"), "second.ms");
     root.querySelector<HTMLButtonElement>("#save-file")!.click();
-    await vi.waitFor(() => expect(root.querySelector("#status")?.textContent).toBe("Downloaded second.ms"));
+    await vi.waitFor(() => expect(release).toBeDefined());
     expect(updateSource).not.toHaveBeenCalled();
     release?.();
+    await vi.waitFor(() => expect(root.querySelector("#status")?.textContent).toBe("Downloaded second.ms"));
+    const second = (await recentStore.list()).find((entry) => entry.name === "second.ms");
+    expect(updateSource).toHaveBeenCalledTimes(1);
+    expect(updateSource.mock.calls[0]?.[0]).toBe(second?.id);
     app.dispose();
     root.remove();
   });
