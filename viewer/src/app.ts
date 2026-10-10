@@ -94,7 +94,8 @@ export class ViewerApp {
   #recent: RecentWorkbook[] = [];
   #currentRecentId: string | undefined;
   #rememberGeneration = 0;
-  #pendingRemember: Promise<void> = Promise.resolve();
+  /** Recent-store operations run one at a time, in request order. */
+  #recentQueue: Promise<unknown> = Promise.resolve();
   #storage: Storage | undefined;
   #confirmDiscard: (message: string) => boolean;
   #preferences: ViewerPreferences;
@@ -155,7 +156,7 @@ export class ViewerApp {
       // Until the store answers, a download save must not update another entry's copy.
       this.#currentRecentId = recentId;
       // Remembering is a convenience and must never delay or fail an open.
-      this.#pendingRemember = this.rememberWorkbook(source, fileName, opened.snapshot.sheets.length, session, recentId);
+      void this.rememberWorkbook(source, fileName, opened.snapshot.sheets.length, session, recentId);
       const refreshed = await this.refreshVisibleRegion();
       if (refreshed) {
         const snapshot = this.#snapshot ?? opened.snapshot;
@@ -426,11 +427,10 @@ export class ViewerApp {
         this.#source = source;
         this.#dirty = false;
         this.updateFileBadge();
-        // A save right after opening applies to the entry once its id is known.
-        await this.#pendingRemember;
-        if (this.#currentRecentId) {
-          await this.#recentStore.updateSource(this.#currentRecentId, source).catch(() => undefined);
-        }
+        // Queued behind any pending registration, so the entry id is known when this runs.
+        await this.withRecentStore(async (store) => {
+          if (this.#currentRecentId) await store.updateSource(this.#currentRecentId, source);
+        }).catch(() => undefined);
         this.setStatus(`Downloaded ${this.#fileName}`, "ok");
       }
     } catch (error) {
@@ -582,10 +582,11 @@ export class ViewerApp {
       const edited = responsePayload(await this.adapter.edit(transaction), "edited");
       this.#snapshot = edited.snapshot;
       if (edited.changed) {
-        const source = responsePayload(await this.adapter.sourceBytes(), "source_bytes");
-        this.#source = Uint8Array.from(source.source);
+        // The worker has committed the edit even if reading its bytes back fails.
         this.#dirty = true;
         this.updateFileBadge();
+        const source = responsePayload(await this.adapter.sourceBytes(), "source_bytes");
+        this.#source = Uint8Array.from(source.source);
         this.updateSourceView();
       }
       const refreshed = await this.refreshVisibleRegion();
@@ -1026,26 +1027,38 @@ export class ViewerApp {
     recentId: string | undefined,
   ): Promise<void> {
     const generation = ++this.#rememberGeneration;
-    try {
-      const handle = session?.handle as RecentFileHandle | undefined;
-      const entry = await this.#recentStore.remember({
-        name,
-        sheetCount,
-        source,
-        ...(handle ? { handle } : {}),
-        ...(recentId ? { id: recentId } : {}),
-      });
-      if (generation === this.#rememberGeneration) this.#currentRecentId = entry.id;
-    } catch {
-      // Remembering is best effort: storage may be full or disabled.
-      if (generation === this.#rememberGeneration) this.#currentRecentId = undefined;
-    }
+    const handle = session?.handle as RecentFileHandle | undefined;
+    await this.withRecentStore(async (store) => {
+      try {
+        const entry = await store.remember({
+          name,
+          sheetCount,
+          source,
+          ...(handle ? { handle } : {}),
+          ...(recentId ? { id: recentId } : {}),
+        });
+        if (generation === this.#rememberGeneration) this.#currentRecentId = entry.id;
+      } catch {
+        // Remembering is best effort: storage may be full or disabled.
+        if (generation === this.#rememberGeneration) this.#currentRecentId = undefined;
+      }
+    });
     await this.refreshRecent();
+  }
+
+  /**
+   * Serializes every recent-store operation, so a lookup, insert, eviction,
+   * save, forget, or clear never interleaves with another one.
+   */
+  private withRecentStore<T>(task: (store: RecentWorkbookStore) => Promise<T>): Promise<T> {
+    const run = this.#recentQueue.then(() => task(this.#recentStore));
+    this.#recentQueue = run.catch(() => undefined);
+    return run;
   }
 
   private async refreshRecent(): Promise<void> {
     try {
-      this.#recent = await this.#recentStore.list();
+      this.#recent = await this.withRecentStore((store) => store.list());
     } catch {
       this.#recent = [];
     }
@@ -1108,6 +1121,7 @@ export class ViewerApp {
       return;
     }
     if (isNarrowViewport()) this.applyPreferences({ sidebarOpen: false });
+    let opening = false;
     try {
       if (entry.handle) {
         if (!await ensureHandlePermission(entry.handle)) {
@@ -1122,34 +1136,39 @@ export class ViewerApp {
           return;
         }
         if (!this.confirmReplace(entry.name)) return;
+        opening = true;
         await this.openSource(bytes, entry.name, new LocalFileSession(entry.handle, bytes), entry.id);
         return;
       }
-      const bytes = await this.#recentStore.source(entry.id);
+      const bytes = await this.withRecentStore((store) => store.source(entry.id));
       if (!bytes) {
         this.setStatus(`The stored copy of ${entry.name} is no longer available`, "error");
         await this.forgetRecent(entry.id);
         return;
       }
       if (!this.confirmReplace(entry.name)) return;
+      opening = true;
       await this.openSource(bytes, entry.name, undefined, entry.id);
-    } catch {
-      // `openSource` already presents the structured worker error.
+    } catch (error) {
+      // `openSource` already presents its structured worker error; earlier failures are ours to show.
+      if (!opening) this.setError(error);
     }
   }
 
   private async forgetRecent(id: string): Promise<void> {
-    // A registration still in flight would otherwise recreate what is being removed.
-    await this.#pendingRemember;
-    await this.#recentStore.remove(id).catch(() => undefined);
-    if (this.#currentRecentId === id) this.#currentRecentId = undefined;
+    // Queued after any registration in flight, so it cannot recreate what is removed.
+    await this.withRecentStore(async (store) => {
+      await store.remove(id);
+      if (this.#currentRecentId === id) this.#currentRecentId = undefined;
+    }).catch(() => undefined);
     await this.refreshRecent();
   }
 
   private async clearRecent(): Promise<void> {
-    await this.#pendingRemember;
-    await this.#recentStore.clear().catch(() => undefined);
-    this.#currentRecentId = undefined;
+    await this.withRecentStore(async (store) => {
+      await store.clear();
+      this.#currentRecentId = undefined;
+    }).catch(() => undefined);
     await this.refreshRecent();
   }
 

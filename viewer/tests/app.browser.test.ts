@@ -1086,6 +1086,76 @@ describe("viewer reading view and workbook navigation", () => {
     root.remove();
   });
 
+  it("runs recent-store operations one at a time across overlapping opens and Clear", async () => {
+    const recentStore = new MemoryRecentStore();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const releases: Array<() => void> = [];
+    const original = recentStore.remember.bind(recentStore);
+    vi.spyOn(recentStore, "remember").mockImplementation((request) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      return new Promise((resolve) => {
+        releases.push(() => { inFlight -= 1; resolve(original(request)); });
+      });
+    });
+    const root = document.createElement("main");
+    document.body.append(root);
+    const clear = vi.spyOn(recentStore, "clear");
+    const app = new ViewerApp(root, new MockAdapter(), { storage: memoryStorage(), recentStore });
+    await app.openSource(encoder.encode("first workbook"), "first.ms");
+    await app.openSource(encoder.encode("second workbook"), "second.ms");
+    root.querySelector<HTMLButtonElement>("#clear-recent")!.click();
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+    releases[0]!();
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    expect(clear).not.toHaveBeenCalled();
+    releases[1]!();
+    await vi.waitFor(() => expect(clear).toHaveBeenCalledTimes(1));
+    await clear.mock.results[0]?.value;
+    await vi.waitFor(async () => expect(await recentStore.list()).toEqual([]));
+    await vi.waitFor(() => expect(root.querySelectorAll(".recent-item")).toHaveLength(0));
+    expect(maxInFlight).toBe(1);
+    app.dispose();
+    root.remove();
+  });
+
+  it("marks a committed edit even when reading its source back fails", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    const app = new ViewerApp(root, adapter, { storage: memoryStorage(), recentStore: new MemoryRecentStore() });
+    await app.openSource(encoder.encode("fixture"), "fixture.ms");
+    adapter.sourceBytes = vi.fn(async () => { throw new Error("worker lost"); });
+    const formula = root.querySelector<HTMLInputElement>("#formula-input")!;
+    formula.value = "=1+2";
+    formula.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await vi.waitFor(() => expect(root.querySelector("#status")?.textContent).toContain("worker lost"));
+    expect(root.querySelector("#file-badge")?.textContent).toBe("Edited");
+    app.dispose();
+    root.remove();
+  });
+
+  it("reports a recent workbook's permission failure instead of doing nothing", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const app = new ViewerApp(root, new MockAdapter(), { storage: memoryStorage(), recentStore: new MemoryRecentStore() });
+    const base = encoder.encode("fixture");
+    const handle = {
+      name: "stored.ms",
+      getFile: vi.fn(async () => ({ arrayBuffer: async () => base.buffer })),
+      createWritable: vi.fn(),
+      queryPermission: vi.fn(async () => { throw new Error("permission state unavailable"); }),
+    };
+    await app.openSource(base, "stored.ms", new LocalFileSession(handle, base));
+    await vi.waitFor(() => expect(root.querySelectorAll(".recent-open")).toHaveLength(1));
+    root.querySelector<HTMLButtonElement>(".recent-open")!.click();
+    await vi.waitFor(() => expect(root.querySelector("#status")?.textContent).toBe("permission state unavailable"));
+    expect(root.querySelector("#status")?.className).toBe("status-error");
+    app.dispose();
+    root.remove();
+  });
+
   it("keeps the Edited badge when unparseable external bytes leave edits unsaved", async () => {
     const root = document.createElement("main");
     document.body.append(root);
