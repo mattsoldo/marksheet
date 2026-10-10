@@ -103,8 +103,8 @@ const SOURCES = "recent-sources";
 export type ExclusiveRunner = <T>(task: () => Promise<T>) => Promise<T>;
 
 /**
- * Every same-origin tab shares one IndexedDB database, so read-modify-write
- * updates take an origin-wide Web Lock where the browser provides one.
+ * Every same-origin tab shares one IndexedDB database, so every write takes an
+ * origin-wide Web Lock where the browser provides one.
  */
 export async function originLock<T>(task: () => Promise<T>): Promise<T> {
   const locks = typeof navigator === "undefined" ? undefined : navigator.locks;
@@ -168,19 +168,24 @@ export class IndexedDbRecentStore implements RecentWorkbookStore {
     });
   }
 
-  async remove(id: string): Promise<void> {
-    const database = await this.#open();
-    await transactionDone(database, [ENTRIES, SOURCES], (transaction) => {
-      transaction.objectStore(ENTRIES).delete(id);
-      transaction.objectStore(SOURCES).delete(id);
+  // Destructive writes share the lock so they order against other tabs' updates.
+  remove(id: string): Promise<void> {
+    return this.exclusive(async () => {
+      const database = await this.#open();
+      await transactionDone(database, [ENTRIES, SOURCES], (transaction) => {
+        transaction.objectStore(ENTRIES).delete(id);
+        transaction.objectStore(SOURCES).delete(id);
+      });
     });
   }
 
-  async clear(): Promise<void> {
-    const database = await this.#open();
-    await transactionDone(database, [ENTRIES, SOURCES], (transaction) => {
-      transaction.objectStore(ENTRIES).clear();
-      transaction.objectStore(SOURCES).clear();
+  clear(): Promise<void> {
+    return this.exclusive(async () => {
+      const database = await this.#open();
+      await transactionDone(database, [ENTRIES, SOURCES], (transaction) => {
+        transaction.objectStore(ENTRIES).clear();
+        transaction.objectStore(SOURCES).clear();
+      });
     });
   }
 
