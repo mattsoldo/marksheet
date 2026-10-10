@@ -1,6 +1,9 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  // The website's Pages build serves the viewer beneath its own path with
+  // relative asset URLs (`MARKSHEET_VIEWER_BASE=./`).
+  base: process.env.MARKSHEET_VIEWER_BASE ?? "/",
   server: {
     fs: {
       // The production adapter imports the versioned client implementation

@@ -63,6 +63,9 @@ The `.ms` extension is proposed for Marksheet workbooks. Every file also begins
 with a self-identifying and versioned `#!marksheet` header, so tools do not need
 to trust the extension.
 
+The [website](site/README.md) has a live playground that runs the reference
+engine in the browser, and hosts the viewer.
+
 ## Documents
 
 - [Product specification](PRODUCT.md) — the problem, product promise, scope,

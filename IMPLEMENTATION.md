@@ -503,6 +503,15 @@ viewer in the system browser rather than claiming an in-editor preview. The
 task must remain local-only and must not upload or overwrite a selected
 workbook.
 
+### 11.4 Project website
+
+`site/` is the project's static website, deployed to GitHub Pages with the full
+viewer beneath `app/`. Its playground is a demonstration, not a second viewer:
+it runs the same `marksheet-worker@1` client and Wasm build, reuses the viewer's
+presentation code, and shows a bounded reading view of one sheet. Its source
+highlighting is presentation only; the engine remains the sole authority on
+parsing and diagnostics.
+
 ## 12. Plugin host
 
 Draft 0.1 plugins are installed by an application or linked at build time. A

@@ -92,7 +92,9 @@ npm run build
 glue, and Wasm module into `dist/`; the build fails if any one is missing. Thus
 `npm run preview` serves a self-contained worker build with no manual copying.
 The worker URL is resolved beneath Vite's `BASE_URL`, including project-site
-deployments such as `/marksheet/`.
+deployments such as `/marksheet/`. Set `MARKSHEET_VIEWER_BASE` to build for
+another base; the website's Pages build uses `MARKSHEET_VIEWER_BASE=./` so the
+viewer works beneath `app/` at any path.
 
 The generated module comes from
 `bindings/wasm/target/wasm32-unknown-unknown/release/marksheet_wasm.wasm`.
