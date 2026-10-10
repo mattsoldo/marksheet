@@ -1348,6 +1348,29 @@ describe("viewer reading view and workbook navigation", () => {
     }
   });
 
+  it("re-requests the window when the extent shrinks past the current position", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    adapter.extent = { start: { column: 1, row: 1 }, end: { column: 4, row: 400 } };
+    const app = new ViewerApp(root, adapter, { storage: memoryStorage(), recentStore: new MemoryRecentStore() });
+    await app.openSource(encoder.encode("fixture"), "fixture.ms");
+    const nameBox = root.querySelector<HTMLInputElement>("#name-box")!;
+    nameBox.value = "A300";
+    nameBox.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await vi.waitFor(() => expect(root.querySelector("#viewport-status")?.textContent).toContain("A297:E"));
+
+    // An edit shrinks the sheet to A1; the next response reports the new extent.
+    adapter.extent = { start: { column: 1, row: 1 }, end: { column: 1, row: 1 } };
+    const formula = root.querySelector<HTMLInputElement>("#formula-input")!;
+    formula.value = "1";
+    formula.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await vi.waitFor(() => expect(root.querySelector("#viewport-status")?.textContent).toContain("A1:C5"));
+    expect(root.querySelectorAll(".grid-cell")).toHaveLength(15);
+    app.dispose();
+    root.remove();
+  });
+
   it("gives an empty sheet a small blank canvas in the reading view", async () => {
     const root = document.createElement("main");
     document.body.append(root);

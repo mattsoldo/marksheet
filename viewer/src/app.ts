@@ -542,11 +542,17 @@ export class ViewerApp {
     if (!sheet) return false;
     const generation = this.#regionGate.begin();
     const limit = this.fitLimit();
-    // Clamp only this request, so reopening Details returns to the unclamped position.
+    // Clamp only this request, so reopening Details returns to the unclamped position. At
+    // most the last screenful of the fit is shown, never the last row alone at the top.
+    const size = this.gridShellSize();
+    const visible = viewportForContainer(this.#anchor, size);
     const anchor = limit
-      ? { column: Math.min(this.#anchor.column, limit.column), row: Math.min(this.#anchor.row, limit.row) }
+      ? {
+          column: Math.min(this.#anchor.column, Math.max(1, limit.column - visible.visibleColumns + 1)),
+          row: Math.min(this.#anchor.row, Math.max(1, limit.row - visible.visibleRows + 1)),
+        }
       : this.#anchor;
-    const range = computeViewport(viewportForContainer(anchor, this.gridShellSize()));
+    const range = computeViewport({ ...visible, anchor });
     this.setBusy(true, quiet ? undefined : `Loading ${sheet}…`);
     if (!fromShift) this.#pendingRefreshes += 1;
     try {
@@ -775,7 +781,13 @@ export class ViewerApp {
       : undefined;
     const limit = this.fitLimit();
     // The reading view stops at the content extent; the window itself stays bounded either way.
-    const range = clipRange(region.range, limit) ?? { start: region.range.start, end: region.range.start };
+    const range = clipRange(region.range, limit);
+    if (!range) {
+      // The request was clamped to an extent that has since shrunk (an edit or an external
+      // change), so this window lies wholly past the fit; ask again from the new clamp.
+      void this.refreshVisibleRegion({ quiet: true });
+      return;
+    }
     grid.hidden = false;
     empty.hidden = true;
     grid.classList.toggle("grid-fitted", Boolean(limit));
