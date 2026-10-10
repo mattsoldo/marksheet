@@ -392,9 +392,17 @@ export class ViewerApp {
   }
 
   private async openBrowserFile(file: File): Promise<void> {
+    let bytes: Uint8Array;
+    try {
+      bytes = new Uint8Array(await file.arrayBuffer());
+    } catch (error) {
+      this.setError(error);
+      return;
+    }
+    // Confirm after the read so no edit can land between the decision and the replacement.
     if (!this.confirmReplace(file.name)) return;
     try {
-      await this.openSource(new Uint8Array(await file.arrayBuffer()), file.name);
+      await this.openSource(bytes, file.name);
     } catch {
       // `openSource` already presents the structured worker error.
     }
@@ -1131,12 +1139,15 @@ export class ViewerApp {
   }
 
   private async forgetRecent(id: string): Promise<void> {
+    // A registration still in flight would otherwise recreate what is being removed.
+    await this.#pendingRemember;
     await this.#recentStore.remove(id).catch(() => undefined);
     if (this.#currentRecentId === id) this.#currentRecentId = undefined;
     await this.refreshRecent();
   }
 
   private async clearRecent(): Promise<void> {
+    await this.#pendingRemember;
     await this.#recentStore.clear().catch(() => undefined);
     this.#currentRecentId = undefined;
     await this.refreshRecent();

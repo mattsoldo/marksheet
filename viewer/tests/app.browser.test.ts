@@ -1065,6 +1065,27 @@ describe("viewer reading view and workbook navigation", () => {
     root.remove();
   });
 
+  it("clears recents after a pending registration instead of being repopulated by it", async () => {
+    const recentStore = new MemoryRecentStore();
+    const root = document.createElement("main");
+    document.body.append(root);
+    const app = new ViewerApp(root, new MockAdapter(), { storage: memoryStorage(), recentStore });
+    await app.openSource(encoder.encode("first workbook"), "first.ms");
+    await vi.waitFor(() => expect(root.querySelector<HTMLElement>("#clear-recent")!.hidden).toBe(false));
+    let release: (() => void) | undefined;
+    vi.spyOn(recentStore, "remember").mockImplementationOnce((request) => new Promise((resolve) => {
+      release = () => resolve(MemoryRecentStore.prototype.remember.call(recentStore, request));
+    }));
+    await app.openSource(encoder.encode("second workbook"), "second.ms");
+    root.querySelector<HTMLButtonElement>("#clear-recent")!.click();
+    await vi.waitFor(() => expect(release).toBeDefined());
+    release?.();
+    await vi.waitFor(() => expect(root.querySelector<HTMLElement>("#recent-empty")!.hidden).toBe(false));
+    expect(await recentStore.list()).toEqual([]);
+    app.dispose();
+    root.remove();
+  });
+
   it("keeps the Edited badge when unparseable external bytes leave edits unsaved", async () => {
     const root = document.createElement("main");
     document.body.append(root);
