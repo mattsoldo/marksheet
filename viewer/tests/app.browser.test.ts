@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ViewerApp } from "../src/app";
 import { LocalFileSession } from "../src/local-file";
+import { MemoryRecentStore } from "../src/recent";
 import type {
   A1Range,
   AuthoredValue,
@@ -887,6 +888,123 @@ describe("viewer browser shell", () => {
         properties: expect.objectContaining({ number: "Currency", currency: "USD" }),
       })],
     }));
+    app.dispose();
+    root.remove();
+  });
+});
+
+describe("viewer reading view and workbook navigation", () => {
+  function memoryStorage(): Storage {
+    const values = new Map<string, string>();
+    return {
+      get length() { return values.size; },
+      clear: () => values.clear(),
+      getItem: (key) => values.get(key) ?? null,
+      key: (index) => [...values.keys()][index] ?? null,
+      removeItem: (key) => { values.delete(key); },
+      setItem: (key, value) => { values.set(key, value); },
+    };
+  }
+
+  function mount(storage = memoryStorage(), recentStore = new MemoryRecentStore()) {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    const app = new ViewerApp(root, adapter, { storage, recentStore });
+    return { root, adapter, app, storage, recentStore };
+  }
+
+  it("starts with only the rendered sheet and expands details on request", async () => {
+    const { root, app, storage } = mount();
+    await app.openSource(encoder.encode("fixture"), "fixture.ms");
+    const details = root.querySelector<HTMLElement>("#details-bar")!;
+    const inspector = root.querySelector<HTMLElement>("#inspector")!;
+    expect(details.hidden).toBe(true);
+    expect(inspector.hidden).toBe(true);
+    expect(root.querySelector("#grid")?.hasAttribute("hidden")).toBe(false);
+
+    root.querySelector<HTMLButtonElement>("#toggle-details")!.click();
+    expect(details.hidden).toBe(false);
+    expect(inspector.hidden).toBe(false);
+    expect(root.querySelector("#toggle-details")?.getAttribute("aria-pressed")).toBe("true");
+    expect(JSON.parse(storage.getItem("marksheet.viewer.preferences") ?? "{}").detailsOpen).toBe(true);
+    app.dispose();
+    root.remove();
+  });
+
+  it("opens details from a double-clicked cell for editing", async () => {
+    const { root, app } = mount();
+    await app.openSource(encoder.encode("fixture"), "fixture.ms");
+    root.querySelector<HTMLElement>("[data-coordinate='1:1']")!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    expect(root.querySelector<HTMLElement>("#details-bar")!.hidden).toBe(false);
+    expect(document.activeElement?.id).toBe("formula-input");
+    app.dispose();
+    root.remove();
+  });
+
+  it("applies and remembers one of the three themes", () => {
+    const storage = memoryStorage();
+    const first = mount(storage);
+    expect(first.app.theme).toBe("paper");
+    first.root.querySelector<HTMLButtonElement>("[data-theme-option='ledger']")!.click();
+    expect(first.root.querySelector<HTMLElement>("#app-shell")!.dataset.theme).toBe("ledger");
+    expect(first.root.querySelector("[data-theme-option='ledger']")?.getAttribute("aria-checked")).toBe("true");
+    first.app.dispose();
+    first.root.remove();
+
+    const second = mount(storage);
+    expect(second.app.theme).toBe("ledger");
+    second.app.dispose();
+    second.root.remove();
+  });
+
+  it("collapses the workbook sidebar and keeps that choice", () => {
+    const storage = memoryStorage();
+    const { root, app } = mount(storage);
+    const toggle = root.querySelector<HTMLButtonElement>("#toggle-sidebar")!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    toggle.click();
+    expect(root.querySelector<HTMLElement>("#app-shell")!.dataset.sidebar).toBe("closed");
+    expect(root.querySelector("#sidebar")?.hasAttribute("inert")).toBe(true);
+    expect(JSON.parse(storage.getItem("marksheet.viewer.preferences") ?? "{}").sidebarOpen).toBe(false);
+    app.dispose();
+    root.remove();
+  });
+
+  it("remembers opened workbooks and reopens a stored copy from the sidebar", async () => {
+    const recentStore = new MemoryRecentStore();
+    const { root, app, adapter } = mount(memoryStorage(), recentStore);
+    await app.openSource(encoder.encode("first workbook"), "first.ms");
+    await app.openSource(encoder.encode("second workbook"), "second.ms");
+    await vi.waitFor(() => expect([...root.querySelectorAll(".recent-name")].map((name) => name.textContent))
+      .toEqual(["second.ms", "first.ms"]));
+    expect(root.querySelector(".recent-item.active .recent-name")?.textContent).toBe("second.ms");
+
+    const open = vi.spyOn(adapter, "open");
+    root.querySelectorAll<HTMLButtonElement>(".recent-open")[1]!.click();
+    await vi.waitFor(() => expect(root.querySelector("#file-name")?.textContent).toBe("first.ms"));
+    expect(new TextDecoder().decode(open.mock.calls[0]?.[0])).toBe("first workbook");
+    await vi.waitFor(() => expect(root.querySelector(".recent-item.active .recent-name")?.textContent).toBe("first.ms"));
+    expect(app.recentWorkbooks).toHaveLength(2);
+
+    root.querySelector<HTMLButtonElement>("[aria-label='Forget second.ms']")!.click();
+    await vi.waitFor(() => expect(root.querySelectorAll(".recent-item")).toHaveLength(1));
+    root.querySelector<HTMLButtonElement>("#clear-recent")!.click();
+    await vi.waitFor(() => expect(root.querySelector<HTMLElement>("#recent-empty")!.hidden).toBe(false));
+    app.dispose();
+    root.remove();
+  });
+
+  it("marks edits and view-only workbooks beside the file name", async () => {
+    const { root, app, adapter } = mount();
+    await app.openSource(encoder.encode("fixture"), "fixture.ms");
+    const badge = root.querySelector<HTMLElement>("#file-badge")!;
+    expect(badge.hidden).toBe(true);
+    const formula = root.querySelector<HTMLInputElement>("#formula-input")!;
+    formula.value = "=1+2";
+    formula.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await vi.waitFor(() => expect(adapter.edit).toHaveBeenCalled());
+    await vi.waitFor(() => expect(badge.textContent).toBe("Edited"));
     app.dispose();
     root.remove();
   });

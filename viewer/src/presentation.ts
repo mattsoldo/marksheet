@@ -73,7 +73,12 @@ export function applyResolvedStyle(
   if (properties.bold === true) element.style.fontWeight = "700";
   if (properties.italic === true) element.style.fontStyle = "italic";
   if (typeof properties.text_color === "string") element.style.color = properties.text_color;
-  if (typeof properties.fill === "string") element.style.backgroundColor = properties.fill;
+  if (typeof properties.fill === "string") {
+    element.style.backgroundColor = properties.fill;
+    // An authored fill without an authored text color must stay legible in every viewer theme.
+    const ink = typeof properties.text_color === "string" ? undefined : contrastingInk(properties.fill);
+    if (ink) element.style.color = ink;
+  }
   if (validSize(properties.font_size)) element.style.fontSize = `${cssNumber(properties.font_size)}pt`;
 
   const alignment = normalizeEnum(properties.align) ?? "general";
@@ -94,6 +99,24 @@ export function applyResolvedStyle(
       ? "flex-end"
       : "center";
   if (properties.wrap === true) element.style.whiteSpace = "normal";
+}
+
+/**
+ * Chooses dark or light ink for an opaque `#RRGGBB` or `#RRGGBBAA` fill.
+ * Translucent fills blend with the theme canvas, so they keep the theme's ink.
+ */
+export function contrastingInk(fill: string): string | undefined {
+  const match = /^#([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(fill);
+  if (!match?.[1]) return undefined;
+  if (match[2] !== undefined && Number.parseInt(match[2], 16) < 0x80) return undefined;
+  const channels = [0, 2, 4].map((offset) => {
+    const value = Number.parseInt(match[1]!.slice(offset, offset + 2), 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  const [red = 0, green = 0, blue = 0] = channels;
+  const luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+  // Equal-contrast crossover between near-black and near-white ink.
+  return luminance > 0.179 ? "#1d1c1a" : "#f7f7f5";
 }
 
 export function presentedValueKind(cell: PresentedCell): ScalarValue["kind"] | AuthoredValue["kind"] {
