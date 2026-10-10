@@ -118,6 +118,8 @@ export class ViewerApp {
   #shifting = false;
   #rescanAfterShift = false;
   readonly #onResize = () => this.scheduleWindowCheck();
+  /** Watches the grid area itself: the sidebar and Details change its size without a window resize. */
+  #resizeObserver: ResizeObserver | undefined;
   #fileName = "workbook.ms";
   #fileSession: LocalFileSession | undefined;
   #source: Uint8Array<ArrayBufferLike> = new Uint8Array();
@@ -158,6 +160,7 @@ export class ViewerApp {
   dispose(): void {
     this.#disposed = true;
     document.removeEventListener("keydown", this.#keydown);
+    this.#resizeObserver?.disconnect();
     window.removeEventListener("resize", this.#onResize);
     if (this.#scrollFrame && typeof cancelAnimationFrame === "function") cancelAnimationFrame(this.#scrollFrame);
     this.#regionGate.invalidate();
@@ -351,8 +354,14 @@ export class ViewerApp {
     }
     this.bindFileDrop();
     document.addEventListener("keydown", this.#keydown);
-    this.byId("grid-shell").addEventListener("scroll", () => this.scheduleWindowCheck(), { passive: true });
-    window.addEventListener("resize", this.#onResize);
+    const shell = this.byId("grid-shell");
+    shell.addEventListener("scroll", () => this.scheduleWindowCheck(), { passive: true });
+    if (typeof ResizeObserver === "function") {
+      this.#resizeObserver = new ResizeObserver(this.#onResize);
+      this.#resizeObserver.observe(shell);
+    } else {
+      window.addEventListener("resize", this.#onResize);
+    }
     this.byId<HTMLInputElement>("file-input").addEventListener("change", (event) => {
       const input = event.currentTarget as HTMLInputElement;
       const file = input.files?.[0];
@@ -697,14 +706,14 @@ export class ViewerApp {
   }
 
   private async pan(columns: number, rows: number): Promise<void> {
-    this.#anchor = {
-      column: Math.max(1, this.#anchor.column + columns),
-      row: Math.max(1, this.#anchor.row + rows),
-    };
-    this.#selected = {
-      column: Math.max(1, this.#selected.column + columns),
-      row: Math.max(1, this.#selected.row + rows),
-    };
+    // Like the arrow keys, panning stays inside the reading view's fit.
+    const limit = this.fitLimit();
+    const move = (from: Coordinate): Coordinate => ({
+      column: Math.min(Math.max(1, from.column + columns), limit?.column ?? Number.MAX_SAFE_INTEGER),
+      row: Math.min(Math.max(1, from.row + rows), limit?.row ?? Number.MAX_SAFE_INTEGER),
+    });
+    this.#anchor = move(this.#anchor);
+    this.#selected = move(this.#selected);
     this.byId<HTMLInputElement>("name-box").value = formatCoordinate(this.#selected);
     await this.refreshVisibleRegion();
   }

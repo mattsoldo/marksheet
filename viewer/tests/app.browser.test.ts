@@ -1310,6 +1310,44 @@ describe("viewer reading view and workbook navigation", () => {
     root.remove();
   });
 
+  it("keeps the pan buttons inside the fitted reading view", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    adapter.extent = { start: { column: 1, row: 1 }, end: { column: 7, row: 4 } };
+    const app = new ViewerApp(root, adapter, { storage: memoryStorage(), recentStore: new MemoryRecentStore() });
+    await app.openSource(encoder.encode("fixture"), "fixture.ms");
+    root.querySelector<HTMLButtonElement>("#pan-down")!.click();
+    root.querySelector<HTMLButtonElement>("#pan-right")!.click();
+    await vi.waitFor(() => expect(root.querySelector(".cell-selected")?.getAttribute("data-coordinate")).toBe("8:6"));
+    expect((root.querySelector("#name-box") as HTMLInputElement).value).toBe("H6");
+    app.dispose();
+    root.remove();
+  });
+
+  it("re-checks the window when the grid area itself resizes", async () => {
+    const observed: Element[] = [];
+    const original = globalThis.ResizeObserver;
+    let disconnected = false;
+    globalThis.ResizeObserver = class {
+      constructor(readonly callback: ResizeObserverCallback) {}
+      observe(target: Element) { observed.push(target); }
+      unobserve() {}
+      disconnect() { disconnected = true; }
+    } as unknown as typeof ResizeObserver;
+    try {
+      const root = document.createElement("main");
+      document.body.append(root);
+      const app = new ViewerApp(root, new MockAdapter(), { storage: memoryStorage(), recentStore: new MemoryRecentStore() });
+      expect(observed).toEqual([root.querySelector("#grid-shell")]);
+      app.dispose();
+      expect(disconnected).toBe(true);
+      root.remove();
+    } finally {
+      globalThis.ResizeObserver = original;
+    }
+  });
+
   it("gives an empty sheet a small blank canvas in the reading view", async () => {
     const root = document.createElement("main");
     document.body.append(root);
