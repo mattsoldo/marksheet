@@ -158,12 +158,15 @@ export class Playground {
       );
       this.#renderDiagnostics(bytes, diagnostics, total - diagnostics.length, undefined, truncated);
       const elapsed = Math.max(1, Math.round(performance.now() - started));
-      this.#setStatus(
-        total ? "warn" : "ok",
-        total
-          ? `Calculated with ${truncated ? "at least " : ""}${total} ${total === 1 ? "diagnostic" : "diagnostics"} · ${elapsed} ms`
-          : `Parsed and calculated locally in ${elapsed} ms`,
-      );
+      const counted = `${truncated ? "at least " : ""}${total} ${total === 1 ? "diagnostic" : "diagnostics"}`;
+      if (reading && !reading.calculated) {
+        this.#setStatus("warn", `Not calculated · showing authored values · ${counted}`);
+      } else {
+        this.#setStatus(
+          total ? "warn" : "ok",
+          total ? `Calculated with ${counted} · ${elapsed} ms` : `Parsed and calculated locally in ${elapsed} ms`,
+        );
+      }
     } catch (error) {
       // A rejected source leaves the worker usable; anything else (a crashed or
       // cancelled worker) leaves the client without one, so start over next time.
@@ -191,7 +194,7 @@ export class Playground {
   async #readingRegion(
     client: Client,
     sheet: string,
-  ): Promise<{ region: VisibleRegion; totals: number[]; truncated: boolean }> {
+  ): Promise<{ region: VisibleRegion; totals: number[]; truncated: boolean; calculated: boolean }> {
     const probe = await this.#region(client, sheet, { start: { column: 1, row: 1 }, end: { column: 1, row: 1 } });
     const extent = probe.region.sheet.extent;
     const end = {
@@ -201,8 +204,24 @@ export class Playground {
     const range = { start: { column: 1, row: 1 }, end };
     const [{ region, omitted }, calculation] = await Promise.all([
       this.#region(client, sheet, range),
-      client.calculate(sheet, range),
+      // A workbook can be viewable but not calculable (a required extension is
+      // unavailable): keep the projection and show authored values instead.
+      client.calculate(sheet, range).catch((error: unknown) => {
+        if (error instanceof WorkerProtocolError) return error;
+        throw error;
+      }),
     ]);
+    if (calculation instanceof WorkerProtocolError) {
+      return {
+        region: { ...region, diagnostics: [...region.diagnostics, ...calculation.diagnostics] },
+        totals: [
+          region.diagnostics.length + omitted,
+          calculation.diagnostics.length + calculation.diagnostics_omitted,
+        ],
+        truncated: omitted > 0 || calculation.diagnostics_omitted > 0,
+        calculated: false,
+      };
+    }
     if (calculation.response.kind !== "calculation") throw new Error(`unexpected ${calculation.response.kind}`);
     // Projection and calculation are separate requests; join them by coordinate.
     const values = new Map(calculation.response.calculation.cells
@@ -222,8 +241,10 @@ export class Playground {
         calculation.response.calculation.diagnostics.length + calculation.response.diagnostics_omitted,
       ],
       truncated: omitted > 0 || calculation.response.diagnostics_omitted > 0,
+      calculated: true,
     };
   }
+
 
   async #region(client: Client, sheet: string, range: A1Range): Promise<{ region: VisibleRegion; omitted: number }> {
     const envelope = await client.visibleRegion(sheet, range);

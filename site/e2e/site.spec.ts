@@ -65,6 +65,18 @@ test("never understates diagnostics the engine truncated", async ({ page }) => {
   await expect(page.locator("[data-diagnostics] .diagnostic-more")).toHaveText("and at least 3116 more");
 });
 
+test("shows authored values when a workbook cannot be calculated", async ({ page }) => {
+  // A required extension that isn't available leaves the workbook viewable but not calculable.
+  await page.getByLabel("Marksheet source").fill(
+    '#!marksheet 0.1\n@require actuarial_functions@1\n@sheet s "Premiums"\n@block A1 pipe\nItem|Cost\nBase|4.5\nTotal|=B2*2\n@end\n',
+  );
+  await expect(page.locator("[data-status]")).toContainText("Not calculated");
+  await expect(page.getByRole("tab", { name: "Premiums" })).toBeVisible();
+  await expect(cell(page, "B2")).toHaveText("4.5");
+  await expect(cell(page, "B3")).toHaveText("=B2*2");
+  await expect(page.locator("[data-diagnostics]")).toContainText("MS3101");
+});
+
 test("links cells to the source lines that wrote them", async ({ page }) => {
   await cell(page, "G2").click();
   await expect(page.locator("[data-cell-ref]")).toHaveText("G2");
