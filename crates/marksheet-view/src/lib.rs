@@ -141,6 +141,10 @@ pub struct SheetSummary {
     /// Counts finite fill destinations that have not been materialized into source.
     pub virtual_cell_count: usize,
     pub footprint_count: usize,
+    /// Bounding box of authored cells, fill-derived cells, and table or fill
+    /// footprints; `None` for a sheet with no content. A layout hint for
+    /// renderers, never an instruction to allocate the range densely.
+    pub extent: Option<Range>,
 }
 
 /// A sparse viewport projection. `cells` contains no synthetic empty cells.
@@ -1074,7 +1078,31 @@ fn sheet_summary(sheet: &Sheet, prepared: &PreparedSheet) -> SheetSummary {
         authored_cell_count: prepared.authored_cells.len(),
         virtual_cell_count: prepared.virtual_cells.len(),
         footprint_count: prepared.footprints.len(),
+        extent: content_extent(prepared),
     }
+}
+
+/// Folds the sheet's sparse content into one bounding box without visiting
+/// any coordinate that is not already indexed.
+fn content_extent(prepared: &PreparedSheet) -> Option<Range> {
+    let cells = prepared
+        .authored_cells
+        .keys()
+        .chain(prepared.virtual_cells.keys())
+        .map(|coordinate| Range::single(*coordinate));
+    let footprints = prepared.footprints.iter().map(|footprint| footprint.range);
+    cells.chain(footprints).reduce(|extent, range| {
+        Range::new(
+            Coordinate {
+                column: extent.start.column.min(range.start.column),
+                row: extent.start.row.min(range.start.row),
+            },
+            Coordinate {
+                column: extent.end.column.max(range.end.column),
+                row: extent.end.row.max(range.end.row),
+            },
+        )
+    })
 }
 
 /// Appends diagnostics in stable first-seen order without repeating persistent
@@ -1278,6 +1306,43 @@ mod tests {
             matches!(region.cells.iter().find(|cell| cell.coordinate == coordinate("B4")).and_then(|cell| cell.calculated.as_ref()), Some(CalcValue::Number(value)) if (*value - 1648.0).abs() < f64::EPSILON)
         );
         assert_eq!(region.columns[0].geometry.size, Some(20.0));
+    }
+
+    #[test]
+    fn sheet_extent_bounds_sparse_content_and_is_absent_for_an_empty_sheet() {
+        let document = parse(include_bytes!("../../../examples/budget.ms"));
+        let mut view = WorkbookView::from_document(&document, ViewLimits::default()).unwrap();
+        let region = view
+            .visible_region(&VisibleRegionRequest::new(
+                "inputs".parse().unwrap(),
+                Range::parse("A1:B2").unwrap(),
+            ))
+            .unwrap();
+        // The costs table (A1:D4) and the settings block (F1:G2), not the viewport.
+        assert_eq!(region.sheet.extent, Some(Range::parse("A1:G4").unwrap()));
+
+        let far = parse(b"#!marksheet 0.1\n@sheet data \"Data\"\n@block ZZ50000 pipe\n1\n@end\n");
+        let mut far_view = WorkbookView::from_document(&far, ViewLimits::default()).unwrap();
+        let far_region = far_view
+            .visible_region(&VisibleRegionRequest::new(
+                "data".parse().unwrap(),
+                Range::parse("A1:A1").unwrap(),
+            ))
+            .unwrap();
+        assert_eq!(
+            far_region.sheet.extent,
+            Some(Range::parse("ZZ50000").unwrap())
+        );
+
+        let empty = parse(b"#!marksheet 0.1\n@sheet blank \"Blank\"\n");
+        let mut empty_view = WorkbookView::from_document(&empty, ViewLimits::default()).unwrap();
+        let empty_region = empty_view
+            .visible_region(&VisibleRegionRequest::new(
+                "blank".parse().unwrap(),
+                Range::parse("A1:A1").unwrap(),
+            ))
+            .unwrap();
+        assert_eq!(empty_region.sheet.extent, None);
     }
 
     #[test]

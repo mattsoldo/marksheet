@@ -479,7 +479,10 @@ never accidentally replace its source formula.
 The GUI must not allocate a dense matrix to the furthest used coordinate.
 Visible-region requests should query sparse block indexes, fill ranges, and
 style interval indexes. Sheet extents are a viewport hint, not an allocation
-instruction.
+instruction: the view layer reports each sheet's content extent (the bounding
+box of authored cells, fill destinations, and table or fill footprints) so a
+renderer can size scrolling or fit a reading view, but it still requests only
+bounded windows.
 
 Table rendering may materialize a visible row window. Formula calculation may
 materialize required dependencies independently of the viewport.

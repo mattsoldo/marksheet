@@ -27,7 +27,13 @@ import {
   setNameTargetTransaction,
   setRowHeightTransaction,
 } from "./transactions";
-import { computeViewport, viewportCellCount } from "./viewport";
+import {
+  clipRange,
+  computeViewport,
+  readingLimit,
+  viewportCellCount,
+  viewportForContainer,
+} from "./viewport";
 import { formatSourceBytes, sourceSelectionOffsets } from "./source-view";
 import {
   THEMES,
@@ -75,6 +81,22 @@ export interface ViewerOptions {
 }
 
 type DiagnosticScope = "document" | "viewport" | "calculation" | "error";
+
+/** After a render, either scroll the anchor to the top-left or keep what the user was looking at. */
+type Reveal = "anchor" | "preserve";
+
+interface RefreshOptions {
+  reveal?: Reveal;
+  /** Scroll-driven loads keep the current status message. */
+  quiet?: boolean;
+}
+
+interface ScrollReference {
+  row: number;
+  top: number;
+  column: number;
+  left: number;
+}
 type DiagnosticOmissions = Partial<Record<DiagnosticScope, number>>;
 
 export class ViewerApp {
@@ -84,6 +106,14 @@ export class ViewerApp {
   #region?: VisibleRegion;
   #activeSheet: string | undefined;
   #selected: Coordinate = { column: 1, row: 1 };
+  /** The top-left cell the rendered window is built around; independent of the selection. */
+  #anchor: Coordinate = { column: 1, row: 1 };
+  /** Last known content extent per sheet; `null` is an empty sheet, absence is unknown. */
+  #extents = new Map<string, A1Range | null>();
+  #scrollFrame = 0;
+  #shifting = false;
+  #rescanAfterShift = false;
+  readonly #onResize = () => this.scheduleWindowCheck();
   #fileName = "workbook.ms";
   #fileSession: LocalFileSession | undefined;
   #source: Uint8Array<ArrayBufferLike> = new Uint8Array();
@@ -124,6 +154,8 @@ export class ViewerApp {
   dispose(): void {
     this.#disposed = true;
     document.removeEventListener("keydown", this.#keydown);
+    window.removeEventListener("resize", this.#onResize);
+    if (this.#scrollFrame && typeof cancelAnimationFrame === "function") cancelAnimationFrame(this.#scrollFrame);
     this.#regionGate.invalidate();
     this.adapter.dispose();
   }
@@ -151,6 +183,8 @@ export class ViewerApp {
       this.#fileSession = session;
       this.#activeSheet = opened.snapshot.sheets[0]?.id;
       this.#selected = { column: 1, row: 1 };
+      this.#anchor = { column: 1, row: 1 };
+      this.#extents.clear();
       this.#dirty = false;
       this.updateWorkbookChrome();
       // Until the store answers, a download save must not update another entry's copy.
@@ -194,7 +228,7 @@ export class ViewerApp {
             <div class="brand"><span class="brand-mark" aria-hidden="true">${ICONS.mark}</span><span>Marksheet</span></div>
             <button id="close-sidebar" class="icon-button sidebar-close" type="button" aria-label="Close workbook list">${ICONS.close}</button>
           </div>
-          <input class="sr-only" id="file-input" type="file" accept=".ms,text/plain" tabindex="-1" />
+          <input class="sr-only" id="file-input" type="file" accept=".ms,text/plain" tabindex="-1" aria-label="Marksheet workbook file" />
           <button id="open-file" class="sidebar-open" type="button">${ICONS.plus}<span>Open workbook</span><kbd>${MOD_KEY}O</kbd></button>
           <section class="sidebar-section" aria-labelledby="recent-heading">
             <div class="sidebar-label">
@@ -214,7 +248,7 @@ export class ViewerApp {
           <header class="topbar">
             <button id="toggle-sidebar" class="icon-button" type="button" aria-controls="sidebar" aria-expanded="true" title="Workbooks (${MOD_KEY}\\)">${ICONS.sidebar}<span class="sr-only">Toggle workbook list</span></button>
             <div class="title-group">
-              <span class="file-name" id="file-name">No workbook open</span>
+              <h1 class="file-name" id="file-name">No workbook open</h1>
               <span class="file-badge" id="file-badge" hidden></span>
             </div>
             <div class="topbar-actions">
@@ -259,7 +293,7 @@ export class ViewerApp {
                 <div class="empty-state" id="grid-empty">
                   <div class="empty-card">
                     <div class="empty-art" aria-hidden="true">${ICONS.emptyGrid}</div>
-                    <h1>Open a Marksheet workbook</h1>
+                    <h2>Open a Marksheet workbook</h2>
                     <p>Drop a <code>.ms</code> file here or choose one from this device. Workbooks are read and calculated locally.</p>
                     <button id="open-file-empty" class="primary" type="button">Choose a file</button>
                   </div>
@@ -313,6 +347,8 @@ export class ViewerApp {
     }
     this.bindFileDrop();
     document.addEventListener("keydown", this.#keydown);
+    this.byId("grid-shell").addEventListener("scroll", () => this.scheduleWindowCheck(), { passive: true });
+    window.addEventListener("resize", this.#onResize);
     this.byId<HTMLInputElement>("file-input").addEventListener("change", (event) => {
       const input = event.currentTarget as HTMLInputElement;
       const file = input.files?.[0];
@@ -466,7 +502,7 @@ export class ViewerApp {
       ? this.#activeSheet
       : snapshot.sheets[0]?.id;
     this.updateWorkbookChrome();
-    await this.refreshVisibleRegion();
+    await this.refreshVisibleRegion({ reveal: "preserve" });
   }
 
   private async cancelWork(): Promise<void> {
@@ -483,17 +519,20 @@ export class ViewerApp {
     }
   }
 
-  private async refreshVisibleRegion(): Promise<boolean> {
+  private async refreshVisibleRegion(options: RefreshOptions = {}): Promise<boolean> {
+    const { reveal = "anchor", quiet = false } = options;
     const sheet = this.#activeSheet;
     if (!sheet) return false;
     const generation = this.#regionGate.begin();
-    const range = computeViewport({
-      anchor: this.#selected,
-      visibleRows: 30,
-      visibleColumns: 12,
-      overscan: 3,
-    });
-    this.setBusy(true, `Loading ${sheet}…`);
+    const limit = this.fitLimit();
+    if (limit) {
+      this.#anchor = {
+        column: Math.min(this.#anchor.column, limit.column),
+        row: Math.min(this.#anchor.row, limit.row),
+      };
+    }
+    const range = computeViewport(viewportForContainer(this.#anchor, this.gridShellSize()));
+    this.setBusy(true, quiet ? undefined : `Loading ${sheet}…`);
     try {
       const [envelope, calculation] = await Promise.all([
         this.adapter.visibleRegion(sheet, range),
@@ -533,7 +572,11 @@ export class ViewerApp {
         };
       }
       this.#region = mergedRegion;
-      this.renderGrid();
+      // Workers without the additive `extent` field leave the extent unknown, so nothing is clipped.
+      if ("extent" in mergedRegion.sheet && mergedRegion.sheet.extent !== undefined) {
+        this.#extents.set(sheet, mergedRegion.sheet.extent);
+      }
+      this.renderGrid(reveal);
       this.renderDiagnostics(
         [
           ...(this.#snapshot?.diagnostics ?? []),
@@ -557,7 +600,7 @@ export class ViewerApp {
         this.setStatus(`Calculation failed: ${message}`, "error");
         return false;
       }
-      this.setStatus(`Ready at revision ${this.adapter.currentRevision}`, "ok");
+      if (!quiet) this.setStatus(`Ready at revision ${this.adapter.currentRevision}`, "ok");
       return true;
     } catch (error) {
       if (this.#regionGate.isCurrent(generation)) this.setError(error);
@@ -595,7 +638,7 @@ export class ViewerApp {
         this.#source = Uint8Array.from(source.source);
         this.updateSourceView();
       }
-      const refreshed = await this.refreshVisibleRegion();
+      const refreshed = await this.refreshVisibleRegion({ reveal: "preserve" });
       if (!refreshed) return true;
       const patchSummary = edited.patches
         .map((patch) => `${patch.span.start}..${patch.span.end}`)
@@ -620,6 +663,7 @@ export class ViewerApp {
     const parsed = parseRange(target);
     if (parsed) {
       this.#selected = parsed.start;
+      this.#anchor = parsed.start;
       await this.refreshVisibleRegion();
       return;
     }
@@ -642,11 +686,16 @@ export class ViewerApp {
     }
     this.#activeSheet = resolved.sheet;
     this.#selected = resolved.range.start;
+    this.#anchor = resolved.range.start;
     this.updateWorkbookChrome();
     await this.refreshVisibleRegion();
   }
 
   private async pan(columns: number, rows: number): Promise<void> {
+    this.#anchor = {
+      column: Math.max(1, this.#anchor.column + columns),
+      row: Math.max(1, this.#anchor.row + rows),
+    };
     this.#selected = {
       column: Math.max(1, this.#selected.column + columns),
       row: Math.max(1, this.#selected.row + rows),
@@ -674,6 +723,7 @@ export class ViewerApp {
       button.addEventListener("click", () => {
         this.#activeSheet = sheet.id;
         this.#selected = { column: 1, row: 1 };
+        this.#anchor = { column: 1, row: 1 };
         this.updateWorkbookChrome();
         void this.refreshVisibleRegion();
       });
@@ -695,17 +745,22 @@ export class ViewerApp {
     formula.disabled = !editable || Boolean(selected && "VirtualFill" in selected.source);
   }
 
-  private renderGrid(): void {
+  private renderGrid(reveal: Reveal = "anchor"): void {
     const region = this.#region;
     if (!region) return;
     const grid = this.byId("grid");
     const empty = this.byId("grid-empty");
+    const reference = reveal === "preserve" && !grid.hidden ? this.scrollReference() : undefined;
+    const limit = this.fitLimit();
+    // The reading view stops at the content extent; the window itself stays bounded either way.
+    const range = clipRange(region.range, limit) ?? { start: region.range.start, end: region.range.start };
     grid.hidden = false;
     empty.hidden = true;
+    grid.classList.toggle("grid-fitted", Boolean(limit));
     grid.replaceChildren();
 
-    const columns = inclusiveNumbers(region.range.start.column, region.range.end.column);
-    const rows = inclusiveNumbers(region.range.start.row, region.range.end.row);
+    const columns = inclusiveNumbers(range.start.column, range.end.column);
+    const rows = inclusiveNumbers(range.start.row, range.end.row);
     const columnGeometry = new Map(region.columns.map((column) => [column.column, column.geometry]));
     const rowGeometry = new Map(region.rows.map((row) => [row.row, row.geometry]));
     grid.style.gridTemplateColumns = `46px ${columns
@@ -717,6 +772,10 @@ export class ViewerApp {
     const headerRow = this.gridElement("div", "grid-row", "", undefined, "row");
     headerRow.setAttribute("aria-rowindex", "1");
     const corner = this.gridElement("div", "corner", "", undefined, "columnheader");
+    const cornerLabel = document.createElement("span");
+    cornerLabel.className = "sr-only";
+    cornerLabel.textContent = "Row";
+    corner.append(cornerLabel);
     corner.setAttribute("aria-colindex", "1");
     headerRow.append(corner);
     for (const [columnIndex, column] of columns.entries()) {
@@ -751,12 +810,144 @@ export class ViewerApp {
         element.style.height = height;
         element.setAttribute("aria-colindex", String(columnIndex + 2));
         this.decorateCell(element, cell, cell?.style ?? blankStyles.get(coordinateKey(coordinate)));
+        // Every cell is a button, so blank ones still need a name a screen reader can announce.
+        if (!element.hasAttribute("aria-label")) element.setAttribute("aria-label", `${formatCoordinate(coordinate)}, blank`);
         gridRow.append(element);
       }
       grid.append(gridRow);
     }
     this.updateSelectionChrome();
-    this.byId("viewport-status").textContent = `${region.sheet.label} · ${formatCoordinate(region.range.start)}:${formatCoordinate(region.range.end)} · ${region.cells.length} sparse / ${viewportCellCount(region.range)} rendered`;
+    if (reference) this.restoreScroll(reference);
+    else this.revealAnchor();
+    this.byId("viewport-status").textContent = `${region.sheet.label} · ${formatCoordinate(range.start)}:${formatCoordinate(range.end)} · ${region.cells.length} sparse / ${viewportCellCount(range)} rendered`;
+  }
+
+  /** The reading view's clip, or `undefined` in the detailed view or before the extent is known. */
+  private fitLimit() {
+    const sheet = this.#activeSheet;
+    if (this.#preferences.detailsOpen || !sheet || !this.#extents.has(sheet)) return undefined;
+    return readingLimit(this.#extents.get(sheet));
+  }
+
+  private gridShellSize(): { width: number; height: number } {
+    const shell = this.byId("grid-shell");
+    // Leave out the row-number column and the column-letter row.
+    return { width: shell.clientWidth - 44, height: shell.clientHeight - 28 };
+  }
+
+  private headerMetrics() {
+    const grid = this.byId("grid");
+    return {
+      shell: this.byId("grid-shell"),
+      headerHeight: grid.querySelector<HTMLElement>(".column-header")?.offsetHeight ?? 0,
+      rowHeaderWidth: grid.querySelector<HTMLElement>(".row-header")?.offsetWidth ?? 0,
+      rows: [...grid.querySelectorAll<HTMLElement>(".row-header")],
+      columns: [...grid.querySelectorAll<HTMLElement>(".column-header")],
+    };
+  }
+
+  /** The first row and column the user can currently see, and where they sit on screen. */
+  private scrollReference(): ScrollReference | undefined {
+    const { shell, headerHeight, rowHeaderWidth, rows, columns } = this.headerMetrics();
+    const row = rows.find((header) => header.offsetTop + header.offsetHeight > shell.scrollTop + headerHeight);
+    const column = columns.find((header) => header.offsetLeft + header.offsetWidth > shell.scrollLeft + rowHeaderWidth);
+    if (!row || !column) return undefined;
+    return {
+      row: Number(row.dataset.row),
+      top: row.offsetTop - shell.scrollTop,
+      column: Number(column.dataset.column),
+      left: column.offsetLeft - shell.scrollLeft,
+    };
+  }
+
+  private restoreScroll(reference: ScrollReference): void {
+    const grid = this.byId("grid");
+    const shell = this.byId("grid-shell");
+    const row = grid.querySelector<HTMLElement>(`.row-header[data-row="${reference.row}"]`);
+    const column = grid.querySelector<HTMLElement>(`.column-header[data-column="${reference.column}"]`);
+    if (row) shell.scrollTop = row.offsetTop - reference.top;
+    if (column) shell.scrollLeft = column.offsetLeft - reference.left;
+  }
+
+  private revealAnchor(): void {
+    const { shell, headerHeight, rowHeaderWidth } = this.headerMetrics();
+    const grid = this.byId("grid");
+    const row = grid.querySelector<HTMLElement>(`.row-header[data-row="${this.#anchor.row}"]`);
+    const column = grid.querySelector<HTMLElement>(`.column-header[data-column="${this.#anchor.column}"]`);
+    shell.scrollTop = row ? row.offsetTop - headerHeight : 0;
+    shell.scrollLeft = column ? column.offsetLeft - rowHeaderWidth : 0;
+  }
+
+  private scheduleWindowCheck(): void {
+    if (this.#scrollFrame || this.#disposed) return;
+    const schedule = typeof requestAnimationFrame === "function"
+      ? requestAnimationFrame
+      : (callback: FrameRequestCallback) => setTimeout(() => callback(0), 16) as unknown as number;
+    this.#scrollFrame = schedule(() => {
+      this.#scrollFrame = 0;
+      void this.shiftWindowIfNeeded();
+    });
+  }
+
+  /**
+   * Moves the bounded window when the user scrolls near its rendered edge, so
+   * scrolling feels continuous without ever rendering more than one window.
+   */
+  private async shiftWindowIfNeeded(): Promise<void> {
+    if (this.#shifting) {
+      this.#rescanAfterShift = true;
+      return;
+    }
+    const region = this.#region;
+    if (!region || !this.#activeSheet || this.byId("grid").hidden) return;
+    const { shell, headerHeight, rowHeaderWidth, rows, columns } = this.headerMetrics();
+    const firstRowHeader = rows[0];
+    const lastRowHeader = rows.at(-1);
+    const firstColumnHeader = columns[0];
+    const lastColumnHeader = columns.at(-1);
+    if (!firstRowHeader || !lastRowHeader || !firstColumnHeader || !lastColumnHeader) return;
+
+    const top = shell.scrollTop + headerHeight;
+    const bottom = shell.scrollTop + shell.clientHeight;
+    const left = shell.scrollLeft + rowHeaderWidth;
+    const right = shell.scrollLeft + shell.clientWidth;
+    const firstRow = Number(rows.find((header) => header.offsetTop + header.offsetHeight > top)?.dataset.row);
+    const lastRow = Number([...rows].reverse().find((header) => header.offsetTop < bottom)?.dataset.row);
+    const firstColumn = Number(columns.find((header) => header.offsetLeft + header.offsetWidth > left)?.dataset.column);
+    const lastColumn = Number([...columns].reverse().find((header) => header.offsetLeft < right)?.dataset.column);
+    if (![firstRow, lastRow, firstColumn, lastColumn].every(Number.isSafeInteger)) return;
+
+    const rendered = {
+      start: { row: Number(firstRowHeader.dataset.row), column: Number(firstColumnHeader.dataset.column) },
+      end: { row: Number(lastRowHeader.dataset.row), column: Number(lastColumnHeader.dataset.column) },
+    };
+    const spec = viewportForContainer(this.#anchor, this.gridShellSize());
+    const rowOverscan = spec.rowOverscan ?? spec.overscan;
+    const columnOverscan = spec.columnOverscan ?? spec.overscan;
+    const limit = this.fitLimit();
+    const anchor = { ...this.#anchor };
+    if (lastRow >= rendered.end.row - 2 && (!limit || rendered.end.row < limit.row)) anchor.row = firstRow;
+    else if (firstRow <= rendered.start.row + 2 && rendered.start.row > 1) anchor.row = Math.max(1, firstRow - rowOverscan);
+    if (lastColumn >= rendered.end.column - 1 && (!limit || rendered.end.column < limit.column)) anchor.column = firstColumn;
+    else if (firstColumn <= rendered.start.column + 1 && rendered.start.column > 1) {
+      anchor.column = Math.max(1, firstColumn - columnOverscan);
+    }
+    const next = computeViewport({ ...spec, anchor });
+    const current = region.range;
+    if (next.start.row === current.start.row && next.start.column === current.start.column
+      && next.end.row === current.end.row && next.end.column === current.end.column) return;
+
+    this.#anchor = anchor;
+    this.#shifting = true;
+    try {
+      await this.refreshVisibleRegion({ reveal: "preserve", quiet: true });
+    } finally {
+      this.#shifting = false;
+    }
+    if (this.#rescanAfterShift) {
+      this.#rescanAfterShift = false;
+      this.scheduleWindowCheck();
+    }
   }
 
   private gridElement(
@@ -823,20 +1014,24 @@ export class ViewerApp {
         : key === "ArrowLeft"
           ? { column: -1, row: 0 }
           : { column: 1, row: 0 };
+    const limit = this.fitLimit();
     const next = {
-      column: Math.max(1, origin.column + delta.column),
-      row: Math.max(1, origin.row + delta.row),
+      column: Math.min(Math.max(1, origin.column + delta.column), limit?.column ?? Number.MAX_SAFE_INTEGER),
+      row: Math.min(Math.max(1, origin.row + delta.row), limit?.row ?? Number.MAX_SAFE_INTEGER),
     };
     if (next.column === origin.column && next.row === origin.row) return;
     this.#selected = next;
-    const range = this.#region?.range;
-    const inViewport = range
-      && next.column >= range.start.column
-      && next.column <= range.end.column
-      && next.row >= range.start.row
-      && next.row <= range.end.row;
-    if (inViewport) this.updateSelectionChrome();
-    else await this.refreshVisibleRegion();
+    const rendered = this.root.querySelector(`.grid-cell[data-coordinate="${coordinateKey(next)}"]`);
+    if (rendered) this.updateSelectionChrome();
+    else {
+      // Bring the new cell into the window: at the top or left edge when moving back, the far edge otherwise.
+      const spec = viewportForContainer(this.#anchor, this.gridShellSize());
+      this.#anchor = {
+        column: delta.column > 0 ? Math.max(1, next.column - spec.visibleColumns + 1) : delta.column < 0 ? next.column : this.#anchor.column,
+        row: delta.row > 0 ? Math.max(1, next.row - spec.visibleRows + 1) : delta.row < 0 ? next.row : this.#anchor.row,
+      };
+      await this.refreshVisibleRegion();
+    }
     this.root.querySelector<HTMLElement>(`.grid-cell[data-coordinate="${coordinateKey(next)}"]`)?.focus();
   }
 
@@ -948,8 +1143,11 @@ export class ViewerApp {
     this.byId("sidebar").toggleAttribute("inert", !sidebarOpen);
     this.byId("toggle-sidebar").setAttribute("aria-expanded", String(sidebarOpen));
     this.byId("toggle-details").setAttribute("aria-pressed", String(detailsOpen));
+    const detailsChanged = this.byId("details-bar").hidden === detailsOpen;
     this.byId("details-bar").hidden = !detailsOpen;
     this.byId("inspector").hidden = !detailsOpen;
+    // The reading view clips to the content; the detailed view shows the full window.
+    if (detailsChanged && this.#region) void this.refreshVisibleRegion({ reveal: "preserve", quiet: true });
     for (const option of this.root.querySelectorAll<HTMLElement>("[data-theme-option]")) {
       option.setAttribute("aria-checked", String(option.dataset.themeOption === theme));
     }
@@ -1226,6 +1424,10 @@ export class ViewerApp {
     badge.textContent = label;
     badge.hidden = label === "";
     badge.dataset.kind = this.#snapshot && !this.#snapshot.editable ? "readonly" : "edited";
+    // The browser tab names the workbook and marks unsaved edits, like a desktop editor.
+    document.title = this.#snapshot
+      ? `${this.#dirty ? "• " : ""}${this.#fileName} — Marksheet`
+      : "Marksheet Viewer";
   }
 
   private updateDetailsBadge(diagnostics: Diagnostic[], omitted: number): void {

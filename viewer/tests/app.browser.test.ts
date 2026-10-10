@@ -119,6 +119,9 @@ function region(
       virtual_cell_count: 0,
       footprint_count: 1,
       source_span: null,
+      // Larger than any test window, so the reading view's fit never clips the
+      // bounded-window tests; fitting tests set a small extent explicitly.
+      extent: { start: { column: 1, row: 1 }, end: { column: 2_000_000, row: 2_000_000 } },
     },
     range,
     completeness,
@@ -156,6 +159,7 @@ class MockAdapter implements WorkbenchAdapter {
   regionCompleteness: ViewCompleteness = { calculation_complete: true, rendering_complete: true };
   sheets = defaultSheets;
   styleRegions: StyledRegion[] = [];
+  extent: A1Range | null | undefined;
   cellValue: AuthoredValue = { kind: "formula", value: "=1+1" };
   cellCalculated: ScalarValue = { kind: "number", value: 2 };
   edit = vi.fn(async (_transaction: EditTransaction) => {
@@ -233,6 +237,7 @@ class MockAdapter implements WorkbenchAdapter {
   async visibleRegion(sheet: string, range: A1Range) {
     const visible = region(sheet, range, this.regionCompleteness, this.cellValue, this.cellCalculated);
     visible.style_regions = this.styleRegions;
+    if (this.extent !== undefined) visible.sheet.extent = this.extent;
     const payload = {
       kind: "visible_region" as const,
       region: visible,
@@ -1005,6 +1010,15 @@ describe("viewer reading view and workbook navigation", () => {
     formula.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await vi.waitFor(() => expect(adapter.edit).toHaveBeenCalled());
     await vi.waitFor(() => expect(badge.textContent).toBe("Edited"));
+    expect(document.title).toBe("• fixture.ms — Marksheet");
+    app.dispose();
+    root.remove();
+  });
+
+  it("names the open workbook in the browser tab", async () => {
+    const { root, app } = mount();
+    await app.openSource(encoder.encode("fixture"), "budget.ms");
+    expect(document.title).toBe("budget.ms — Marksheet");
     app.dispose();
     root.remove();
   });
@@ -1257,6 +1271,57 @@ describe("viewer reading view and workbook navigation", () => {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true }));
     await vi.waitFor(() => expect(root.querySelector("#status")?.textContent).toContain("Permission to save fixture.ms was not granted"));
     expect(order).toEqual(["permission"]);
+    app.dispose();
+    root.remove();
+  });
+
+  it("fits the reading view to the sheet's extent and shows the full window in details", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    adapter.extent = { start: { column: 1, row: 1 }, end: { column: 4, row: 6 } };
+    const app = new ViewerApp(root, adapter, { storage: memoryStorage(), recentStore: new MemoryRecentStore() });
+    await app.openSource(encoder.encode("fixture"), "fixture.ms");
+    // Extent D6 plus one column and two rows of margin.
+    expect(root.querySelectorAll(".grid-cell")).toHaveLength(5 * 8);
+    expect(root.querySelector("#grid")?.classList.contains("grid-fitted")).toBe(true);
+    expect(root.querySelector("#viewport-status")?.textContent).toContain("A1:E8");
+
+    root.querySelector<HTMLButtonElement>("#toggle-details")!.click();
+    await vi.waitFor(() => expect(root.querySelectorAll(".grid-cell")).toHaveLength(648));
+    expect(root.querySelector("#grid")?.classList.contains("grid-fitted")).toBe(false);
+    app.dispose();
+    root.remove();
+  });
+
+  it("gives an empty sheet a small blank canvas in the reading view", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    adapter.extent = null;
+    const app = new ViewerApp(root, adapter, { storage: memoryStorage(), recentStore: new MemoryRecentStore() });
+    await app.openSource(encoder.encode("fixture"), "fixture.ms");
+    expect(root.querySelector("#viewport-status")?.textContent).toContain("A1:C5");
+    expect(root.querySelectorAll(".grid-cell")).toHaveLength(15);
+    app.dispose();
+    root.remove();
+  });
+
+  it("keeps arrow-key movement inside the fitted reading view", async () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const adapter = new MockAdapter();
+    adapter.extent = { start: { column: 1, row: 1 }, end: { column: 1, row: 1 } };
+    const app = new ViewerApp(root, adapter, { storage: memoryStorage(), recentStore: new MemoryRecentStore() });
+    await app.openSource(encoder.encode("fixture"), "fixture.ms");
+    const edge = root.querySelector<HTMLElement>("[data-coordinate='3:5']")!;
+    edge.click();
+    edge.focus();
+    edge.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    edge.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(root.querySelector(".cell-selected")?.getAttribute("data-coordinate")).toBe("3:5");
+    expect((root.querySelector("#name-box") as HTMLInputElement).value).toBe("C5");
     app.dispose();
     root.remove();
   });
