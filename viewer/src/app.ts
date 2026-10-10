@@ -89,6 +89,8 @@ interface RefreshOptions {
   reveal?: Reveal;
   /** Scroll-driven loads keep the current status message. */
   quiet?: boolean;
+  /** Issued by a scroll shift itself; every other refresh makes shifts stand down. */
+  fromShift?: boolean;
 }
 
 interface ScrollReference {
@@ -112,8 +114,10 @@ export class ViewerApp {
   #extents = new Map<string, A1Range | null>();
   /** Where the last render should reveal: `#anchor`, clamped to the reading-view fit. */
   #revealTarget: Coordinate = { column: 1, row: 1 };
-  /** Refreshes the user asked for (open, navigate, edit); scroll shifts wait for these. */
-  #userRefreshes = 0;
+  /** Pending refreshes not issued by a scroll shift (open, navigate, edit, Details); shifts wait for these. */
+  #pendingRefreshes = 0;
+  /** Whether the rendered grid was clipped to the reading-view fit. */
+  #renderedFitted = false;
   #scrollFrame = 0;
   #shifting = false;
   #rescanAfterShift = false;
@@ -533,7 +537,7 @@ export class ViewerApp {
   }
 
   private async refreshVisibleRegion(options: RefreshOptions = {}): Promise<boolean> {
-    const { reveal = "anchor", quiet = false } = options;
+    const { reveal = "anchor", quiet = false, fromShift = false } = options;
     const sheet = this.#activeSheet;
     if (!sheet) return false;
     const generation = this.#regionGate.begin();
@@ -544,7 +548,7 @@ export class ViewerApp {
       : this.#anchor;
     const range = computeViewport(viewportForContainer(anchor, this.gridShellSize()));
     this.setBusy(true, quiet ? undefined : `Loading ${sheet}…`);
-    if (!quiet) this.#userRefreshes += 1;
+    if (!fromShift) this.#pendingRefreshes += 1;
     try {
       const [envelope, calculation] = await Promise.all([
         this.adapter.visibleRegion(sheet, range),
@@ -619,7 +623,7 @@ export class ViewerApp {
       if (this.#regionGate.isCurrent(generation)) this.setError(error);
       return false;
     } finally {
-      if (!quiet) this.#userRefreshes -= 1;
+      if (!fromShift) this.#pendingRefreshes -= 1;
       if (this.#regionGate.isCurrent(generation)) this.setBusy(false);
     }
   }
@@ -775,6 +779,7 @@ export class ViewerApp {
     grid.hidden = false;
     empty.hidden = true;
     grid.classList.toggle("grid-fitted", Boolean(limit));
+    this.#renderedFitted = Boolean(limit);
     grid.replaceChildren();
 
     const columns = inclusiveNumbers(range.start.column, range.end.column);
@@ -919,8 +924,10 @@ export class ViewerApp {
     }
     const region = this.#region;
     if (!region || !this.#activeSheet || this.byId("grid").hidden) return;
-    // A jump or sheet switch is loading; its own render decides the window.
-    if (this.#userRefreshes > 0 || region.sheet.id !== this.#activeSheet) return;
+    // A jump, sheet switch, or Details toggle is loading; its own render decides the window.
+    if (this.#pendingRefreshes > 0 || region.sheet.id !== this.#activeSheet) return;
+    // The grid on screen was drawn for the other mode; its rows say nothing about this one.
+    if (this.#renderedFitted !== Boolean(this.fitLimit())) return;
     const { shell, headerHeight, rowHeaderWidth, rows, columns } = this.headerMetrics();
     const firstRowHeader = rows[0];
     const lastRowHeader = rows.at(-1);
@@ -958,7 +965,7 @@ export class ViewerApp {
     this.#anchor = anchor;
     this.#shifting = true;
     try {
-      await this.refreshVisibleRegion({ reveal: "preserve", quiet: true });
+      await this.refreshVisibleRegion({ reveal: "preserve", quiet: true, fromShift: true });
     } finally {
       this.#shifting = false;
     }
@@ -1168,8 +1175,9 @@ export class ViewerApp {
     const detailsChanged = this.byId("details-bar").hidden === detailsOpen;
     this.byId("details-bar").hidden = !detailsOpen;
     this.byId("inspector").hidden = !detailsOpen;
-    // The reading view clips to the content; the detailed view shows the full window.
-    if (detailsChanged && this.#region) void this.refreshVisibleRegion({ reveal: "preserve", quiet: true });
+    // The reading view clips to the content; the detailed view shows the full window. The
+    // window itself changes, so return to the remembered anchor (clamped while reading).
+    if (detailsChanged && this.#region) void this.refreshVisibleRegion({ quiet: true });
     for (const option of this.root.querySelectorAll<HTMLElement>("[data-theme-option]")) {
       option.setAttribute("aria-checked", String(option.dataset.themeOption === theme));
     }
