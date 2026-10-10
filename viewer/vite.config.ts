@@ -10,6 +10,8 @@ export default defineConfig({
   },
   test: {
     environment: "happy-dom",
+    // Real-browser specs in e2e/ run under Playwright, not Vitest.
+    include: ["tests/**/*.test.ts"],
     coverage: { reporter: ["text", "json-summary"] },
   },
 });

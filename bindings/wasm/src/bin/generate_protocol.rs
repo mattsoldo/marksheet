@@ -1297,6 +1297,7 @@ fn view_region() -> VisibleRegion {
             authored_cell_count: 1,
             virtual_cell_count: 1,
             footprint_count: 1,
+            extent: Some(range()),
         },
         range: range(),
         completeness: ViewCompleteness::COMPLETE,
@@ -1603,6 +1604,7 @@ fn registry() -> Registry {
         authored_cell_count: 0,
         virtual_cell_count: 0,
         footprint_count: 0,
+        extent: None,
     });
     registry.add("ViewSheetSummary", &view_sheet_samples);
     registry.add(

@@ -17,8 +17,9 @@
   --border: #e6e3dc;
   --border-strong: #d3cfc6;
   --text: #1d1c1a;
-  --muted: #6e6a62;
-  --subtle: #a29d93;
+  --muted: #55524b;
+  /* Secondary text still clears WCAG AA (4.5:1) on every Paper surface. */
+  --subtle: #65625b;
   --accent: #2f5bd0;
   --accent-hover: #264dba;
   --accent-text: #ffffff;
@@ -31,11 +32,11 @@
   --sheet: #ffffff;
   --gridline: #efede8;
   --header: #faf9f6;
-  --header-text: #a8a398;
+  --header-text: #6b6861;
   --header-active: #ecebe6;
   --selection: #e9eefb;
   --formula-text: #2f4fa8;
-  --virtual-text: #6f7aa0;
+  --virtual-text: #616a89;
   --error-text: #a12d2d;
   --error-fill: #fbeaea;
   --authored-mark: #b8c6ef;
@@ -63,7 +64,7 @@
   --border-strong: #c5cdd7;
   --text: #17202b;
   --muted: #5a6573;
-  --subtle: #8b95a3;
+  --subtle: #626c79;
   --accent: #127a45;
   --accent-hover: #0d6a3b;
   --accent-text: #ffffff;
@@ -105,7 +106,7 @@
   --border-strong: #34373e;
   --text: #e8e9ec;
   --muted: #9b9ea7;
-  --subtle: #6b6e77;
+  --subtle: #898c93;
   --accent: #8f9dff;
   --accent-hover: #a3afff;
   --accent-text: #0f1012;
@@ -118,7 +119,7 @@
   --sheet: #151619;
   --gridline: #222428;
   --header: #18191c;
-  --header-text: #6b6e77;
+  --header-text: #8f9299;
   --header-active: #23264a;
   --selection: #222645;
   --formula-text: #b8c1ff;
@@ -433,7 +434,7 @@ code { font-family: var(--mono); font-size: .92em; }
 .title-group { min-width: 0; display: flex; align-items: center; gap: 10px; }
 
 .file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
-.title-group .file-name { color: var(--text); font-size: 15px; font-weight: var(--title-weight); letter-spacing: -.01em; }
+.title-group .file-name { margin: 0; color: var(--text); font-size: 15px; font-weight: var(--title-weight); letter-spacing: -.01em; }
 
 .file-badge {
   flex-shrink: 0;
@@ -588,6 +589,8 @@ code { font-family: var(--mono); font-size: .92em; }
  * Grid
  * ------------------------------------------------------------------------ */
 .grid {
+  /* Positioned so header offsets measure from the grid, which scroll restoration relies on. */
+  position: relative;
   display: grid;
   width: max-content;
   min-width: 100%;
@@ -595,6 +598,9 @@ code { font-family: var(--mono); font-size: .92em; }
   background: var(--sheet);
   font-variant-numeric: tabular-nums;
 }
+
+/* The reading view ends at the data, like a table, rather than stretching an empty grid. */
+.grid.grid-fitted { min-width: 0; }
 
 .grid-row { display: contents; }
 
@@ -735,7 +741,7 @@ code { font-family: var(--mono); font-size: .92em; }
 .empty-state { display: grid; place-items: center; min-height: 100%; padding: 32px 20px; background: var(--surface); }
 
 .empty-card { max-width: 380px; display: grid; justify-items: center; gap: 10px; text-align: center; }
-.empty-card h1 { margin: 10px 0 0; font-size: 19px; font-weight: 650; letter-spacing: -.015em; }
+.empty-card h2 { margin: 10px 0 0; font-size: 19px; font-weight: 650; letter-spacing: -.015em; }
 .empty-card p { margin: 0 0 8px; color: var(--muted); line-height: 1.55; }
 .empty-art .art-frame { fill: var(--sheet); stroke: var(--border-strong); }
 .empty-art .art-line { stroke: var(--border); }

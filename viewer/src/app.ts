@@ -27,7 +27,13 @@ import {
   setNameTargetTransaction,
   setRowHeightTransaction,
 } from "./transactions";
-import { computeViewport, viewportCellCount } from "./viewport";
+import {
+  clipRange,
+  computeViewport,
+  readingLimit,
+  viewportCellCount,
+  viewportForContainer,
+} from "./viewport";
 import { formatSourceBytes, sourceSelectionOffsets } from "./source-view";
 import {
   THEMES,
@@ -75,6 +81,24 @@ export interface ViewerOptions {
 }
 
 type DiagnosticScope = "document" | "viewport" | "calculation" | "error";
+
+/** After a render, either scroll the anchor to the top-left or keep what the user was looking at. */
+type Reveal = "anchor" | "preserve";
+
+interface RefreshOptions {
+  reveal?: Reveal;
+  /** Scroll-driven loads keep the current status message. */
+  quiet?: boolean;
+  /** Issued by a scroll shift itself; every other refresh makes shifts stand down. */
+  fromShift?: boolean;
+}
+
+interface ScrollReference {
+  row: number;
+  top: number;
+  column: number;
+  left: number;
+}
 type DiagnosticOmissions = Partial<Record<DiagnosticScope, number>>;
 
 export class ViewerApp {
@@ -84,6 +108,22 @@ export class ViewerApp {
   #region?: VisibleRegion;
   #activeSheet: string | undefined;
   #selected: Coordinate = { column: 1, row: 1 };
+  /** The top-left cell the rendered window is built around; independent of the selection. */
+  #anchor: Coordinate = { column: 1, row: 1 };
+  /** Last known content extent per sheet; `null` is an empty sheet, absence is unknown. */
+  #extents = new Map<string, A1Range | null>();
+  /** Where the last render should reveal: `#anchor`, clamped to the reading-view fit. */
+  #revealTarget: Coordinate = { column: 1, row: 1 };
+  /** Pending refreshes not issued by a scroll shift (open, navigate, edit, Details); shifts wait for these. */
+  #pendingRefreshes = 0;
+  /** Whether the rendered grid was clipped to the reading-view fit. */
+  #renderedFitted = false;
+  #scrollFrame = 0;
+  #shifting = false;
+  #rescanAfterShift = false;
+  readonly #onResize = () => this.scheduleWindowCheck();
+  /** Watches the grid area itself: the sidebar and Details change its size without a window resize. */
+  #resizeObserver: ResizeObserver | undefined;
   #fileName = "workbook.ms";
   #fileSession: LocalFileSession | undefined;
   #source: Uint8Array<ArrayBufferLike> = new Uint8Array();
@@ -124,6 +164,9 @@ export class ViewerApp {
   dispose(): void {
     this.#disposed = true;
     document.removeEventListener("keydown", this.#keydown);
+    this.#resizeObserver?.disconnect();
+    window.removeEventListener("resize", this.#onResize);
+    if (this.#scrollFrame && typeof cancelAnimationFrame === "function") cancelAnimationFrame(this.#scrollFrame);
     this.#regionGate.invalidate();
     this.adapter.dispose();
   }
@@ -151,6 +194,8 @@ export class ViewerApp {
       this.#fileSession = session;
       this.#activeSheet = opened.snapshot.sheets[0]?.id;
       this.#selected = { column: 1, row: 1 };
+      this.#anchor = { column: 1, row: 1 };
+      this.#extents.clear();
       this.#dirty = false;
       this.updateWorkbookChrome();
       // Until the store answers, a download save must not update another entry's copy.
@@ -194,7 +239,7 @@ export class ViewerApp {
             <div class="brand"><span class="brand-mark" aria-hidden="true">${ICONS.mark}</span><span>Marksheet</span></div>
             <button id="close-sidebar" class="icon-button sidebar-close" type="button" aria-label="Close workbook list">${ICONS.close}</button>
           </div>
-          <input class="sr-only" id="file-input" type="file" accept=".ms,text/plain" tabindex="-1" />
+          <input class="sr-only" id="file-input" type="file" accept=".ms,text/plain" tabindex="-1" aria-label="Marksheet workbook file" />
           <button id="open-file" class="sidebar-open" type="button">${ICONS.plus}<span>Open workbook</span><kbd>${MOD_KEY}O</kbd></button>
           <section class="sidebar-section" aria-labelledby="recent-heading">
             <div class="sidebar-label">
@@ -214,7 +259,7 @@ export class ViewerApp {
           <header class="topbar">
             <button id="toggle-sidebar" class="icon-button" type="button" aria-controls="sidebar" aria-expanded="true" title="Workbooks (${MOD_KEY}\\)">${ICONS.sidebar}<span class="sr-only">Toggle workbook list</span></button>
             <div class="title-group">
-              <span class="file-name" id="file-name">No workbook open</span>
+              <h1 class="file-name" id="file-name">No workbook open</h1>
               <span class="file-badge" id="file-badge" hidden></span>
             </div>
             <div class="topbar-actions">
@@ -259,12 +304,12 @@ export class ViewerApp {
                 <div class="empty-state" id="grid-empty">
                   <div class="empty-card">
                     <div class="empty-art" aria-hidden="true">${ICONS.emptyGrid}</div>
-                    <h1>Open a Marksheet workbook</h1>
+                    <h2>Open a Marksheet workbook</h2>
                     <p>Drop a <code>.ms</code> file here or choose one from this device. Workbooks are read and calculated locally.</p>
                     <button id="open-file-empty" class="primary" type="button">Choose a file</button>
                   </div>
                 </div>
-                <div class="grid" id="grid" role="grid" aria-label="Workbook cells" hidden></div>
+                <div class="grid" id="grid" role="grid" aria-label="Workbook cells" tabindex="-1" hidden></div>
               </div>
             </section>
             <aside class="inspector-panel" id="inspector" aria-label="Source and diagnostics" hidden>
@@ -313,6 +358,22 @@ export class ViewerApp {
     }
     this.bindFileDrop();
     document.addEventListener("keydown", this.#keydown);
+    // Arrow keys are handled on the grid, so they still work after scrolling evicts the
+    // focused cell (focus then rests on the grid itself; see renderGrid).
+    this.byId("grid").addEventListener("keydown", (event) => {
+      if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
+        event.preventDefault();
+        void this.moveGridSelection(event.key);
+      }
+    });
+    const shell = this.byId("grid-shell");
+    shell.addEventListener("scroll", () => this.scheduleWindowCheck(), { passive: true });
+    if (typeof ResizeObserver === "function") {
+      this.#resizeObserver = new ResizeObserver(this.#onResize);
+      this.#resizeObserver.observe(shell);
+    } else {
+      window.addEventListener("resize", this.#onResize);
+    }
     this.byId<HTMLInputElement>("file-input").addEventListener("change", (event) => {
       const input = event.currentTarget as HTMLInputElement;
       const file = input.files?.[0];
@@ -466,7 +527,7 @@ export class ViewerApp {
       ? this.#activeSheet
       : snapshot.sheets[0]?.id;
     this.updateWorkbookChrome();
-    await this.refreshVisibleRegion();
+    await this.refreshVisibleRegion({ reveal: "preserve" });
   }
 
   private async cancelWork(): Promise<void> {
@@ -483,17 +544,25 @@ export class ViewerApp {
     }
   }
 
-  private async refreshVisibleRegion(): Promise<boolean> {
+  private async refreshVisibleRegion(options: RefreshOptions = {}): Promise<boolean> {
+    const { reveal = "anchor", quiet = false, fromShift = false } = options;
     const sheet = this.#activeSheet;
     if (!sheet) return false;
     const generation = this.#regionGate.begin();
-    const range = computeViewport({
-      anchor: this.#selected,
-      visibleRows: 30,
-      visibleColumns: 12,
-      overscan: 3,
-    });
-    this.setBusy(true, `Loading ${sheet}…`);
+    const limit = this.fitLimit();
+    // Clamp only this request, so reopening Details returns to the unclamped position. At
+    // most the last screenful of the fit is shown, never the last row alone at the top.
+    const size = this.gridShellSize();
+    const visible = viewportForContainer(this.#anchor, size);
+    const anchor = limit
+      ? {
+          column: Math.min(this.#anchor.column, Math.max(1, limit.column - visible.visibleColumns + 1)),
+          row: Math.min(this.#anchor.row, Math.max(1, limit.row - visible.visibleRows + 1)),
+        }
+      : this.#anchor;
+    const range = computeViewport({ ...visible, anchor });
+    this.setBusy(true, quiet ? undefined : `Loading ${sheet}…`);
+    if (!fromShift) this.#pendingRefreshes += 1;
     try {
       const [envelope, calculation] = await Promise.all([
         this.adapter.visibleRegion(sheet, range),
@@ -533,7 +602,12 @@ export class ViewerApp {
         };
       }
       this.#region = mergedRegion;
-      this.renderGrid();
+      this.#revealTarget = anchor;
+      // Workers without the additive `extent` field leave the extent unknown, so nothing is clipped.
+      if ("extent" in mergedRegion.sheet && mergedRegion.sheet.extent !== undefined) {
+        this.#extents.set(sheet, mergedRegion.sheet.extent);
+      }
+      this.renderGrid(reveal);
       this.renderDiagnostics(
         [
           ...(this.#snapshot?.diagnostics ?? []),
@@ -557,18 +631,23 @@ export class ViewerApp {
         this.setStatus(`Calculation failed: ${message}`, "error");
         return false;
       }
-      this.setStatus(`Ready at revision ${this.adapter.currentRevision}`, "ok");
+      if (!quiet) this.setStatus(`Ready at revision ${this.adapter.currentRevision}`, "ok");
       return true;
     } catch (error) {
       if (this.#regionGate.isCurrent(generation)) this.setError(error);
       return false;
     } finally {
+      if (!fromShift) this.#pendingRefreshes -= 1;
       if (this.#regionGate.isCurrent(generation)) this.setBusy(false);
     }
   }
 
   /** Returns whether the worker accepted the edit. */
   private async commitCell(source: string): Promise<boolean> {
+    if (!this.selectionRendered()) {
+      this.setStatus("Scroll back to the selected cell before editing it", "error");
+      return false;
+    }
     const cell = this.selectedCell();
     if (cell && "VirtualFill" in cell.source) {
       this.setStatus("Fill-derived cells are virtual and cannot be directly edited", "error");
@@ -595,7 +674,7 @@ export class ViewerApp {
         this.#source = Uint8Array.from(source.source);
         this.updateSourceView();
       }
-      const refreshed = await this.refreshVisibleRegion();
+      const refreshed = await this.refreshVisibleRegion({ reveal: "preserve" });
       if (!refreshed) return true;
       const patchSummary = edited.patches
         .map((patch) => `${patch.span.start}..${patch.span.end}`)
@@ -620,6 +699,7 @@ export class ViewerApp {
     const parsed = parseRange(target);
     if (parsed) {
       this.#selected = parsed.start;
+      this.#anchor = parsed.start;
       await this.refreshVisibleRegion();
       return;
     }
@@ -642,15 +722,20 @@ export class ViewerApp {
     }
     this.#activeSheet = resolved.sheet;
     this.#selected = resolved.range.start;
+    this.#anchor = resolved.range.start;
     this.updateWorkbookChrome();
     await this.refreshVisibleRegion();
   }
 
   private async pan(columns: number, rows: number): Promise<void> {
-    this.#selected = {
-      column: Math.max(1, this.#selected.column + columns),
-      row: Math.max(1, this.#selected.row + rows),
-    };
+    // Like the arrow keys, panning stays inside the reading view's fit.
+    const limit = this.fitLimit();
+    const move = (from: Coordinate): Coordinate => ({
+      column: Math.min(Math.max(1, from.column + columns), limit?.column ?? Number.MAX_SAFE_INTEGER),
+      row: Math.min(Math.max(1, from.row + rows), limit?.row ?? Number.MAX_SAFE_INTEGER),
+    });
+    this.#anchor = move(this.#anchor);
+    this.#selected = move(this.#selected);
     this.byId<HTMLInputElement>("name-box").value = formatCoordinate(this.#selected);
     await this.refreshVisibleRegion();
   }
@@ -674,6 +759,7 @@ export class ViewerApp {
       button.addEventListener("click", () => {
         this.#activeSheet = sheet.id;
         this.#selected = { column: 1, row: 1 };
+        this.#anchor = { column: 1, row: 1 };
         this.updateWorkbookChrome();
         void this.refreshVisibleRegion();
       });
@@ -692,20 +778,44 @@ export class ViewerApp {
     }
     const formula = this.byId<HTMLInputElement>("formula-input");
     const selected = this.selectedCell();
-    formula.disabled = !editable || Boolean(selected && "VirtualFill" in selected.source);
+    formula.disabled = !editable || !this.selectionRendered() || Boolean(selected && "VirtualFill" in selected.source);
   }
 
-  private renderGrid(): void {
+  /**
+   * Whether the selected coordinate is in the rendered window. Off-window cells are not
+   * in `#region`, so their source is unknown and must never be edited as if blank.
+   */
+  private selectionRendered(): boolean {
+    return Boolean(this.root.querySelector(`.grid-cell[data-coordinate="${coordinateKey(this.#selected)}"]`));
+  }
+
+  private renderGrid(reveal: Reveal = "anchor"): void {
     const region = this.#region;
     if (!region) return;
     const grid = this.byId("grid");
     const empty = this.byId("grid-empty");
+    const reference = reveal === "preserve" && !grid.hidden ? this.scrollReference() : undefined;
+    // Re-rendering replaces every cell; keep keyboard focus on the same coordinate.
+    const focused = grid.contains(document.activeElement)
+      ? (document.activeElement as HTMLElement).dataset.coordinate
+      : undefined;
+    const limit = this.fitLimit();
+    // The reading view stops at the content extent; the window itself stays bounded either way.
+    const range = clipRange(region.range, limit);
+    if (!range) {
+      // The request was clamped to an extent that has since shrunk (an edit or an external
+      // change), so this window lies wholly past the fit; ask again from the new clamp.
+      void this.refreshVisibleRegion({ quiet: true });
+      return;
+    }
     grid.hidden = false;
     empty.hidden = true;
+    grid.classList.toggle("grid-fitted", Boolean(limit));
+    this.#renderedFitted = Boolean(limit);
     grid.replaceChildren();
 
-    const columns = inclusiveNumbers(region.range.start.column, region.range.end.column);
-    const rows = inclusiveNumbers(region.range.start.row, region.range.end.row);
+    const columns = inclusiveNumbers(range.start.column, range.end.column);
+    const rows = inclusiveNumbers(range.start.row, range.end.row);
     const columnGeometry = new Map(region.columns.map((column) => [column.column, column.geometry]));
     const rowGeometry = new Map(region.rows.map((row) => [row.row, row.geometry]));
     grid.style.gridTemplateColumns = `46px ${columns
@@ -717,6 +827,10 @@ export class ViewerApp {
     const headerRow = this.gridElement("div", "grid-row", "", undefined, "row");
     headerRow.setAttribute("aria-rowindex", "1");
     const corner = this.gridElement("div", "corner", "", undefined, "columnheader");
+    const cornerLabel = document.createElement("span");
+    cornerLabel.className = "sr-only";
+    cornerLabel.textContent = "Row";
+    corner.append(cornerLabel);
     corner.setAttribute("aria-colindex", "1");
     headerRow.append(corner);
     for (const [columnIndex, column] of columns.entries()) {
@@ -751,12 +865,149 @@ export class ViewerApp {
         element.style.height = height;
         element.setAttribute("aria-colindex", String(columnIndex + 2));
         this.decorateCell(element, cell, cell?.style ?? blankStyles.get(coordinateKey(coordinate)));
+        // Every cell is a button, so blank ones still need a name a screen reader can announce.
+        if (!element.hasAttribute("aria-label")) element.setAttribute("aria-label", `${formatCoordinate(coordinate)}, blank`);
         gridRow.append(element);
       }
       grid.append(gridRow);
     }
     this.updateSelectionChrome();
-    this.byId("viewport-status").textContent = `${region.sheet.label} · ${formatCoordinate(region.range.start)}:${formatCoordinate(region.range.end)} · ${region.cells.length} sparse / ${viewportCellCount(region.range)} rendered`;
+    if (reference) this.restoreScroll(reference);
+    else this.revealAnchor();
+    if (focused !== undefined || document.activeElement === grid) {
+      const cell = focused ? grid.querySelector<HTMLElement>(`.grid-cell[data-coordinate="${focused}"]`) : null;
+      (cell ?? grid).focus({ preventScroll: true });
+    }
+    this.byId("viewport-status").textContent = `${region.sheet.label} · ${formatCoordinate(range.start)}:${formatCoordinate(range.end)} · ${region.cells.length} sparse / ${viewportCellCount(range)} rendered`;
+  }
+
+  /** The reading view's clip, or `undefined` in the detailed view or before the extent is known. */
+  private fitLimit() {
+    const sheet = this.#activeSheet;
+    if (this.#preferences.detailsOpen || !sheet || !this.#extents.has(sheet)) return undefined;
+    return readingLimit(this.#extents.get(sheet));
+  }
+
+  private gridShellSize(): { width: number; height: number } {
+    const shell = this.byId("grid-shell");
+    // Leave out the row-number column and the column-letter row.
+    return { width: shell.clientWidth - 44, height: shell.clientHeight - 28 };
+  }
+
+  private headerMetrics() {
+    const grid = this.byId("grid");
+    return {
+      shell: this.byId("grid-shell"),
+      headerHeight: grid.querySelector<HTMLElement>(".column-header")?.offsetHeight ?? 0,
+      rowHeaderWidth: grid.querySelector<HTMLElement>(".row-header")?.offsetWidth ?? 0,
+      rows: [...grid.querySelectorAll<HTMLElement>(".row-header")],
+      columns: [...grid.querySelectorAll<HTMLElement>(".column-header")],
+    };
+  }
+
+  /** The first row and column the user can currently see, and where they sit on screen. */
+  private scrollReference(): ScrollReference | undefined {
+    const { shell, headerHeight, rowHeaderWidth, rows, columns } = this.headerMetrics();
+    const row = rows.find((header) => header.offsetTop + header.offsetHeight > shell.scrollTop + headerHeight);
+    const column = columns.find((header) => header.offsetLeft + header.offsetWidth > shell.scrollLeft + rowHeaderWidth);
+    if (!row || !column) return undefined;
+    return {
+      row: Number(row.dataset.row),
+      top: row.offsetTop - shell.scrollTop,
+      column: Number(column.dataset.column),
+      left: column.offsetLeft - shell.scrollLeft,
+    };
+  }
+
+  private restoreScroll(reference: ScrollReference): void {
+    const grid = this.byId("grid");
+    const shell = this.byId("grid-shell");
+    const row = grid.querySelector<HTMLElement>(`.row-header[data-row="${reference.row}"]`);
+    const column = grid.querySelector<HTMLElement>(`.column-header[data-column="${reference.column}"]`);
+    if (row) shell.scrollTop = row.offsetTop - reference.top;
+    if (column) shell.scrollLeft = column.offsetLeft - reference.left;
+  }
+
+  private revealAnchor(): void {
+    const { shell, headerHeight, rowHeaderWidth } = this.headerMetrics();
+    const grid = this.byId("grid");
+    const row = grid.querySelector<HTMLElement>(`.row-header[data-row="${this.#revealTarget.row}"]`);
+    const column = grid.querySelector<HTMLElement>(`.column-header[data-column="${this.#revealTarget.column}"]`);
+    shell.scrollTop = row ? row.offsetTop - headerHeight : 0;
+    shell.scrollLeft = column ? column.offsetLeft - rowHeaderWidth : 0;
+  }
+
+  private scheduleWindowCheck(): void {
+    if (this.#scrollFrame || this.#disposed) return;
+    const schedule = typeof requestAnimationFrame === "function"
+      ? requestAnimationFrame
+      : (callback: FrameRequestCallback) => setTimeout(() => callback(0), 16) as unknown as number;
+    this.#scrollFrame = schedule(() => {
+      this.#scrollFrame = 0;
+      void this.shiftWindowIfNeeded();
+    });
+  }
+
+  /**
+   * Moves the bounded window when the user scrolls near its rendered edge, so
+   * scrolling feels continuous without ever rendering more than one window.
+   */
+  private async shiftWindowIfNeeded(): Promise<void> {
+    if (this.#shifting) {
+      this.#rescanAfterShift = true;
+      return;
+    }
+    const region = this.#region;
+    if (!region || !this.#activeSheet || this.byId("grid").hidden) return;
+    // A jump, sheet switch, or Details toggle is loading; its own render decides the window.
+    if (this.#pendingRefreshes > 0 || region.sheet.id !== this.#activeSheet) return;
+    // The grid on screen was drawn for the other mode; its rows say nothing about this one.
+    if (this.#renderedFitted !== Boolean(this.fitLimit())) return;
+    const { shell, headerHeight, rowHeaderWidth, rows, columns } = this.headerMetrics();
+    const firstRowHeader = rows[0];
+    const lastRowHeader = rows.at(-1);
+    const firstColumnHeader = columns[0];
+    const lastColumnHeader = columns.at(-1);
+    if (!firstRowHeader || !lastRowHeader || !firstColumnHeader || !lastColumnHeader) return;
+
+    const top = shell.scrollTop + headerHeight;
+    const bottom = shell.scrollTop + shell.clientHeight;
+    const left = shell.scrollLeft + rowHeaderWidth;
+    const right = shell.scrollLeft + shell.clientWidth;
+    const firstRow = Number(rows.find((header) => header.offsetTop + header.offsetHeight > top)?.dataset.row);
+    const lastRow = Number([...rows].reverse().find((header) => header.offsetTop < bottom)?.dataset.row);
+    const firstColumn = Number(columns.find((header) => header.offsetLeft + header.offsetWidth > left)?.dataset.column);
+    const lastColumn = Number([...columns].reverse().find((header) => header.offsetLeft < right)?.dataset.column);
+    if (![firstRow, lastRow, firstColumn, lastColumn].every(Number.isSafeInteger)) return;
+
+    const rendered = {
+      start: { row: Number(firstRowHeader.dataset.row), column: Number(firstColumnHeader.dataset.column) },
+      end: { row: Number(lastRowHeader.dataset.row), column: Number(lastColumnHeader.dataset.column) },
+    };
+    const spec = viewportForContainer(this.#anchor, this.gridShellSize());
+    const limit = this.fitLimit();
+    const anchor = { ...this.#anchor };
+    if (lastRow >= rendered.end.row - 2 && (!limit || rendered.end.row < limit.row)) anchor.row = firstRow;
+    // Either way, the new window has `rowOverscan` rows above and below what is visible.
+    else if (firstRow <= rendered.start.row + 2 && rendered.start.row > 1) anchor.row = firstRow;
+    if (lastColumn >= rendered.end.column - 1 && (!limit || rendered.end.column < limit.column)) anchor.column = firstColumn;
+    else if (firstColumn <= rendered.start.column + 1 && rendered.start.column > 1) anchor.column = firstColumn;
+    const next = computeViewport({ ...spec, anchor });
+    const current = region.range;
+    if (next.start.row === current.start.row && next.start.column === current.start.column
+      && next.end.row === current.end.row && next.end.column === current.end.column) return;
+
+    this.#anchor = anchor;
+    this.#shifting = true;
+    try {
+      await this.refreshVisibleRegion({ reveal: "preserve", quiet: true, fromShift: true });
+    } finally {
+      this.#shifting = false;
+    }
+    if (this.#rescanAfterShift) {
+      this.#rescanAfterShift = false;
+      this.scheduleWindowCheck();
+    }
   }
 
   private gridElement(
@@ -780,13 +1031,6 @@ export class ViewerApp {
       element.addEventListener("dblclick", () => {
         if (!this.#preferences.detailsOpen) this.applyPreferences({ detailsOpen: true }, true);
         this.byId<HTMLInputElement>("formula-input").focus();
-      });
-      element.addEventListener("keydown", (event) => {
-        const keyboard = event as KeyboardEvent;
-        if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(keyboard.key)) {
-          keyboard.preventDefault();
-          void this.moveGridSelection(coordinate, keyboard.key);
-        }
       });
     }
     return element;
@@ -815,7 +1059,10 @@ export class ViewerApp {
     applyResolvedStyle(element, cell.style.properties, presentedValueKind(cell));
   }
 
-  private async moveGridSelection(origin: Coordinate, key: string): Promise<void> {
+  private async moveGridSelection(key: string): Promise<void> {
+    // Move from the selection, not the key's target: while a window loads, held keys
+    // keep landing on the previous cell and would otherwise collapse into one step.
+    const origin = this.#selected;
     const delta = key === "ArrowUp"
       ? { column: 0, row: -1 }
       : key === "ArrowDown"
@@ -823,21 +1070,26 @@ export class ViewerApp {
         : key === "ArrowLeft"
           ? { column: -1, row: 0 }
           : { column: 1, row: 0 };
+    const limit = this.fitLimit();
     const next = {
-      column: Math.max(1, origin.column + delta.column),
-      row: Math.max(1, origin.row + delta.row),
+      column: Math.min(Math.max(1, origin.column + delta.column), limit?.column ?? Number.MAX_SAFE_INTEGER),
+      row: Math.min(Math.max(1, origin.row + delta.row), limit?.row ?? Number.MAX_SAFE_INTEGER),
     };
     if (next.column === origin.column && next.row === origin.row) return;
     this.#selected = next;
-    const range = this.#region?.range;
-    const inViewport = range
-      && next.column >= range.start.column
-      && next.column <= range.end.column
-      && next.row >= range.start.row
-      && next.row <= range.end.row;
-    if (inViewport) this.updateSelectionChrome();
-    else await this.refreshVisibleRegion();
-    this.root.querySelector<HTMLElement>(`.grid-cell[data-coordinate="${coordinateKey(next)}"]`)?.focus();
+    const rendered = this.root.querySelector(`.grid-cell[data-coordinate="${coordinateKey(next)}"]`);
+    if (rendered) this.updateSelectionChrome();
+    else {
+      // Bring the new cell into the window: at the top or left edge when moving back, the far edge otherwise.
+      const spec = viewportForContainer(this.#anchor, this.gridShellSize());
+      this.#anchor = {
+        column: delta.column > 0 ? Math.max(1, next.column - spec.visibleColumns + 1) : delta.column < 0 ? next.column : this.#anchor.column,
+        row: delta.row > 0 ? Math.max(1, next.row - spec.visibleRows + 1) : delta.row < 0 ? next.row : this.#anchor.row,
+      };
+      await this.refreshVisibleRegion();
+    }
+    // Further keys may have moved the selection during the load; focus where it is now.
+    this.root.querySelector<HTMLElement>(`.grid-cell[data-coordinate="${coordinateKey(this.#selected)}"]`)?.focus();
   }
 
   private updateSelectionChrome(): void {
@@ -845,6 +1097,11 @@ export class ViewerApp {
     for (const element of this.root.querySelectorAll<HTMLElement>(".grid-cell")) {
       element.classList.toggle("cell-selected", element.dataset.coordinate === key);
       element.tabIndex = element.dataset.coordinate === key ? 0 : -1;
+    }
+    // Keep one cell reachable with Tab even when the selection has scrolled out of the window.
+    if (!this.root.querySelector(`.grid-cell[data-coordinate="${key}"]`)) {
+      const first = this.root.querySelector<HTMLElement>(".grid-cell");
+      if (first) first.tabIndex = 0;
     }
     for (const header of this.root.querySelectorAll<HTMLElement>(".column-header, .row-header")) {
       header.classList.toggle(
@@ -855,13 +1112,19 @@ export class ViewerApp {
     this.byId<HTMLInputElement>("name-box").value = formatCoordinate(this.#selected);
     const selected = this.selectedCell();
     const formula = this.byId<HTMLInputElement>("formula-input");
-    formula.value = sourceText(selected);
-    formula.disabled = !this.#snapshot?.editable || this.#mutationBusy || Boolean(selected && "VirtualFill" in selected.source);
+    const rendered = this.selectionRendered();
+    formula.value = rendered ? sourceText(selected) : "";
+    formula.disabled = !this.#snapshot?.editable
+      || this.#mutationBusy
+      || !rendered
+      || Boolean(selected && "VirtualFill" in selected.source);
     formula.placeholder = !this.#snapshot?.editable
       ? "View-only workbook"
-      : formula.disabled
-        ? "Virtual fill cell: edit the @fill source instead"
-        : "Enter a value or formula";
+      : !rendered
+        ? "Scroll back to the selected cell to edit it"
+        : formula.disabled
+          ? "Virtual fill cell: edit the @fill source instead"
+          : "Enter a value or formula";
     const span = cellSpan(selected);
     if (span) this.selectSourceSpan(span, false);
   }
@@ -948,8 +1211,12 @@ export class ViewerApp {
     this.byId("sidebar").toggleAttribute("inert", !sidebarOpen);
     this.byId("toggle-sidebar").setAttribute("aria-expanded", String(sidebarOpen));
     this.byId("toggle-details").setAttribute("aria-pressed", String(detailsOpen));
+    const detailsChanged = this.byId("details-bar").hidden === detailsOpen;
     this.byId("details-bar").hidden = !detailsOpen;
     this.byId("inspector").hidden = !detailsOpen;
+    // The reading view clips to the content; the detailed view shows the full window. The
+    // window itself changes, so return to the remembered anchor (clamped while reading).
+    if (detailsChanged && this.#region) void this.refreshVisibleRegion({ quiet: true });
     for (const option of this.root.querySelectorAll<HTMLElement>("[data-theme-option]")) {
       option.setAttribute("aria-checked", String(option.dataset.themeOption === theme));
     }
@@ -1226,6 +1493,10 @@ export class ViewerApp {
     badge.textContent = label;
     badge.hidden = label === "";
     badge.dataset.kind = this.#snapshot && !this.#snapshot.editable ? "readonly" : "edited";
+    // The browser tab names the workbook and marks unsaved edits, like a desktop editor.
+    document.title = this.#snapshot
+      ? `${this.#dirty ? "• " : ""}${this.#fileName} — Marksheet`
+      : "Marksheet Viewer";
   }
 
   private updateDetailsBadge(diagnostics: Diagnostic[], omitted: number): void {

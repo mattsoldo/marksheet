@@ -141,6 +141,11 @@ pub struct SheetSummary {
     /// Counts finite fill destinations that have not been materialized into source.
     pub virtual_cell_count: usize,
     pub footprint_count: usize,
+    /// Bounding box of authored cells, fill-derived cells, table or fill
+    /// footprints, and `@apply` style targets; `None` for a sheet with none of
+    /// these. A layout hint for renderers, never an instruction to allocate
+    /// the range densely.
+    pub extent: Option<Range>,
 }
 
 /// A sparse viewport projection. `cells` contains no synthetic empty cells.
@@ -716,6 +721,8 @@ pub struct WorkbookView {
     prepared: PreparedWorkbook,
     sparse_indexes: BTreeMap<SheetId, SheetSparseIndex>,
     style_indexes: BTreeMap<SheetId, SheetStyleIndex>,
+    /// Content extents computed once at build time, never per request.
+    extents: BTreeMap<SheetId, Option<Range>>,
     geometry_indexes: BTreeMap<SheetId, SheetGeometryIndex>,
     completeness: ViewCompleteness,
     diagnostics: Vec<Diagnostic>,
@@ -758,7 +765,7 @@ impl WorkbookView {
         limits.calculation.work.max_output_cells = limits.max_viewport_cells;
         let prepared = PreparedWorkbook::build(&workbook, limits.calculation.prepare)
             .map_err(ViewError::Preparation)?;
-        let sparse_indexes = prepared
+        let sparse_indexes: BTreeMap<SheetId, SheetSparseIndex> = prepared
             .sheets
             .iter()
             .map(|sheet| (sheet.id.clone(), SheetSparseIndex::from_prepared(sheet)))
@@ -769,6 +776,7 @@ impl WorkbookView {
             .map(|style| (style.id.clone(), style))
             .collect();
         let mut style_indexes = BTreeMap::new();
+        let mut extents = BTreeMap::new();
         for sheet in &workbook.sheets {
             let Some(prepared_sheet) = prepared.sheet(&sheet.id) else {
                 continue;
@@ -779,6 +787,10 @@ impl WorkbookView {
                 &definitions,
                 limits.max_style_layers_per_cell,
             )?;
+            let extent = sparse_indexes
+                .get(&sheet.id)
+                .and_then(|sparse| content_extent(sparse, prepared_sheet, &applications));
+            extents.insert(sheet.id.clone(), extent);
             style_indexes.insert(sheet.id.clone(), SheetStyleIndex::new(applications));
         }
         let geometry_indexes = workbook
@@ -801,6 +813,7 @@ impl WorkbookView {
             prepared,
             sparse_indexes,
             style_indexes,
+            extents,
             geometry_indexes,
             completeness,
             diagnostics: all_diagnostics,
@@ -839,6 +852,10 @@ impl WorkbookView {
         )
     }
 
+    fn extent(&self, sheet: &SheetId) -> Option<Range> {
+        self.extents.get(sheet).copied().flatten()
+    }
+
     /// Returns declared sheets in their source order, with no coordinate expansion.
     #[must_use]
     pub fn summary(&self) -> WorkbookSummary {
@@ -850,7 +867,7 @@ impl WorkbookView {
                 .filter_map(|sheet| {
                     self.prepared
                         .sheet(&sheet.id)
-                        .map(|prepared| sheet_summary(sheet, prepared))
+                        .map(|prepared| sheet_summary(sheet, prepared, self.extent(&sheet.id)))
                 })
                 .collect(),
             completeness: self.completeness,
@@ -939,7 +956,7 @@ impl WorkbookView {
         }
 
         Ok(VisibleRegion {
-            sheet: sheet_summary(sheet, prepared_sheet),
+            sheet: sheet_summary(sheet, prepared_sheet, self.extent(&sheet.id)),
             range: request.range,
             completeness: self.completeness,
             cells: presented_cells,
@@ -1066,7 +1083,7 @@ impl WorkbookView {
     }
 }
 
-fn sheet_summary(sheet: &Sheet, prepared: &PreparedSheet) -> SheetSummary {
+fn sheet_summary(sheet: &Sheet, prepared: &PreparedSheet, extent: Option<Range>) -> SheetSummary {
     SheetSummary {
         id: sheet.id.clone(),
         label: sheet.label.clone(),
@@ -1074,7 +1091,52 @@ fn sheet_summary(sheet: &Sheet, prepared: &PreparedSheet) -> SheetSummary {
         authored_cell_count: prepared.authored_cells.len(),
         virtual_cell_count: prepared.virtual_cells.len(),
         footprint_count: prepared.footprints.len(),
+        extent,
     }
+}
+
+/// Bounds a sheet's content in O(columns + footprints + applications): each
+/// column contributes only the first and last row of its sparse row set.
+fn content_extent(
+    sparse: &SheetSparseIndex,
+    prepared: &PreparedSheet,
+    applications: &[IndexedStyleApplication],
+) -> Option<Range> {
+    let cells = [
+        &sparse.authored_rows_by_column,
+        &sparse.virtual_rows_by_column,
+    ]
+    .into_iter()
+    .flat_map(|columns| columns.iter())
+    .filter_map(|(column, rows)| {
+        Some(Range::new(
+            Coordinate {
+                column: *column,
+                row: *rows.first()?,
+            },
+            Coordinate {
+                column: *column,
+                row: *rows.last()?,
+            },
+        ))
+    });
+    let footprints = prepared.footprints.iter().map(|footprint| footprint.range);
+    let styles = applications.iter().map(|application| application.range);
+    cells
+        .chain(footprints)
+        .chain(styles)
+        .reduce(|extent, range| {
+            Range::new(
+                Coordinate {
+                    column: extent.start.column.min(range.start.column),
+                    row: extent.start.row.min(range.start.row),
+                },
+                Coordinate {
+                    column: extent.end.column.max(range.end.column),
+                    row: extent.end.row.max(range.end.row),
+                },
+            )
+        })
 }
 
 /// Appends diagnostics in stable first-seen order without repeating persistent
@@ -1278,6 +1340,64 @@ mod tests {
             matches!(region.cells.iter().find(|cell| cell.coordinate == coordinate("B4")).and_then(|cell| cell.calculated.as_ref()), Some(CalcValue::Number(value)) if (*value - 1648.0).abs() < f64::EPSILON)
         );
         assert_eq!(region.columns[0].geometry.size, Some(20.0));
+    }
+
+    #[test]
+    fn sheet_extent_bounds_sparse_content_and_is_absent_for_an_empty_sheet() {
+        let document = parse(include_bytes!("../../../examples/budget.ms"));
+        let mut view = WorkbookView::from_document(&document, ViewLimits::default()).unwrap();
+        let region = view
+            .visible_region(&VisibleRegionRequest::new(
+                "inputs".parse().unwrap(),
+                Range::parse("A1:B2").unwrap(),
+            ))
+            .unwrap();
+        // The costs table (A1:D4) and the settings block (F1:G2), not the viewport.
+        assert_eq!(region.sheet.extent, Some(Range::parse("A1:G4").unwrap()));
+
+        let far = parse(b"#!marksheet 0.1\n@sheet data \"Data\"\n@block ZZ50000 pipe\n1\n@end\n");
+        let mut far_view = WorkbookView::from_document(&far, ViewLimits::default()).unwrap();
+        let far_region = far_view
+            .visible_region(&VisibleRegionRequest::new(
+                "data".parse().unwrap(),
+                Range::parse("A1:A1").unwrap(),
+            ))
+            .unwrap();
+        assert_eq!(
+            far_region.sheet.extent,
+            Some(Range::parse("ZZ50000").unwrap())
+        );
+
+        // A styled blank banner below the data is content the reading view must show.
+        let decorated = parse(
+            b"#!marksheet 0.1\n@style hi fill=\"#ffff00\"\n@sheet data \"Data\"\n@block A1 csv\n1,2\n@end\n@apply A50:H52 hi\n",
+        );
+        let mut decorated_view =
+            WorkbookView::from_document(&decorated, ViewLimits::default()).unwrap();
+        let decorated_region = decorated_view
+            .visible_region(&VisibleRegionRequest::new(
+                "data".parse().unwrap(),
+                Range::parse("A1:A1").unwrap(),
+            ))
+            .unwrap();
+        assert_eq!(
+            decorated_region.sheet.extent,
+            Some(Range::parse("A1:H52").unwrap())
+        );
+        assert_eq!(
+            decorated_view.summary().sheets[0].extent,
+            decorated_region.sheet.extent
+        );
+
+        let empty = parse(b"#!marksheet 0.1\n@sheet blank \"Blank\"\n");
+        let mut empty_view = WorkbookView::from_document(&empty, ViewLimits::default()).unwrap();
+        let empty_region = empty_view
+            .visible_region(&VisibleRegionRequest::new(
+                "blank".parse().unwrap(),
+                Range::parse("A1:A1").unwrap(),
+            ))
+            .unwrap();
+        assert_eq!(empty_region.sheet.extent, None);
     }
 
     #[test]

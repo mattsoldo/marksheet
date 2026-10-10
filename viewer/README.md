@@ -37,7 +37,8 @@ The viewer provides:
 
 - local `.ms` open (picker, drag-and-drop, or a recent workbook), guarded File System Access saves when a browser supplies a
   file handle, and an explicit download fallback otherwise;
-- source-order sheet tabs and a finite 30×12 viewport with three-cell overscan;
+- source-order sheet tabs and a bounded, screen-sized window that moves as you
+  scroll (30×12 with three-cell overscan when the container has no layout);
 - separate authored, formula, calculated, virtual-fill, resolved-style, and
   geometry layers;
 - a formula bar, A1/range/declared-name box, semantic name/style/width/height controls;
@@ -46,8 +47,19 @@ The viewer provides:
 - view-only rendering when error-level formula diagnostics make transactional
   edits unsafe.
 
-The grid never derives a dense allocation from the furthest authored cell.
-Jumping to a distant coordinate requests and realizes at most 648 cells.
+The grid never derives a dense allocation from the furthest authored cell. It
+renders one window sized to the scroll container: up to 120 visible rows with
+half a screen of overscan above and below, and up to 48 visible columns with
+four columns of overscan, so at most 13,440 cells however large the screen.
+Scrolling near a window edge requests the next window and keeps the visible
+cells in place; jumping to a distant coordinate requests one window there. The
+reading view also clips the window to the sheet's `extent` (the bounding box of
+authored cells, fill destinations, table or fill footprints, and `@apply` style
+targets, computed once by the worker) plus one column and two rows, so a small
+table reads as a table without hiding a styled banner below it.
+Details shows the full window for editing beyond the content. The tab title
+names the workbook and marks unsaved edits; all three themes pass an axe-core
+audit with no violations in both views.
 Resolved style regions also decorate blank viewport coordinates. Currency,
 percent, decimal, integer, date, horizontal, and vertical presentation is
 deterministic; column geometry uses CSS `ch`, while row and font geometry use
@@ -113,6 +125,17 @@ System Access write permission or writable stream.
 Diagnostic rendering is deduplicated and capped at 100 DOM rows per refresh;
 the panel reports the total unique count and an overflow summary. This keeps a
 pathological diagnostic set bounded just like the sparse viewport.
+
+`npm run test:e2e` runs Playwright against the built viewer in real Chromium
+(build first; it serves `dist/` with `vite preview`). It checks what a DOM
+without layout cannot: the reading-view fit, scroll-driven window shifts on a
+tall and a wide sheet (never more than one bounded window of cells), keyboard
+focus across window shifts, returning to the same place after Details closes
+and reopens, the phone layout, recent-workbook and theme persistence across a
+reload, and an axe-core audit with zero violations in every theme and view.
+The suite asserts behavior rather than pixels, because fonts and anti-aliasing
+differ between machines; screenshots of every theme and view are attached to
+the HTML report, which CI uploads as the `viewer-playwright-report` artifact.
 
 `npm run smoke:wasm` invokes the generated ABI directly: it opens the real
 Budget workbook, verifies ordered sheets and `summary!B4 = 1648`, applies one
