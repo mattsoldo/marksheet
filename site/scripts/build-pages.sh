@@ -18,8 +18,11 @@ test -s "$site_dir/dist/index.html"
 test -s "$site_dir/dist/marksheet-wasm/pkg/marksheet_wasm_bg.wasm"
 test -s "$site_dir/dist/app/index.html"
 test -s "$site_dir/dist/app/marksheet-wasm/pkg/marksheet_wasm_bg.wasm"
-if grep -q 'src="/assets/' "$site_dir/dist/app/index.html"; then
-  echo "viewer was built with an absolute base; expected relative asset URLs" >&2
-  exit 1
-fi
+# Absolute asset URLs would break under a project path such as /marksheet/.
+for page in "$site_dir/dist/index.html" "$site_dir/dist/app/index.html"; do
+  if grep -Eq '(src|href)="/' "$page"; then
+    echo "$page uses absolute asset URLs; expected relative ones" >&2
+    exit 1
+  fi
+done
 echo "Pages site assembled in $site_dir/dist"

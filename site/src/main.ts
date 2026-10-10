@@ -33,7 +33,6 @@ function startPlayground(): void {
     fileName.textContent = example.file;
     playground.load(example.source);
   });
-  window.addEventListener("pagehide", () => playground.dispose(), { once: true });
   playground.start();
 }
 

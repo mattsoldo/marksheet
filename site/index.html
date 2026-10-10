@@ -250,8 +250,9 @@
               shows three edited rows, not a re-zipped binary.
             </p>
             <p>
-              <code>marksheet diff</code> goes further: it compares the calculated workbook
-              model, so reformatting is silent and real changes are named cell by cell.
+              <code>marksheet diff</code> goes further: it compares what the workbook says —
+              values, formulas, tables, names and styles — not how it is spelled, so
+              reformatting is silent and real changes are named cell by cell.
               It exits <code>0</code> when two files mean the same thing, <code>1</code> when
               they don't — a ready-made CI gate.
             </p>
@@ -267,12 +268,17 @@
 <span class="d-add">+Groceries|420|1|</span>
 <span class="d-add">+Internet|65|1|</span>
  @end
-<span class="d-hunk">@@ -29,7 +30,7 @@</span>
+
+ @fill costs[Subtotal] =[@Cost]*[@Quantity]
+<span class="d-hunk">@@ -29,7 +30,7 @@ Groceries|360|1|</span>
+ # This second block demonstrates sparse placement on the same sheet.
  @block F1 pipe
  Setting|Value
 <span class="d-del">-Tax rate|0.2</span>
 <span class="d-add">+Tax rate|0.22</span>
- @end</code></pre>
+ @end
+
+ @apply F1:G1 header</code></pre>
             </figure>
             <figure class="window code-window">
               <figcaption class="window-bar"><span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="window-title">marksheet diff old.ms budget.ms</span></figcaption>
@@ -334,7 +340,7 @@ Tax rate|0.2
               <h3>Lossless editing</h3>
               <p>
                 Edits are semantic transactions that return byte patches and exact inverses.
-                Comments, spacing and spelling survive every save.
+                Comments, spacing and spelling survive every edit.
               </p>
             </article>
             <article class="feature">
@@ -443,13 +449,13 @@ After tax          |  1545</code></pre>
       <section class="start" aria-labelledby="start-title">
         <div class="wrap">
           <p class="kicker"><span class="cellref">H1</span> Get started</p>
-          <h2 id="start-title">Three commands to a calculated workbook.</h2>
+          <h2 id="start-title">From zero to a calculated workbook.</h2>
           <ol class="steps">
             <li class="step">
-              <h3>Build the CLI</h3>
+              <h3>Install the CLI</h3>
               <pre class="code"><code>git clone https://github.com/mattsoldo/marksheet
 cd marksheet
-cargo build --release -p marksheet-cli</code></pre>
+cargo install --path crates/marksheet-cli</code></pre>
             </li>
             <li class="step">
               <h3>Write a workbook</h3>

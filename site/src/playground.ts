@@ -105,8 +105,11 @@ export class Playground {
     this.#schedule(0);
   }
 
-  dispose(): void {
+  /** Ends the worker; the next update opens the editor's source in a fresh one. */
+  #resetClient(): void {
     this.#client?.dispose();
+    this.#client = undefined;
+    this.#rendered = undefined;
   }
 
   #part<T extends HTMLElement = HTMLElement>(selector: string): T {
@@ -154,6 +157,9 @@ export class Playground {
           : `Parsed and calculated locally in ${elapsed} ms`,
       );
     } catch (error) {
+      // A rejected source leaves the worker usable; anything else (a crashed or
+      // cancelled worker) leaves the client without one, so start over next time.
+      if (!(error instanceof WorkerProtocolError)) this.#resetClient();
       if (generation !== this.#generation) return;
       if (error instanceof WorkerProtocolError) {
         // The last good grid stays on screen; the source explains what broke.
@@ -208,6 +214,7 @@ export class Playground {
   }
 
   #renderTabs(snapshot: WorkbookSnapshot): void {
+    const hadFocus = this.#tabs.contains(document.activeElement);
     this.#tabs.replaceChildren(...snapshot.sheets.map((sheet) => {
       const tab = document.createElement("button");
       const active = sheet.id === this.#activeSheet;
@@ -221,6 +228,8 @@ export class Playground {
       tab.tabIndex = active ? 0 : -1;
       return tab;
     }));
+    // Rebuilding the buttons would otherwise drop keyboard focus to the page.
+    if (hadFocus) this.#tabs.querySelector<HTMLElement>('[aria-selected="true"]')?.focus();
   }
 
   #moveTab(event: KeyboardEvent): void {
@@ -329,7 +338,9 @@ export class Playground {
     if (cell && "VirtualFill" in cell.source) this.#cellSource.dataset.note = "filled down the column";
     else delete this.#cellSource.dataset.note;
     const span = cell ? sourceSpan(cell) : undefined;
-    const lines = span && this.#rendered ? this.#linesForSpan(this.#rendered.bytes, span) : [];
+    // While an edit is rejected, the grid is from older source whose lines may have moved.
+    const current = this.#rendered && this.#editor.value === this.#decoder.decode(this.#rendered.bytes);
+    const lines = span && current && this.#rendered ? this.#linesForSpan(this.#rendered.bytes, span) : [];
     this.#markLines(lines);
     if (fromGrid && lines[0] !== undefined) this.#revealLine(lines[0]);
   }

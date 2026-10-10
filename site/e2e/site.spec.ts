@@ -1,8 +1,10 @@
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { expect, test, type Page } from "@playwright/test";
 
 const require = createRequire(import.meta.url);
 const axePath = require.resolve("axe-core/axe.min.js");
+const budget = fileURLToPath(new URL("../../examples/budget.ms", import.meta.url));
 
 async function calculated(page: Page): Promise<void> {
   await expect(page.locator("[data-status]")).toHaveAttribute("data-state", "ok");
@@ -81,9 +83,48 @@ test("loads another example workbook", async ({ page }) => {
   await expect(cell(page, "D8")).toHaveText("$375.00");
 });
 
-test("serves the full viewer beneath app/", async ({ page }) => {
+test("keeps keyboard focus on the sheet tabs", async ({ page }) => {
+  await page.getByRole("tab", { name: "Inputs" }).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
+  await expect(cell(page, "B2")).toHaveText("$2,060.00");
+  // The tabs are rebuilt after the sheet loads; focus must follow the active one.
+  await expect(page.getByRole("tab", { name: "Summary" })).toBeFocused();
+  await page.keyboard.press("ArrowLeft");
+  await expect(page.getByRole("tab", { name: "Inputs" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Inputs" })).toBeFocused();
+});
+
+test("does not mark source lines from an older grid", async ({ page }) => {
+  // A rejected edit that shifts every line keeps the previous grid on screen.
+  await editSource(page, (source) => source.replace("#!marksheet 0.1\n", "#!marksheet 0.1\n@bogus\n"));
+  await expect(page.locator("[data-status]")).toHaveAttribute("data-state", "error");
+  await cell(page, "G2").click();
+  await expect(page.locator("[data-cell-ref]")).toHaveText("G2");
+  await expect(page.locator("[data-highlight] .is-marked")).toHaveCount(0);
+});
+
+test("starts a fresh worker after the engine crashes", async ({ page }) => {
+  let crashes = 1;
+  await page.route("**/marksheet-wasm/web/worker.js", (route) => (
+    crashes-- > 0
+      ? route.fulfill({ contentType: "text/javascript", body: "throw new Error('simulated crash');" })
+      : route.continue()
+  ));
+  await page.goto("/");
+  await expect(page.locator("[data-status]")).toHaveAttribute("data-state", "error");
+  await editSource(page, (source) => source.replace("Rent|1500|1|", "Rent|1700|1|"));
+  await calculated(page);
+  await expect(cell(page, "D2")).toHaveText("$1,700.00");
+});
+
+test("serves the full viewer beneath app/ with a working engine", async ({ page }) => {
   await page.goto("/app/");
   await expect(page.getByRole("heading", { name: "Open a Marksheet workbook" })).toBeVisible();
+  // The viewer's worker starts only when a workbook opens, so open one to prove its asset URL.
+  await page.setInputFiles("#file-input", budget);
+  await expect(page.locator("#status")).toHaveClass(/status-ok/);
+  await expect(page.locator('.grid-cell[data-coordinate="4:2"]')).toHaveText("$1,500.00");
 });
 
 for (const colorScheme of ["light", "dark"] as const) {
