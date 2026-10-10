@@ -141,19 +141,27 @@ export class Playground {
       const snapshot = response.snapshot;
       const sheet = snapshot.sheets.find((candidate) => candidate.id === this.#activeSheet) ?? snapshot.sheets[0];
       this.#activeSheet = sheet?.id;
-      const region = sheet ? await this.#readingRegion(client, sheet.id) : undefined;
+      const reading = sheet ? await this.#readingRegion(client, sheet.id) : undefined;
+      const region = reading?.region;
       if (generation !== this.#generation) return;
       this.#rendered = { bytes, snapshot, region };
       this.#renderTabs(snapshot);
       this.#renderGrid(region);
       const diagnostics = uniqueDiagnostics([...snapshot.diagnostics, ...(region?.diagnostics ?? [])]);
-      this.#renderDiagnostics(bytes, diagnostics, snapshot.diagnostics_omitted);
+      // Each response caps its own list, and their scopes overlap (a cycle is reported by the
+      // workbook and by its calculation), so the largest single report is a safe lower bound.
+      const truncated = snapshot.diagnostics_omitted > 0 || Boolean(reading?.truncated);
+      const total = Math.max(
+        diagnostics.length,
+        snapshot.diagnostics.length + snapshot.diagnostics_omitted,
+        ...(reading?.totals ?? []),
+      );
+      this.#renderDiagnostics(bytes, diagnostics, total - diagnostics.length, undefined, truncated);
       const elapsed = Math.max(1, Math.round(performance.now() - started));
-      const warnings = diagnostics.length + snapshot.diagnostics_omitted;
       this.#setStatus(
-        warnings ? "warn" : "ok",
-        warnings
-          ? `Calculated with ${warnings} ${warnings === 1 ? "diagnostic" : "diagnostics"} · ${elapsed} ms`
+        total ? "warn" : "ok",
+        total
+          ? `Calculated with ${truncated ? "at least " : ""}${total} ${total === 1 ? "diagnostic" : "diagnostics"} · ${elapsed} ms`
           : `Parsed and calculated locally in ${elapsed} ms`,
       );
     } catch (error) {
@@ -180,15 +188,18 @@ export class Playground {
   }
 
   /** Fits the request to the sheet's content, plus a little breathing room. */
-  async #readingRegion(client: Client, sheet: string): Promise<VisibleRegion> {
+  async #readingRegion(
+    client: Client,
+    sheet: string,
+  ): Promise<{ region: VisibleRegion; totals: number[]; truncated: boolean }> {
     const probe = await this.#region(client, sheet, { start: { column: 1, row: 1 }, end: { column: 1, row: 1 } });
-    const extent = probe.sheet.extent;
+    const extent = probe.region.sheet.extent;
     const end = {
       column: Math.min(MAX_COLUMNS, Math.max(4, (extent?.end.column ?? 0) + 1)),
       row: Math.min(MAX_ROWS, Math.max(6, (extent?.end.row ?? 0) + 2)),
     };
     const range = { start: { column: 1, row: 1 }, end };
-    const [region, calculation] = await Promise.all([
+    const [{ region, omitted }, calculation] = await Promise.all([
       this.#region(client, sheet, range),
       client.calculate(sheet, range),
     ]);
@@ -198,19 +209,26 @@ export class Playground {
       .filter((entry) => entry.cell.sheet === sheet)
       .map((entry) => [formatCoordinate(entry.cell.coordinate), entry.value]));
     return {
-      ...region,
-      cells: region.cells.map((cell) => {
-        const value = values.get(formatCoordinate(cell.coordinate));
-        return value ? { ...cell, calculated: value } : cell;
-      }),
-      diagnostics: [...region.diagnostics, ...calculation.response.calculation.diagnostics],
+      region: {
+        ...region,
+        cells: region.cells.map((cell) => {
+          const value = values.get(formatCoordinate(cell.coordinate));
+          return value ? { ...cell, calculated: value } : cell;
+        }),
+        diagnostics: [...region.diagnostics, ...calculation.response.calculation.diagnostics],
+      },
+      totals: [
+        region.diagnostics.length + omitted,
+        calculation.response.calculation.diagnostics.length + calculation.response.diagnostics_omitted,
+      ],
+      truncated: omitted > 0 || calculation.response.diagnostics_omitted > 0,
     };
   }
 
-  async #region(client: Client, sheet: string, range: A1Range): Promise<VisibleRegion> {
+  async #region(client: Client, sheet: string, range: A1Range): Promise<{ region: VisibleRegion; omitted: number }> {
     const envelope = await client.visibleRegion(sheet, range);
     if (envelope.response.kind !== "visible_region") throw new Error(`unexpected ${envelope.response.kind}`);
-    return envelope.response.region;
+    return { region: envelope.response.region, omitted: envelope.response.diagnostics_omitted };
   }
 
   #renderTabs(snapshot: WorkbookSnapshot): void {
@@ -380,7 +398,13 @@ export class Playground {
     }
   }
 
-  #renderDiagnostics(bytes: Uint8Array, diagnostics: Diagnostic[], omitted: number, fallback?: string): void {
+  #renderDiagnostics(
+    bytes: Uint8Array,
+    diagnostics: Diagnostic[],
+    omitted: number,
+    fallback?: string,
+    truncated = omitted > 0,
+  ): void {
     this.#errorLines = new Set(diagnostics.map((diagnostic) => (
       lineOf(this.#decoder.decode(bytes.subarray(0, diagnostic.primary.span.start)))
     )));
@@ -409,7 +433,7 @@ export class Playground {
     if (more > 0) {
       const item = document.createElement("li");
       item.className = "diagnostic diagnostic-more";
-      item.textContent = `and ${more} more`;
+      item.textContent = `and ${truncated ? "at least " : ""}${more} more`;
       items.push(item);
     }
     this.#diagnostics.hidden = false;

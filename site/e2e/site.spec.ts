@@ -55,6 +55,16 @@ test("keeps the last good grid and explains a source error", async ({ page }) =>
   await expect(page.locator("[data-diagnostics]")).toBeHidden();
 });
 
+test("never understates diagnostics the engine truncated", async ({ page }) => {
+  // 26 × 120 self-references: 3,120 cycles, past the worker's 1,000-diagnostic cap, all
+  // inside the playground's reading range so the calculation reports them too.
+  const columns = Array.from({ length: 26 }, (_, index) => String.fromCharCode(65 + index));
+  const rows = Array.from({ length: 120 }, (_, row) => columns.map((column) => `=${column}${row + 1}`).join("|"));
+  await page.getByLabel("Marksheet source").fill(`#!marksheet 0.1\n@sheet s "S"\n@block A1 pipe\n${rows.join("\n")}\n@end\n`);
+  await expect(page.locator("[data-status]")).toContainText("Calculated with at least 3120 diagnostics");
+  await expect(page.locator("[data-diagnostics] .diagnostic-more")).toHaveText("and at least 3116 more");
+});
+
 test("links cells to the source lines that wrote them", async ({ page }) => {
   await cell(page, "G2").click();
   await expect(page.locator("[data-cell-ref]")).toHaveText("G2");
