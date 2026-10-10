@@ -644,6 +644,10 @@ export class ViewerApp {
 
   /** Returns whether the worker accepted the edit. */
   private async commitCell(source: string): Promise<boolean> {
+    if (!this.selectionRendered()) {
+      this.setStatus("Scroll back to the selected cell before editing it", "error");
+      return false;
+    }
     const cell = this.selectedCell();
     if (cell && "VirtualFill" in cell.source) {
       this.setStatus("Fill-derived cells are virtual and cannot be directly edited", "error");
@@ -774,7 +778,15 @@ export class ViewerApp {
     }
     const formula = this.byId<HTMLInputElement>("formula-input");
     const selected = this.selectedCell();
-    formula.disabled = !editable || Boolean(selected && "VirtualFill" in selected.source);
+    formula.disabled = !editable || !this.selectionRendered() || Boolean(selected && "VirtualFill" in selected.source);
+  }
+
+  /**
+   * Whether the selected coordinate is in the rendered window. Off-window cells are not
+   * in `#region`, so their source is unknown and must never be edited as if blank.
+   */
+  private selectionRendered(): boolean {
+    return Boolean(this.root.querySelector(`.grid-cell[data-coordinate="${coordinateKey(this.#selected)}"]`));
   }
 
   private renderGrid(reveal: Reveal = "anchor"): void {
@@ -1100,13 +1112,19 @@ export class ViewerApp {
     this.byId<HTMLInputElement>("name-box").value = formatCoordinate(this.#selected);
     const selected = this.selectedCell();
     const formula = this.byId<HTMLInputElement>("formula-input");
-    formula.value = sourceText(selected);
-    formula.disabled = !this.#snapshot?.editable || this.#mutationBusy || Boolean(selected && "VirtualFill" in selected.source);
+    const rendered = this.selectionRendered();
+    formula.value = rendered ? sourceText(selected) : "";
+    formula.disabled = !this.#snapshot?.editable
+      || this.#mutationBusy
+      || !rendered
+      || Boolean(selected && "VirtualFill" in selected.source);
     formula.placeholder = !this.#snapshot?.editable
       ? "View-only workbook"
-      : formula.disabled
-        ? "Virtual fill cell: edit the @fill source instead"
-        : "Enter a value or formula";
+      : !rendered
+        ? "Scroll back to the selected cell to edit it"
+        : formula.disabled
+          ? "Virtual fill cell: edit the @fill source instead"
+          : "Enter a value or formula";
     const span = cellSpan(selected);
     if (span) this.selectSourceSpan(span, false);
   }

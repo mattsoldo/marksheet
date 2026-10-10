@@ -105,6 +105,14 @@ test("keeps arrow keys working after scrolling away from the focused cell", asyn
   await expect(page.locator("#grid")).toBeFocused();
   expect(await page.locator(".grid-cell[tabindex='0']").count()).toBe(1);
 
+  // While A1 is off-window its source is unknown, so it must not be editable as a blank.
+  await page.click("#toggle-details");
+  await expect(page.locator("#name-box")).toHaveValue("A1");
+  await expect(page.locator("#formula-input")).toBeDisabled();
+  await expect(page.locator("#formula-input")).toHaveValue("");
+  await page.click("#toggle-details");
+
+  await page.locator("#grid").focus();
   await page.keyboard.press("ArrowDown");
   await expect(page.locator(".grid-cell[data-coordinate='1:2']")).toBeFocused();
   expect(await rowIsVisible(page, 2)).toBe(true);
