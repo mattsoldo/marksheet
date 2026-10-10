@@ -492,12 +492,16 @@ export class Playground {
   }
 }
 
+/** Rejections of this document; the worker that reported them is still healthy and in sync. */
+const DOCUMENT_ERRORS = new Set(["invalid_source", "limit", "calculation", "edit"]);
+
 /**
- * The worker rejected this document (or this request) but is still healthy. A
- * session or protocol failure, such as a Wasm module that failed to load, is not.
+ * True when the worker rejected the document but can keep serving it. Anything
+ * else (a session that failed to load, a protocol or revision mismatch, or a
+ * code this page doesn't know) means the worker must be replaced.
  */
 function isDocumentError(error: unknown): error is WorkerProtocolError {
-  return error instanceof WorkerProtocolError && error.code !== "session" && error.code !== "protocol";
+  return error instanceof WorkerProtocolError && DOCUMENT_ERRORS.has(error.code);
 }
 
 function headerCell(text: string, className: string): HTMLTableCellElement {

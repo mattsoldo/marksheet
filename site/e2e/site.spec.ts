@@ -164,6 +164,23 @@ test("starts a fresh worker after the engine fails to load", async ({ page }) =>
   await expect(cell(page, "D2")).toHaveText("$1,800.00");
 });
 
+test("starts a fresh worker after a revision mismatch", async ({ page }) => {
+  // A worker out of step with the page rejects every request as stale; only a new one recovers.
+  const stale = `self.onmessage = (event) => self.postMessage({
+    protocol: "marksheet-worker@1", request_id: event.data.request_id, revision: 0,
+    response: { kind: "error", error: { code: "stale_revision", message: "stale revision", diagnostics: [], diagnostics_omitted: 0 } },
+  });`;
+  let mismatches = 1;
+  await page.route("**/marksheet-wasm/web/worker.js", (route) => (
+    mismatches-- > 0 ? route.fulfill({ contentType: "text/javascript", body: stale }) : route.continue()
+  ));
+  await page.goto("/");
+  await expect(page.locator("[data-status]")).toHaveAttribute("data-state", "error");
+  await editSource(page, (source) => source.replace("Rent|1500|1|", "Rent|1900|1|"));
+  await calculated(page);
+  await expect(cell(page, "D2")).toHaveText("$1,900.00");
+});
+
 test("serves the full viewer beneath app/ with a working engine", async ({ page }) => {
   await page.goto("/app/");
   await expect(page.getByRole("heading", { name: "Open a Marksheet workbook" })).toBeVisible();
