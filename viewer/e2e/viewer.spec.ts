@@ -93,6 +93,23 @@ test("keeps keyboard focus while arrowing past the rendered window", async ({ pa
   expect(await page.locator(".grid-cell").count()).toBeLessThanOrEqual(MAX_WINDOW_CELLS);
 });
 
+test("keeps arrow keys working after scrolling away from the focused cell", async ({ page }) => {
+  await openWorkbook(page, large);
+  await page.click(".grid-cell[data-coordinate='1:1']");
+  await page.locator("#grid-shell").hover();
+  // Scroll far enough that the window no longer contains A1.
+  await expect.poll(async () => {
+    await page.mouse.wheel(0, 800);
+    return page.locator(".grid-cell[data-coordinate='1:1']").count();
+  }, { timeout: 20_000 }).toBe(0);
+  await expect(page.locator("#grid")).toBeFocused();
+  expect(await page.locator(".grid-cell[tabindex='0']").count()).toBe(1);
+
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator(".grid-cell[data-coordinate='1:2']")).toBeFocused();
+  expect(await rowIsVisible(page, 2)).toBe(true);
+});
+
 test("returns to the same place when Details closes and reopens", async ({ page }) => {
   await openWorkbook(page, budget);
   await page.click("#toggle-details");

@@ -309,7 +309,7 @@ export class ViewerApp {
                     <button id="open-file-empty" class="primary" type="button">Choose a file</button>
                   </div>
                 </div>
-                <div class="grid" id="grid" role="grid" aria-label="Workbook cells" hidden></div>
+                <div class="grid" id="grid" role="grid" aria-label="Workbook cells" tabindex="-1" hidden></div>
               </div>
             </section>
             <aside class="inspector-panel" id="inspector" aria-label="Source and diagnostics" hidden>
@@ -358,6 +358,14 @@ export class ViewerApp {
     }
     this.bindFileDrop();
     document.addEventListener("keydown", this.#keydown);
+    // Arrow keys are handled on the grid, so they still work after scrolling evicts the
+    // focused cell (focus then rests on the grid itself; see renderGrid).
+    this.byId("grid").addEventListener("keydown", (event) => {
+      if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
+        event.preventDefault();
+        void this.moveGridSelection(event.key);
+      }
+    });
     const shell = this.byId("grid-shell");
     shell.addEventListener("scroll", () => this.scheduleWindowCheck(), { passive: true });
     if (typeof ResizeObserver === "function") {
@@ -854,7 +862,10 @@ export class ViewerApp {
     this.updateSelectionChrome();
     if (reference) this.restoreScroll(reference);
     else this.revealAnchor();
-    if (focused) grid.querySelector<HTMLElement>(`.grid-cell[data-coordinate="${focused}"]`)?.focus({ preventScroll: true });
+    if (focused !== undefined || document.activeElement === grid) {
+      const cell = focused ? grid.querySelector<HTMLElement>(`.grid-cell[data-coordinate="${focused}"]`) : null;
+      (cell ?? grid).focus({ preventScroll: true });
+    }
     this.byId("viewport-status").textContent = `${region.sheet.label} · ${formatCoordinate(range.start)}:${formatCoordinate(range.end)} · ${region.cells.length} sparse / ${viewportCellCount(range)} rendered`;
   }
 
@@ -1009,13 +1020,6 @@ export class ViewerApp {
         if (!this.#preferences.detailsOpen) this.applyPreferences({ detailsOpen: true }, true);
         this.byId<HTMLInputElement>("formula-input").focus();
       });
-      element.addEventListener("keydown", (event) => {
-        const keyboard = event as KeyboardEvent;
-        if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(keyboard.key)) {
-          keyboard.preventDefault();
-          void this.moveGridSelection(keyboard.key);
-        }
-      });
     }
     return element;
   }
@@ -1081,6 +1085,11 @@ export class ViewerApp {
     for (const element of this.root.querySelectorAll<HTMLElement>(".grid-cell")) {
       element.classList.toggle("cell-selected", element.dataset.coordinate === key);
       element.tabIndex = element.dataset.coordinate === key ? 0 : -1;
+    }
+    // Keep one cell reachable with Tab even when the selection has scrolled out of the window.
+    if (!this.root.querySelector(`.grid-cell[data-coordinate="${key}"]`)) {
+      const first = this.root.querySelector<HTMLElement>(".grid-cell");
+      if (first) first.tabIndex = 0;
     }
     for (const header of this.root.querySelectorAll<HTMLElement>(".column-header, .row-header")) {
       header.classList.toggle(
